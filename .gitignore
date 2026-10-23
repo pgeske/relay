@@ -1,0 +1,7 @@
+node_modules/
+dist/
+ios/build/
+ios/*.xcodeproj/
+.DS_Store
+DerivedData/
+*.bun-build
