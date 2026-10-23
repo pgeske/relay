@@ -1,0 +1,70 @@
+name: Relay
+
+options:
+  bundleIdPrefix: com.pgeske
+  deploymentTarget:
+    iOS: "18.0"
+  developmentLanguage: en
+  createIntermediateGroups: true
+
+configs:
+  Debug: debug
+  Release: release
+
+settings:
+  base:
+    SWIFT_VERSION: "6.0"
+    DEVELOPMENT_TEAM: QK6275627Z
+    CODE_SIGN_STYLE: Automatic
+    TARGETED_DEVICE_FAMILY: "1"
+    IPHONEOS_DEPLOYMENT_TARGET: "18.0"
+    ENABLE_USER_SCRIPT_SANDBOXING: YES
+
+packages:
+  MarkdownUI:
+    url: https://github.com/gonzalezreal/swift-markdown-ui
+    from: 2.4.0
+  FluidAudio:
+    url: https://github.com/FluidInference/FluidAudio
+    exactVersion: 0.17.7
+
+targets:
+  Relay:
+    type: application
+    platform: iOS
+    deploymentTarget: "18.0"
+    sources:
+      - path: Relay
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.pgeske.ompremote
+        PRODUCT_NAME: Relay
+        TARGETED_DEVICE_FAMILY: "1"
+        MARKETING_VERSION: "1.0"
+        CURRENT_PROJECT_VERSION: "1"
+        ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME: AccentColor
+        SWIFT_EMIT_LOC_STRINGS: YES
+    info:
+      path: Relay/Info.plist
+      properties:
+        CFBundleDisplayName: Relay
+        CFBundleShortVersionString: $(MARKETING_VERSION)
+        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
+        UILaunchScreen: {}
+        UIAppFonts:
+          - SymbolsNerdFont-Regular.ttf
+        UISupportedInterfaceOrientations:
+          - UIInterfaceOrientationPortrait
+        UIApplicationSupportsIndirectInputEvents: true
+        NSAppTransportSecurity:
+          NSAllowsArbitraryLoads: true
+        NSMicrophoneUsageDescription: Relay uses the microphone to dictate messages with on-device speech recognition.
+        NSCameraUsageDescription: Relay uses the camera to attach photos to messages.
+        NSPhotoLibraryUsageDescription: Relay lets you attach photos from your library to messages.
+        CFBundleURLTypes:
+          - CFBundleURLName: com.pgeske.relay.pair
+            CFBundleURLSchemes:
+              - relay
+    dependencies:
+      - package: MarkdownUI
+      - package: FluidAudio
