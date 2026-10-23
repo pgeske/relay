@@ -12,7 +12,7 @@ jobs:
     # macOS so the darwin binaries can be ad-hoc signed; Apple Silicon refuses unsigned ones.
     runs-on: macos-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - uses: oven-sh/setup-bun@v2
       - run: bun install --frozen-lockfile
       - name: Tag matches package.json version

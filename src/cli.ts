@@ -93,7 +93,7 @@ async function serverCommand(subcommand: string): Promise<void> {
   switch (subcommand) {
     case "install":
       installService();
-      console.log(`Phone server installed and running (${serviceStatus()}).`);
+      console.log("Phone server installed. It runs in the background and starts at login.");
       console.log("Next: run `relay pair` and scan the code with your iPhone.");
       return;
     case "uninstall":
