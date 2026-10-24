@@ -141,9 +141,9 @@ struct ComposerView: View {
                     .frame(width: 36, height: 36)
                     .background(theme.separator, in: Circle())
             } else if voice.state == .recording {
-                // Accent rather than red: recording should read as "on", not as an alarm.
-                circleIcon("mic.fill", size: 16, foreground: theme.accentForeground, fill: theme.accent)
-                    .symbolEffect(.pulse)
+                // A steady stop button, not a pulsing mic: the level meter above already
+                // shows it's listening. Accent fill keeps it apart from the gray agent Stop.
+                circleIcon("stop.fill", size: 13, foreground: theme.accentForeground, fill: theme.accent)
             } else {
                 circleIcon("mic", size: 16, foreground: theme.primaryText, fill: theme.separator)
             }
@@ -193,7 +193,7 @@ struct ComposerView: View {
                 }
                 .animation(.linear(duration: 0.08), value: voice.level)
 
-                Text("Listening… tap the mic to review, or send to send now")
+                Text("Listening… tap stop to review, or send to send now")
                     .font(.caption2)
                     .foregroundStyle(theme.secondaryText)
             } else {
