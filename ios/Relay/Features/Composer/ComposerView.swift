@@ -13,6 +13,7 @@ struct ComposerView: View {
     @State private var isShowingCamera = false
     @State private var isSending = false
     @State private var voice = VoiceController()
+    @State private var isShowingLiveCall = false
 
     @Environment(\.appTheme) private var theme
 
@@ -39,7 +40,12 @@ struct ComposerView: View {
                         stopButton
                     }
 
-                    sendButton
+                    // Like ChatGPT: with nothing typed, the send slot starts a voice call instead.
+                    if canTapSend || isSending {
+                        sendButton
+                    } else {
+                        liveCallButton
+                    }
                 }
             }
             .padding(.horizontal, 10)
@@ -66,6 +72,10 @@ struct ComposerView: View {
                 attachments.append(ComposerAttachment(image: image))
             }
             .ignoresSafeArea()
+        }
+        .fullScreenCover(isPresented: $isShowingLiveCall) {
+            LiveCallView(chat: chat)
+                .appTheme(theme)
         }
         .onChange(of: voice.errorMessage) { _, message in
             guard let message else { return }
@@ -177,6 +187,17 @@ struct ComposerView: View {
         .buttonStyle(.plain)
         .disabled(!canTapSend || isSending)
         .accessibilityLabel("Send")
+    }
+
+    private var liveCallButton: some View {
+        Button {
+            isShowingLiveCall = true
+        } label: {
+            circleIcon("waveform", size: 16, foreground: theme.accentForeground, fill: theme.accent)
+        }
+        .buttonStyle(.plain)
+        .disabled(voice.state != .idle)
+        .accessibilityLabel("Start a voice call")
     }
 
     // MARK: - Voice

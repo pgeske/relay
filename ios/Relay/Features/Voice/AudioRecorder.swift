@@ -119,7 +119,7 @@ final class AudioRecorder: @unchecked Sendable {
     }
 
     /// RMS level mapped from roughly -50 dBFS…0 dBFS onto 0…1.
-    private static func level(of buffer: AVAudioPCMBuffer) -> Float {
+    static func level(of buffer: AVAudioPCMBuffer) -> Float {
         guard let channel = buffer.floatChannelData?[0], buffer.frameLength > 0 else {
             return 0
         }

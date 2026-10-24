@@ -1,8 +1,11 @@
 import { mkdir, writeFile } from "node:fs/promises";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
+import type { Duplex } from "node:stream";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
+import { WebSocketServer } from "ws";
+import { endLiveCall, restoreAudioDevices, startLiveCall } from "./live.ts";
 import { startSessionEvents } from "./events.ts";
 import { readEntryImage, readMessagePage } from "./messages.ts";
 import { findSessionPane, listSessions, toSession, type Session } from "./sessions.ts";
@@ -351,6 +354,18 @@ async function route(
   }
 }
 
+/** Splits "/api/sessions/%2572/messages" into decoded segments; null when a segment is malformed. */
+function pathSegments(url: URL): string[] | null {
+  try {
+    return url.pathname
+      .split("/")
+      .filter((segment) => segment.length > 0)
+      .map((segment) => decodeURIComponent(segment));
+  } catch {
+    return null;
+  }
+}
+
 async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> {
   if (!isAllowedAddress(req.socket.remoteAddress)) {
     sendJson(res, 403, { error: "forbidden" });
@@ -358,13 +373,8 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
   }
 
   const url = new URL(req.url ?? "/", "http://relay.local");
-  let segments: string[];
-  try {
-    segments = url.pathname
-      .split("/")
-      .filter((segment) => segment.length > 0)
-      .map((segment) => decodeURIComponent(segment));
-  } catch {
+  const segments = pathSegments(url);
+  if (!segments) {
     sendJson(res, 400, { error: "invalid path" });
     return;
   }
@@ -384,10 +394,33 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
   await route(req, res, url, segments);
 }
 
+const liveSockets = new WebSocketServer({ noServer: true });
+
+/** The only WebSocket route: `/api/sessions/<id>/live` carries a live voice call. */
+async function handleUpgrade(req: IncomingMessage, socket: Duplex, head: Buffer): Promise<void> {
+  const reject = (status: number, reason: string) => {
+    socket.end(`HTTP/1.1 ${status} ${reason}\r\nConnection: close\r\nContent-Length: 0\r\n\r\n`);
+  };
+  if (!isAllowedAddress(req.socket.remoteAddress)) return reject(403, "Forbidden");
+  if (!isAuthorized(req)) return reject(401, "Unauthorized");
+
+  const segments = pathSegments(new URL(req.url ?? "/", "http://relay.local"));
+  const [api, resource, paneId, action] = segments ?? [];
+  if (segments?.length !== 4 || api !== "api" || resource !== "sessions" || action !== "live") {
+    return reject(404, "Not Found");
+  }
+  const pane = await findSessionPane(paneId);
+  if (!pane) return reject(404, "Not Found");
+
+  liveSockets.handleUpgrade(req, socket, head, (webSocket) => startLiveCall(webSocket, pane));
+}
+
 /** Runs the phone server in the foreground until SIGINT/SIGTERM. */
 export function runServer(): void {
   loadToken();
   writeConfig();
+  // A server that crashed mid-call may have left the Mac's audio routed into BlackHole.
+  void restoreAudioDevices().catch((error: unknown) => console.error("live: could not restore audio devices", error));
 
   const server = createServer((req, res) => {
     handle(req, res).catch((error: unknown) => {
@@ -403,6 +436,12 @@ export function runServer(): void {
       sendJson(res, 500, { error: "internal error" });
     });
   });
+  server.on("upgrade", (req: IncomingMessage, socket: Duplex, head: Buffer) => {
+    handleUpgrade(req, socket, head).catch((error: unknown) => {
+      console.error("upgrade failed", error);
+      socket.destroy();
+    });
+  });
 
   server.listen(SERVER_PORT, "0.0.0.0", () => {
     console.log(`relay ${VERSION} server listening on http://0.0.0.0:${SERVER_PORT}`);
@@ -416,8 +455,9 @@ export function runServer(): void {
 
   for (const signal of ["SIGINT", "SIGTERM"] as const) {
     process.on(signal, () => {
-      server.close(() => process.exit(0));
-      setTimeout(() => process.exit(0), 1000).unref();
+      // Hang up first so omp leaves live mode and the Mac gets its own audio devices back.
+      void endLiveCall().finally(() => server.close(() => process.exit(0)));
+      setTimeout(() => process.exit(0), 6000).unref();
     });
   }
 }

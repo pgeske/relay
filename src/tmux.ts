@@ -281,6 +281,11 @@ export async function sendKeys(paneId: string, keys: string[]): Promise<void> {
   await tmux(["send-keys", "-t", paneId, ...keys]);
 }
 
+/** The pane's visible screen as plain text, one line per row. */
+export async function capturePane(paneId: string): Promise<string> {
+  return await tmux(["capture-pane", "-p", "-t", paneId]);
+}
+
 /** Sets (or, with null, clears) a global tmux option on relay's server if it is running. */
 export async function setGlobalOption(name: string, value: string | null): Promise<void> {
   if ((await listTmuxSessions()).length === 0) return;

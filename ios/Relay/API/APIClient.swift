@@ -161,6 +161,17 @@ struct APIClient: Sendable {
         return request
     }
 
+    /// WebSocket request for a live voice call with this session's omp `/live` mode.
+    func liveCallRequest(sessionID: String) throws -> URLRequest {
+        var request = try request(path: "/api/sessions/\(Self.encoded(sessionID))/live")
+        guard let url = request.url, var components = URLComponents(url: url, resolvingAgainstBaseURL: false) else {
+            throw APIError(message: "Invalid server URL.", statusCode: nil)
+        }
+        components.scheme = components.scheme == "https" ? "wss" : "ws"
+        request.url = components.url
+        return request
+    }
+
     // MARK: - Request plumbing
 
     private func request(

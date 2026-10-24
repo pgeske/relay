@@ -58,7 +58,9 @@ targets:
         UIApplicationSupportsIndirectInputEvents: true
         NSAppTransportSecurity:
           NSAllowsArbitraryLoads: true
-        NSMicrophoneUsageDescription: Relay uses the microphone to dictate messages with on-device speech recognition.
+        NSMicrophoneUsageDescription: Relay uses the microphone to dictate messages and for live voice calls with your agent.
+        UIBackgroundModes:
+          - audio
         NSCameraUsageDescription: Relay uses the camera to attach photos to messages.
         NSPhotoLibraryUsageDescription: Relay lets you attach photos from your library to messages.
         CFBundleURLTypes:

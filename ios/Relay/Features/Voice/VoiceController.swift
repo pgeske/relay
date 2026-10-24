@@ -80,7 +80,7 @@ final class VoiceController {
         }
     }
 
-    private static func requestMicrophonePermission() async -> Bool {
+    static func requestMicrophonePermission() async -> Bool {
         switch AVAudioApplication.shared.recordPermission {
         case .granted:
             return true

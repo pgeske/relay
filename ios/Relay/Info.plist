@@ -39,7 +39,7 @@
 	<key>NSCameraUsageDescription</key>
 	<string>Relay uses the camera to attach photos to messages.</string>
 	<key>NSMicrophoneUsageDescription</key>
-	<string>Relay uses the microphone to dictate messages with on-device speech recognition.</string>
+	<string>Relay uses the microphone to dictate messages and for live voice calls with your agent.</string>
 	<key>NSPhotoLibraryUsageDescription</key>
 	<string>Relay lets you attach photos from your library to messages.</string>
 	<key>UIAppFonts</key>
@@ -48,6 +48,10 @@
 	</array>
 	<key>UIApplicationSupportsIndirectInputEvents</key>
 	<true/>
+	<key>UIBackgroundModes</key>
+	<array>
+		<string>audio</string>
+	</array>
 	<key>UILaunchScreen</key>
 	<dict/>
 	<key>UISupportedInterfaceOrientations</key>

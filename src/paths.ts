@@ -9,6 +9,8 @@ export const CACHE_DIR = join(process.env.XDG_CACHE_HOME || join(homedir(), ".ca
 
 export const TMUX_CONF_PATH = join(DATA_DIR, "tmux.conf");
 export const UPLOADS_DIR = join(DATA_DIR, "uploads");
+/** The Mac's audio devices from before a live call, kept until the call puts them back. */
+export const LIVE_AUDIO_BACKUP_PATH = join(DATA_DIR, "live-audio-defaults.json");
 export const TOKEN_PATH = join(CONFIG_DIR, "token");
 export const UPDATE_CACHE_PATH = join(CACHE_DIR, "latest-release.json");
 

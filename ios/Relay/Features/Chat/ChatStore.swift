@@ -262,6 +262,10 @@ final class ChatStore {
         }
     }
 
+    func liveCallRequest() throws -> URLRequest {
+        try api.liveCallRequest(sessionID: sessionID)
+    }
+
     /// Starts a fresh conversation in this same session, like Cmd+Shift+N on the Mac.
     /// The stream sends a reset once omp switches to the new session file.
     func startNewConversation() async {

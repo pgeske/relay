@@ -46,6 +46,17 @@ The server listens on port 7878 (`RELAY_PORT` to change), only answers loopback,
 
 The app lives in [`ios/`](ios/README.md); build it with Xcode and install it on your phone.
 
+### Live voice (Mac only)
+
+The waveform button in a chat (shown when the message box is empty) starts a voice call with that session's agent. It reuses omp's own `/live` mode. That mode always talks through the Mac's default microphone and speakers, so during a call relay points those at two [BlackHole](https://existential.audio/blackhole/) loopback devices and streams the audio to and from the phone. When the call ends, relay switches the devices back. One-time setup:
+
+```sh
+brew install ffmpeg sox switchaudio-osx
+brew install --cask blackhole-2ch blackhole-16ch   # then: sudo killall coreaudiod
+```
+
+The first call makes macOS ask whether relay may use the microphone; click Allow on the Mac. macOS asks again after relay updates. Your omp needs a ChatGPT (Codex) login, as `/live` does on the Mac.
+
 ## Updates
 
 relay checks for new releases in the background and shows `relay x.y.z available` in the tab bar. Then run:

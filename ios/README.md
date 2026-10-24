@@ -1,7 +1,8 @@
 # Relay — iPhone app
 
 SwiftUI client for the relay server in `../src`. Each tmux window running
-`omp` is a chat session with live output, attachments, and dictation. The app
+`omp` is a chat session with live output, attachments, dictation, and voice calls
+through omp's `/live` mode (see the main README for the Mac setup). The app
 can talk to several computers at once; the session list groups sessions by host.
 
 ## Build and run
