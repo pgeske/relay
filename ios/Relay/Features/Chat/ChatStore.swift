@@ -174,10 +174,7 @@ final class ChatStore {
 
         do {
             let page = try await api.fetchMessages(sessionID: sessionID, limit: 60)
-            messages = page.messages
-            seenIDs = Set(page.messages.map(\.id))
-            hasMore = page.hasMore
-            sessionFile = page.sessionFile
+            replaceHistory(with: page)
             hasLoaded = true
             errorMessage = nil
         } catch is CancellationError {
@@ -198,10 +195,7 @@ final class ChatStore {
 
             // The pane switched to a different jsonl file while we were away.
             if let file = page.sessionFile, file != sessionFile {
-                messages = page.messages
-                seenIDs = Set(page.messages.map(\.id))
-                hasMore = page.hasMore
-                sessionFile = file
+                replaceHistory(with: page)
                 return
             }
 
@@ -387,6 +381,20 @@ final class ChatStore {
         guard !seenIDs.contains(message.id) else { return }
         seenIDs.insert(message.id)
         messages.append(message)
+    }
+
+    /// Swaps in a freshly fetched page. A reload can carry the real copy of a message the
+    /// stream never delivered (omp writes the first message before the server sees the new
+    /// session file), so newly seen user messages still retire their optimistic bubbles.
+    private func replaceHistory(with page: MessagesPage) {
+        let previouslySeen = seenIDs
+        messages = page.messages
+        seenIDs = Set(page.messages.map(\.id))
+        hasMore = page.hasMore
+        sessionFile = page.sessionFile
+        for message in page.messages where !previouslySeen.contains(message.id) {
+            consumePending(matching: message)
+        }
     }
 
     /// Drops the optimistic bubble once its real counterpart arrives. The
