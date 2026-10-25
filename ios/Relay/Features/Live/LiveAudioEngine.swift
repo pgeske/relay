@@ -30,6 +30,8 @@ final class LiveAudioEngine: @unchecked Sendable {
     private let lock = NSLock()
     private var isMuted = false
     private var queuedFrames: AVAudioFrameCount = 0
+    /// Bumped when the player restarts; completions from before then must not touch the count.
+    private var queueGeneration = 0
     private var configurationObserver: NSObjectProtocol?
 
     /// `onMicAudio` receives wire-format PCM plus a 0…1 level for each mic buffer.
@@ -61,9 +63,7 @@ final class LiveAudioEngine: @unchecked Sendable {
             object: engine,
             queue: nil
         ) { [weak self] _ in
-            guard let self, !self.engine.isRunning else { return }
-            try? self.engine.start()
-            self.player.play()
+            self?.restartAfterConfigurationChange()
         }
 
         engine.prepare()
@@ -95,6 +95,7 @@ final class LiveAudioEngine: @unchecked Sendable {
         lock.lock()
         let isBacklogged = Double(queuedFrames) > Self.maxQueuedSeconds * Self.sampleRate
         if !isBacklogged { queuedFrames += frames }
+        let generation = queueGeneration
         lock.unlock()
         if isBacklogged { return 0 }
 
@@ -108,10 +109,21 @@ final class LiveAudioEngine: @unchecked Sendable {
         player.scheduleBuffer(buffer) { [weak self] in
             guard let self else { return }
             self.lock.lock()
-            self.queuedFrames -= frames
+            if generation == self.queueGeneration { self.queuedFrames -= frames }
             self.lock.unlock()
         }
         return AudioRecorder.level(of: buffer)
+    }
+
+    /// Restarts after the engine stopped itself, dropping anything queued before.
+    private func restartAfterConfigurationChange() {
+        player.stop()
+        lock.lock()
+        queueGeneration += 1
+        queuedFrames = 0
+        lock.unlock()
+        if !engine.isRunning { try? engine.start() }
+        player.play()
     }
 
     func stop() {
