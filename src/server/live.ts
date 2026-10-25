@@ -162,6 +162,8 @@ class LiveCall {
   #poll: NodeJS.Timeout | undefined;
   #phase: string | null = null;
   #startedAt = Date.now();
+  /** Per-call totals for the server log, so a silent call shows which direction failed. */
+  #stats = { fromPhoneBytes: 0, fromPhonePeak: 0, toPhoneBytes: 0, phases: [] as string[] };
 
   constructor(socket: WebSocket, pane: Pane) {
     this.#socket = socket;
@@ -171,8 +173,15 @@ class LiveCall {
   async run(): Promise<void> {
     this.#socket.on("close", () => void this.end());
     this.#socket.on("message", (data, isBinary) => {
-      if (isBinary && !this.#ending) this.#phoneMic?.stdin.write(data as Buffer);
+      if (!isBinary || this.#ending) return;
+      const chunk = data as Buffer;
+      this.#stats.fromPhoneBytes += chunk.length;
+      for (let offset = 0; offset + 1 < chunk.length; offset += 2) {
+        this.#stats.fromPhonePeak = Math.max(this.#stats.fromPhonePeak, Math.abs(chunk.readInt16LE(offset)));
+      }
+      this.#phoneMic?.stdin.write(chunk);
     });
+    console.log(`live: call started on ${this.#pane.paneId}`);
     this.#starting = this.#start();
     try {
       await this.#starting;
@@ -221,7 +230,10 @@ class LiveCall {
       const bytes: Buffer = carry ? Buffer.concat([carry, chunk]) : chunk;
       const even = bytes.length - (bytes.length % 2);
       carry = even < bytes.length ? bytes.subarray(even) : null;
-      if (even > 0 && this.#socket.readyState === this.#socket.OPEN) this.#socket.send(bytes.subarray(0, even));
+      if (even > 0 && this.#socket.readyState === this.#socket.OPEN) {
+        this.#socket.send(bytes.subarray(0, even));
+        this.#stats.toPhoneBytes += even;
+      }
     });
 
     // Ctrl+L toggles omp's live mode; only press it when the pane is not live already.
@@ -234,7 +246,10 @@ class LiveCall {
   async #checkPhase(): Promise<void> {
     if (this.#ending) return;
     const phase = await livePhase(this.#pane.paneId);
-    if (phase && phase !== this.#phase) this.#send({ type: "phase", phase });
+    if (phase && phase !== this.#phase) {
+      this.#send({ type: "phase", phase });
+      this.#stats.phases.push(phase);
+    }
     if (!phase && this.#phase) {
       // Someone ended live mode on the computer (or omp hit an error and showed it there).
       await this.end();
@@ -279,6 +294,13 @@ class LiveCall {
       console.error("live: could not restore audio devices", restoreError);
     }
 
+    const seconds = (bytes: number) => (bytes / 2 / SAMPLE_RATE).toFixed(1);
+    console.log(
+      `live: call ended on ${this.#pane.paneId} after ${((Date.now() - this.#startedAt) / 1000).toFixed(0)}s;` +
+        ` phone sent ${seconds(this.#stats.fromPhoneBytes)}s of audio (peak ${this.#stats.fromPhonePeak}),` +
+        ` phone got ${seconds(this.#stats.toPhoneBytes)}s; phases ${this.#stats.phases.join(">") || "none"}` +
+        (error ? `; error: ${error}` : ""),
+    );
     this.#send({ type: "ended", ...(error ? { error } : {}) });
     if (this.#socket.readyState === this.#socket.OPEN) this.#socket.close(1000);
     if (activeCall === this) activeCall = null;

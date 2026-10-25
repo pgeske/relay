@@ -30,6 +30,7 @@ final class LiveAudioEngine: @unchecked Sendable {
     private let lock = NSLock()
     private var isMuted = false
     private var queuedFrames: AVAudioFrameCount = 0
+    private var configurationObserver: NSObjectProtocol?
 
     /// `onMicAudio` receives wire-format PCM plus a 0…1 level for each mic buffer.
     func start(onMicAudio: @escaping @Sendable (Data, Float) -> Void) throws {
@@ -49,10 +50,20 @@ final class LiveAudioEngine: @unchecked Sendable {
         engine.connect(player, to: engine.mainMixerNode, format: playbackFormat)
 
         input.installTap(onBus: 0, bufferSize: 2_048, format: inputFormat) { [weak self] buffer, _ in
-            guard let self, !self.muted else { return }
-            if let data = self.convert(buffer, with: converter) {
-                onMicAudio(data, AudioRecorder.level(of: buffer))
-            }
+            guard let self, !self.muted, let data = self.convert(buffer, with: converter) else { return }
+            onMicAudio(data, AudioRecorder.level(of: buffer))
+        }
+
+        // Turning on voice processing reconfigures the audio route right after the engine
+        // starts, which stops it: the mic tap then never fires. Start it again.
+        configurationObserver = NotificationCenter.default.addObserver(
+            forName: .AVAudioEngineConfigurationChange,
+            object: engine,
+            queue: nil
+        ) { [weak self] _ in
+            guard let self, !self.engine.isRunning else { return }
+            try? self.engine.start()
+            self.player.play()
         }
 
         engine.prepare()
@@ -104,6 +115,7 @@ final class LiveAudioEngine: @unchecked Sendable {
     }
 
     func stop() {
+        if let configurationObserver { NotificationCenter.default.removeObserver(configurationObserver) }
         engine.inputNode.removeTap(onBus: 0)
         player.stop()
         engine.stop()
