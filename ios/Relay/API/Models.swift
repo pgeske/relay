@@ -66,6 +66,21 @@ enum Block: Hashable, Sendable {
         let name: String
         let summary: String
         let argsJson: String
+        /// The questions of an `ask` call; nil for every other tool.
+        let ask: [AskQuestion]?
+    }
+
+    struct AskQuestion: Hashable, Sendable, Decodable {
+        struct Option: Hashable, Sendable, Decodable {
+            let label: String
+            let description: String?
+        }
+
+        let id: String
+        let question: String
+        let options: [Option]
+        let multi: Bool
+        let recommended: Int?
     }
 
     struct ToolResult: Hashable, Sendable {
@@ -75,6 +90,12 @@ enum Block: Hashable, Sendable {
         let truncated: Bool
         let isError: Bool
     }
+}
+
+/// The phone's answer to one `ask` question: picked option indices and/or a typed answer.
+struct AskAnswer: Encodable, Sendable {
+    let options: [Int]
+    let custom: String?
 }
 
 extension Block: Decodable {
@@ -90,6 +111,7 @@ extension Block: Decodable {
         case truncated
         case isError
         case url
+        case ask
     }
 
     init(from decoder: Decoder) throws {
@@ -109,7 +131,8 @@ extension Block: Decodable {
                     id: (try? container.decode(String.self, forKey: .id)) ?? "",
                     name: (try? container.decode(String.self, forKey: .name)) ?? "",
                     summary: (try? container.decode(String.self, forKey: .summary)) ?? "",
-                    argsJson: (try? container.decode(String.self, forKey: .argsJson)) ?? ""
+                    argsJson: (try? container.decode(String.self, forKey: .argsJson)) ?? "",
+                    ask: try? container.decodeIfPresent([AskQuestion].self, forKey: .ask)
                 )
             )
         case "toolResult":

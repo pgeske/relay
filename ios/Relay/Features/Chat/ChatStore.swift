@@ -105,6 +105,17 @@ final class ChatStore {
         Set(messages.flatMap(\.toolCallIDs))
     }
 
+    /// The agent's latest `ask` call while omp is still waiting for its answer.
+    var pendingAsk: Block.ToolCall? {
+        for message in messages.reversed() {
+            for block in message.blocks.reversed() {
+                guard case .toolCall(let call) = block, call.ask != nil else { continue }
+                return toolResultMap[call.id] == nil ? call : nil
+            }
+        }
+        return nil
+    }
+
     private var renderedMessages: [Message] {
         let callIDs = matchedToolCallIDs
         return messages.filter { message in
@@ -259,6 +270,17 @@ final class ChatStore {
             try await api.sendKeys(sessionID: sessionID, keys: keys)
         } catch {
             errorMessage = APIError.describe(error)
+        }
+    }
+
+    /// Types the answers into omp's ask dialog. Returns false when the panel should stay editable.
+    func answerAsk(_ call: Block.ToolCall, answers: [AskAnswer]) async -> Bool {
+        do {
+            try await api.answerAsk(sessionID: sessionID, toolCallID: call.id, answers: answers)
+            return true
+        } catch {
+            errorMessage = APIError.describe(error)
+            return false
         }
     }
 

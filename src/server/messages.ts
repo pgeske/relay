@@ -1,5 +1,6 @@
 import { open, readFile } from "node:fs/promises";
 import { join } from "node:path";
+import { parseAskQuestions, type AskQuestion } from "./ask.ts";
 import { BLOBS_DIR } from "./sessionFile.ts";
 import { summarizeToolCall } from "./toolSummary.ts";
 
@@ -11,6 +12,8 @@ export type ToolCallBlock = {
   name: string;
   summary: string;
   argsJson: string;
+  /** The questions of an `ask` call, so the app can answer them with buttons. */
+  ask?: AskQuestion[];
 };
 export type ToolResultBlock = {
   type: "toolResult";
@@ -38,7 +41,7 @@ const READ_CHUNK_BYTES = 256 * 1024;
 
 type RawImage = { data: string; mimeType?: string };
 
-function asRecord(value: unknown): Record<string, unknown> | null {
+export function asRecord(value: unknown): Record<string, unknown> | null {
   if (!value || typeof value !== "object" || Array.isArray(value)) return null;
   return value as Record<string, unknown>;
 }
@@ -139,12 +142,14 @@ export function normalizeEntry(entry: Record<string, unknown>, paneId: string): 
           blocks.push({ type: "thinking", text: block.thinking });
         } else if (block.type === "toolCall") {
           const name = typeof block.name === "string" ? block.name : "tool";
+          const ask = name === "ask" ? parseAskQuestions(block.arguments) : null;
           blocks.push({
             type: "toolCall",
             id: typeof block.id === "string" ? block.id : "",
             name,
             summary: summarizeToolCall(name, block.arguments),
             argsJson: toolCallArgsJson(block.arguments),
+            ...(ask ? { ask } : {}),
           });
         } else if (block.type === "image") {
           blocks.push({ type: "image", url: imageUrl(paneId, id, imageIndex) });

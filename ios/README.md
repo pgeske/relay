@@ -5,6 +5,10 @@ SwiftUI client for the relay server in `../src`. Each tmux window running
 through omp's `/live` mode (see the main README for the Mac setup). The app
 can talk to several computers at once; the session list groups sessions by host.
 
+When the agent asks a question with omp's `ask` tool, the message box turns into
+the question's choices (plus a typed "Other" answer). Sending them makes the
+server press the same keys a person would in omp's terminal dialog.
+
 ## Build and run
 
 Generate the Xcode project (it is gitignored), then build for the simulator:

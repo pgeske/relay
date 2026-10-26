@@ -124,6 +124,22 @@ struct APIClient: Sendable {
         )
     }
 
+    /// Answers the session's open `ask` dialog; one answer per question, in order.
+    func answerAsk(sessionID: String, toolCallID: String, answers: [AskAnswer]) async throws {
+        struct Body: Encodable {
+            let toolCallId: String
+            let answers: [AskAnswer]
+        }
+        let body = try JSONEncoder().encode(Body(toolCallId: toolCallID, answers: answers))
+        let _: OkResponse = try await send(
+            try request(
+                path: "/api/sessions/\(Self.encoded(sessionID))/ask",
+                method: "POST",
+                body: body
+            )
+        )
+    }
+
     func fetchModels() async throws -> [ModelOption] {
         let response: ModelsResponse = try await send(try request(path: "/api/models"))
         return response.models

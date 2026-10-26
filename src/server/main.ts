@@ -6,6 +6,7 @@ import { dirname, join } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import { WebSocketServer } from "ws";
 import { endLiveCall, restoreAudioDevices, startLiveCall } from "./live.ts";
+import { askAnswerSteps, findPendingAsk, validateAskAnswers, type AskAnswer } from "./ask.ts";
 import { startSessionEvents } from "./events.ts";
 import { readEntryImage, readMessagePage } from "./messages.ts";
 import { findSessionPane, listSessions, toSession, type Session } from "./sessions.ts";
@@ -17,6 +18,7 @@ import {
   listPanes,
   mainSessionName,
   newWindow,
+  pasteOnly,
   pasteText,
   selectWindow,
   sendKeys,
@@ -207,6 +209,48 @@ async function handleKeys(req: IncomingMessage, res: ServerResponse, pane: Pane)
   sendJson(res, 200, { ok: true });
 }
 
+/** Ask calls whose answer keystrokes are being typed right now, so a double tap can't type them twice. */
+const answeringAsks = new Set<string>();
+
+function parseAskAnswers(raw: unknown): AskAnswer[] {
+  if (!Array.isArray(raw)) throw new HttpError(400, "answers must be an array");
+  return raw.map((item) => {
+    const record = item && typeof item === "object" ? (item as Record<string, unknown>) : {};
+    const options = Array.isArray(record.options) ? record.options : [];
+    if (!options.every((option) => typeof option === "number")) throw new HttpError(400, "options must be numbers");
+    return {
+      options: options as number[],
+      ...(typeof record.custom === "string" ? { custom: record.custom } : {}),
+    };
+  });
+}
+
+/** Answers the pane's open `ask` dialog by pressing the keys the TUI would get from a person. */
+async function handleAnswerAsk(req: IncomingMessage, res: ServerResponse, pane: Pane): Promise<void> {
+  const body = await readJson(req);
+  const toolCallId = typeof body.toolCallId === "string" ? body.toolCallId : "";
+  if (!toolCallId) throw new HttpError(400, "missing toolCallId");
+  const answers = parseAskAnswers(body.answers);
+
+  const sessionFile = await resolveSessionFile(pane);
+  const pending = sessionFile ? await findPendingAsk(sessionFile, toolCallId) : null;
+  if (!pending || answeringAsks.has(toolCallId)) throw new HttpError(409, "this question was already answered");
+  const invalid = validateAskAnswers(pending.questions, answers);
+  if (invalid) throw new HttpError(400, invalid);
+
+  answeringAsks.add(toolCallId);
+  try {
+    for (const step of askAnswerSteps(pending.questions, answers)) {
+      if ("keys" in step) await sendKeys(pane.paneId, step.keys);
+      else if ("paste" in step) await pasteOnly(pane.paneId, step.paste);
+      else await sleep(step.waitMs);
+    }
+  } finally {
+    answeringAsks.delete(toolCallId);
+  }
+  sendJson(res, 200, { ok: true });
+}
+
 /** Switches model and/or thinking level by typing omp's own `/switch` and `/effort` commands. */
 async function handleSetModel(req: IncomingMessage, res: ServerResponse, pane: Pane): Promise<void> {
   const body = await readJson(req);
@@ -341,6 +385,9 @@ async function route(
       return;
     case "POST keys":
       await handleKeys(req, res, pane);
+      return;
+    case "POST ask":
+      await handleAnswerAsk(req, res, pane);
       return;
     case "POST focus":
       await selectWindow(pane.windowId);

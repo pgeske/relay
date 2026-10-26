@@ -269,10 +269,15 @@ export async function selectWindow(windowId: string): Promise<void> {
   await tmux(["select-window", "-t", windowId]);
 }
 
-/** Pastes text into the pane (bracketed paste when the TUI supports it) and presses Enter. */
-export async function pasteText(paneId: string, text: string): Promise<void> {
+/** Pastes text into the pane, as bracketed paste when the TUI supports it, without pressing Enter. */
+export async function pasteOnly(paneId: string, text: string): Promise<void> {
   await tmuxWithInput(["load-buffer", "-b", "relay-input", "-"], text);
   await tmux(["paste-buffer", "-p", "-d", "-b", "relay-input", "-t", paneId]);
+}
+
+/** Pastes text into the pane and presses Enter. */
+export async function pasteText(paneId: string, text: string): Promise<void> {
+  await pasteOnly(paneId, text);
   await sleep(150);
   await tmux(["send-keys", "-t", paneId, "Enter"]);
 }

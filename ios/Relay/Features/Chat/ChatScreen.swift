@@ -23,8 +23,13 @@ struct ChatScreen: View {
     var body: some View {
         VStack(spacing: 0) {
             MessageListView(store: chat, api: session.api)
-            ComposerView(chat: chat) { message in
-                model.showError(message)
+            // While omp shows its ask dialog, keystrokes go to the dialog, not the message box.
+            if let ask = chat.pendingAsk {
+                AskPanel(chat: chat, call: ask)
+            } else {
+                ComposerView(chat: chat) { message in
+                    model.showError(message)
+                }
             }
         }
         .background(theme.background)
