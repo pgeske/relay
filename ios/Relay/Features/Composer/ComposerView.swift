@@ -40,8 +40,9 @@ struct ComposerView: View {
                         stopButton
                     }
 
-                    // Like ChatGPT: with nothing typed, the send slot starts a voice call instead.
-                    if canTapSend || isSending {
+                    // Like ChatGPT: with nothing typed, the send slot starts a voice call instead,
+                    // when the computer has voice calls turned on.
+                    if canTapSend || isSending || !chat.voiceEnabled {
                         sendButton
                     } else {
                         liveCallButton

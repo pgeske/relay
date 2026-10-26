@@ -282,4 +282,6 @@ struct ModelsResponse: Decodable, Sendable {
 struct HealthResponse: Decodable, Sendable {
     let ok: Bool
     let version: String
+    /// Missing on servers from before voice calls existed.
+    let voice: Bool?
 }

@@ -16,6 +16,7 @@ import {
 } from "./tmux.ts";
 import { installLatestRelease, refreshUpdateNotice } from "./update.ts";
 import { VERSION } from "./version.ts";
+import { isVoiceEnabled, setVoiceEnabled } from "./voice.ts";
 
 const HELP = `relay ${VERSION}: an agent multiplexer for omp, with an iPhone companion app.
 
@@ -26,6 +27,7 @@ Usage:
   relay server install     Run the phone server in the background, starting at login
   relay server uninstall   Stop and remove the background phone server
   relay server status      Show whether the background phone server is running
+  relay voice [on|off]     Turn phone voice calls on or off (off by default; Mac only)
   relay update             Install the latest release
   relay reload             Re-apply relay's tmux config to the running session
   relay version            Print the version
@@ -108,6 +110,12 @@ async function serverCommand(subcommand: string): Promise<void> {
   }
 }
 
+function voiceCommand(setting: string | undefined): void {
+  if (setting === "on" || setting === "off") setVoiceEnabled(setting === "on");
+  else if (setting !== undefined) throw new Error(`unknown voice setting: ${setting}\n\n${HELP}`);
+  console.log(`Phone voice calls are ${isVoiceEnabled() ? "on" : "off"}.`);
+}
+
 /** Returns the exit code, or null for `relay server`, which keeps running. */
 async function main(args: string[]): Promise<number | null> {
   const [command, ...rest] = args;
@@ -123,6 +131,9 @@ async function main(args: string[]): Promise<number | null> {
         return null;
       }
       await serverCommand(rest[0]);
+      return 0;
+    case "voice":
+      voiceCommand(rest[0]);
       return 0;
     case "update":
       await update();

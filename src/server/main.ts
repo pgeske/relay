@@ -9,6 +9,7 @@ import { endLiveCall, restoreAudioDevices, startLiveCall } from "./live.ts";
 import { askAnswerSteps, findPendingAsk, validateAskAnswers, type AskAnswer } from "./ask.ts";
 import { startSessionEvents } from "./events.ts";
 import { readEntryImage, readMessagePage } from "./messages.ts";
+import { isVoiceEnabled } from "../voice.ts";
 import { findSessionPane, listSessions, toSession, type Session } from "./sessions.ts";
 import { THINKING_LEVELS, listModels, rememberChoice } from "./modelState.ts";
 import { resolveSessionFile } from "./sessionFile.ts";
@@ -427,7 +428,7 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
   }
 
   if (req.method === "GET" && segments[0] === "api" && segments[1] === "health" && segments.length === 2) {
-    sendJson(res, 200, { ok: true, version: VERSION });
+    sendJson(res, 200, { ok: true, version: VERSION, voice: isVoiceEnabled() });
     return;
   }
   if (segments[0] !== "api") {
@@ -456,6 +457,7 @@ async function handleUpgrade(req: IncomingMessage, socket: Duplex, head: Buffer)
   if (segments?.length !== 4 || api !== "api" || resource !== "sessions" || action !== "live") {
     return reject(404, "Not Found");
   }
+  if (!isVoiceEnabled()) return reject(403, "Voice Disabled");
   const pane = await findSessionPane(paneId);
   if (!pane) return reject(404, "Not Found");
 

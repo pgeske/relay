@@ -47,6 +47,8 @@ final class ChatStore {
     private(set) var isLoadingInitial = false
     private(set) var isLoadingOlder = false
     private(set) var models: [ModelOption] = []
+    /// Whether this session's computer accepts voice calls; hides the call button when not.
+    private(set) var voiceEnabled = false
     var errorMessage: String?
 
     /// The phone's latest pick, shown until omp reports it so the chip doesn't flick back.
@@ -155,6 +157,7 @@ final class ChatStore {
         if models.isEmpty {
             await loadModels()
         }
+        await loadVoiceSetting()
     }
 
     func stop() {
@@ -306,6 +309,11 @@ final class ChatStore {
         } catch {
             // The chip still shows the current model; the picker just stays empty.
         }
+    }
+
+    /// Voice calls are off unless the computer's owner ran `relay voice on`.
+    private func loadVoiceSetting() async {
+        voiceEnabled = (try? await api.health().voice) ?? false
     }
 
     func selectModel(_ selector: String) async {

@@ -12,6 +12,8 @@ export const UPLOADS_DIR = join(DATA_DIR, "uploads");
 /** The Mac's audio devices from before a live call, kept until the call puts them back. */
 export const LIVE_AUDIO_BACKUP_PATH = join(DATA_DIR, "live-audio-defaults.json");
 export const TOKEN_PATH = join(CONFIG_DIR, "token");
+/** Present when live voice calls are turned on with `relay voice on`. */
+export const VOICE_ENABLED_PATH = join(CONFIG_DIR, "voice-enabled");
 export const UPDATE_CACHE_PATH = join(CACHE_DIR, "latest-release.json");
 
 export const GITHUB_REPO = "pgeske/relay";
