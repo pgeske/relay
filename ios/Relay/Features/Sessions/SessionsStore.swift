@@ -23,6 +23,11 @@ final class HostSessions: Identifiable {
     private(set) var hasLoaded = false
     private(set) var lastError: String?
 
+    /// Whether the latest refresh got an answer from the host.
+    var isReachable: Bool {
+        hasLoaded && lastError == nil
+    }
+
     private var pollTask: Task<Void, Never>?
 
     init(host: Host) {

@@ -32,7 +32,8 @@ struct ChatScreen: View {
                 }
             }
         }
-        .background(theme.background)
+        // Fill behind the keyboard too; otherwise the window's black shows around its rounded top.
+        .background(theme.background.ignoresSafeArea())
         .navigationBarTitleDisplayMode(.inline)
         .toolbarBackground(theme.secondaryBackground, for: .navigationBar)
         .toolbarBackground(.visible, for: .navigationBar)
@@ -63,8 +64,14 @@ struct ChatScreen: View {
                 Button {
                     Task { await chat.startNewConversation() }
                 } label: {
-                    Image(systemName: "square.and.pencil")
+                    if chat.isStartingNewConversation {
+                        ProgressView()
+                            .tint(theme.accent)
+                    } else {
+                        Image(systemName: "square.and.pencil")
+                    }
                 }
+                .disabled(chat.isStartingNewConversation)
                 .accessibilityLabel("New conversation in this session")
                 NewSessionButton(model: model) {
                     Image(systemName: "plus")

@@ -49,6 +49,8 @@ final class ChatStore {
     private(set) var models: [ModelOption] = []
     /// Whether this session's computer accepts voice calls; hides the call button when not.
     private(set) var voiceEnabled = false
+    /// True from tapping "new conversation" until omp has switched to the new file.
+    private(set) var isStartingNewConversation = false
     var errorMessage: String?
 
     /// The phone's latest pick, shown until omp reports it so the chip doesn't flick back.
@@ -292,13 +294,21 @@ final class ChatStore {
     }
 
     /// Starts a fresh conversation in this same session, like Cmd+Shift+N on the Mac.
-    /// The stream sends a reset once omp switches to the new session file.
+    /// The stream sends a reset once omp switches to the new session file, which
+    /// ends `isStartingNewConversation`.
     func startNewConversation() async {
+        guard !isStartingNewConversation else { return }
+        isStartingNewConversation = true
         do {
             try await api.sendInput(sessionID: sessionID, text: "/new", images: [])
         } catch {
+            isStartingNewConversation = false
             errorMessage = APIError.describe(error)
+            return
         }
+        // Don't leave the button spinning if the reset never arrives, e.g. the stream dropped.
+        try? await Task.sleep(for: .seconds(8))
+        isStartingNewConversation = false
     }
 
     // MARK: - Model
@@ -403,6 +413,7 @@ final class ChatStore {
             hasLoaded = false
             sessionFile = file
             await loadLatest()
+            isStartingNewConversation = false
             return false
 
         case .closed:

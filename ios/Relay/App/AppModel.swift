@@ -38,20 +38,37 @@ final class AppModel {
         await retry()
     }
 
+    /// How long launch holds out for the last-used session's host before opening a
+    /// session from a host that already answered. An asleep or offline host can take
+    /// the full request timeout to fail, and that shouldn't block the others.
+    private static let savedHostGracePeriod: Duration = .milliseconds(1500)
+
     /// Loads every host at once and opens a session as soon as a good pick is known,
     /// without waiting on hosts that are slow or offline. `reportErrors` is off after
     /// host edits, whose confirmation shouldn't be replaced by an offline banner.
     func retry(reportErrors: Bool = true) async {
-        await withTaskGroup(of: Void.self) { group in
+        var isGracePeriodOver = false
+        await withTaskGroup(of: Bool.self) { group in
             for host in sessions.hosts {
-                group.addTask { await host.refresh() }
+                group.addTask { await host.refresh(); return false }
             }
-            for await _ in group {
-                chooseInitialSessionIfNeeded()
+            group.addTask {
+                try? await Task.sleep(for: Self.savedHostGracePeriod)
+                return true
+            }
+            for await didGracePeriodEnd in group {
+                if didGracePeriodEnd { isGracePeriodOver = true }
+                chooseInitialSessionIfNeeded(waitForSavedHost: !isGracePeriodOver)
+                if sessions.hasLoadedAll {
+                    group.cancelAll()  // Ends the grace timer early.
+                } else if isGracePeriodOver, sessions.hosts.contains(where: \.isReachable) {
+                    // Show the reachable hosts now; offline ones keep loading behind it.
+                    didFinishLaunching = true
+                }
             }
         }
         didFinishLaunching = true
-        chooseInitialSessionIfNeeded()
+        chooseInitialSessionIfNeeded(waitForSavedHost: false)
         if reportErrors, currentSession == nil,
            let failed = sessions.hosts.first(where: { $0.lastError != nil }),
            let error = failed.lastError {
@@ -191,7 +208,9 @@ final class AppModel {
         showError(hosts.count > 1 ? "\(host.name): \(message)" : message)
     }
 
-    private func chooseInitialSessionIfNeeded(excluding excluded: SessionKey? = nil) {
+    /// `waitForSavedHost` holds off on other picks while the last-used session's host
+    /// hasn't answered yet, so a quick host doesn't win over the session you had open.
+    private func chooseInitialSessionIfNeeded(excluding excluded: SessionKey? = nil, waitForSavedHost: Bool = false) {
         guard currentSession == nil else { return }
 
         let available = sessions.allSessions.filter { $0.id != excluded }
@@ -201,8 +220,7 @@ final class AppModel {
                 select(match)
                 return
             }
-            // Give the saved session's host a chance to answer before picking another.
-            if sessions.store(for: saved.hostID)?.hasLoaded == false {
+            if waitForSavedHost, sessions.store(for: saved.hostID)?.hasLoaded == false {
                 return
             }
         }
