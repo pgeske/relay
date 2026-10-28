@@ -148,6 +148,7 @@ struct PendingBubble: View {
                     Text(pending.text)
                         .font(.body)
                         .foregroundStyle(theme.userBubbleForeground)
+                        .multilineTextAlignment(.leading)
                         .padding(.horizontal, 13)
                         .padding(.vertical, 9)
                         .background(
@@ -165,7 +166,6 @@ struct PendingBubble: View {
                     .foregroundStyle(theme.secondaryText)
                 }
             }
-            .opacity(0.7)
         }
     }
 }

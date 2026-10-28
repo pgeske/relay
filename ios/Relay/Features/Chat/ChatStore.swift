@@ -63,6 +63,12 @@ final class ChatStore {
     private var sessionFile: String?
     private var hasLoaded = false
     private var retryDelay: Duration = .seconds(1)
+    /// Real messages that replaced an optimistic bubble keep the bubble's row id, so the
+    /// list updates the row in place instead of removing and re-inserting it.
+    private var bubbleIDs: [String: String] = [:]
+    /// Set from sending until omp reports it's working, so "Working…" shows right away.
+    private var isAwaitingReply = false
+    private var awaitingReplyTimeout: Task<Void, Never>?
 
     init(session: Session, api: APIClient) {
         self.sessionID = session.id
@@ -71,7 +77,7 @@ final class ChatStore {
     }
 
     var working: Bool {
-        info.status == .working
+        info.status == .working || isAwaitingReply
     }
 
     var currentModel: String? {
@@ -89,7 +95,7 @@ final class ChatStore {
     // MARK: - Items
 
     var items: [ChatItem] {
-        var result = renderedMessages.map { ChatItem(id: $0.id, kind: .message($0)) }
+        var result = renderedMessages.map { ChatItem(id: bubbleIDs[$0.id] ?? $0.id, kind: .message($0)) }
         result.append(contentsOf: pending.map { ChatItem(id: $0.id, kind: .pending($0)) })
         return result
     }
@@ -259,14 +265,30 @@ final class ChatStore {
             imageCount: images.count
         )
         pending.append(pendingMessage)
+        setAwaitingReply(true)
 
         do {
             try await api.sendInput(sessionID: sessionID, text: trimmed, images: images)
             return true
         } catch {
             pending.removeAll { $0.id == pendingMessage.id }
+            setAwaitingReply(false)
             errorMessage = APIError.describe(error)
             return false
+        }
+    }
+
+    /// omp normally reports "working" within a second; the timeout only stops the
+    /// indicator from sticking if that report never comes.
+    private func setAwaitingReply(_ awaiting: Bool) {
+        isAwaitingReply = awaiting
+        awaitingReplyTimeout?.cancel()
+        awaitingReplyTimeout = nil
+        guard awaiting else { return }
+        awaitingReplyTimeout = Task { [weak self] in
+            try? await Task.sleep(for: .seconds(15))
+            guard !Task.isCancelled else { return }
+            self?.isAwaitingReply = false
         }
     }
 
@@ -395,11 +417,17 @@ final class ChatStore {
             connection = .connected
             retryDelay = .seconds(1)
             consumePending(matching: message)
+            if message.role == .assistant, isAwaitingReply {
+                setAwaitingReply(false)
+            }
             append(message)
             return false
 
         case .status(let session):
             info = session
+            if session.status == .working, isAwaitingReply {
+                setAwaitingReply(false)
+            }
             if modelOverride == session.model { modelOverride = nil }
             if thinkingOverride == session.thinkingLevel { thinkingOverride = nil }
             connection = .connected
@@ -409,6 +437,7 @@ final class ChatStore {
         case .reset(let file):
             messages = []
             seenIDs = []
+            bubbleIDs = [:]
             hasMore = false
             hasLoaded = false
             sessionFile = file
@@ -442,8 +471,9 @@ final class ChatStore {
         }
     }
 
-    /// Drops the optimistic bubble once its real counterpart arrives. The
-    /// server appends “[Attached image: …]” lines, so match on a prefix.
+    /// Retires the optimistic bubble once its real counterpart arrives, handing the
+    /// bubble's row id to the real message. The server appends “[Attached image: …]”
+    /// lines, so match on a prefix.
     private func consumePending(matching message: Message) {
         guard message.role == .user else { return }
         let text = message.textContent.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -457,6 +487,7 @@ final class ChatStore {
         }
 
         if let index {
+            bubbleIDs[message.id] = pending[index].id
             pending.remove(at: index)
         }
     }

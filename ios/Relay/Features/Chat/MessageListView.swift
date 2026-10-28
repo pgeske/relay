@@ -8,16 +8,16 @@ struct MessageListView: View {
     /// Whether the list should stay pinned to the newest message. Changes only when the
     /// user scrolls (or sends), so a growing composer shrinking the viewport doesn't unpin it.
     @State private var followsBottom = true
-    @State private var topVisibleID: String?
     @State private var isPrepending = false
 
     @Environment(\.appTheme) private var theme
 
     private let bottomID = "chat-bottom"
 
-    /// Offered whenever the newest message is out of view.
+    /// Offered once the user has scrolled away from the newest message, and hidden as
+    /// soon as they tap it rather than when the scroll animation happens to finish.
     private var showJumpButton: Bool {
-        !isNearBottom && !store.items.isEmpty
+        !isNearBottom && !followsBottom && !store.items.isEmpty
     }
 
     var body: some View {
@@ -54,7 +54,6 @@ struct MessageListView: View {
             .background(theme.background)
             .scrollDismissesKeyboard(.interactively)
             .defaultScrollAnchor(.bottom)
-            .scrollPosition(id: $topVisibleID, anchor: .top)
             .onScrollGeometryChange(for: Bool.self) { geometry in
                 geometry.contentOffset.y + geometry.containerSize.height
                     >= geometry.contentSize.height - 120
@@ -75,17 +74,19 @@ struct MessageListView: View {
                     scrollToBottom(proxy, animated: false)
                 }
             }
+            // Already at the bottom, snap rather than animate: the bottom scroll anchor has
+            // mostly kept new content in view, and a second animated scroll makes it jump.
             .onChange(of: store.items.count) { _, _ in
                 if case .pending = store.items.last?.kind {
                     followsBottom = true
                 }
                 if followsBottom {
-                    scrollToBottom(proxy, animated: true)
+                    scrollToBottom(proxy, animated: !isNearBottom)
                 }
             }
             .onChange(of: store.working) { _, working in
                 if working && followsBottom {
-                    scrollToBottom(proxy, animated: true)
+                    scrollToBottom(proxy, animated: !isNearBottom)
                 }
             }
             .overlay {
@@ -108,6 +109,12 @@ struct MessageListView: View {
         Button {
             followsBottom = true
             scrollToBottom(proxy, animated: true)
+            // Rows above the bottom are laid out lazily, so the animated scroll can stop
+            // short once their real heights are known; finish the trip after it settles.
+            Task {
+                try? await Task.sleep(for: .milliseconds(250))
+                scrollToBottom(proxy, animated: false)
+            }
         } label: {
             Image(systemName: "chevron.down")
                 .font(.system(size: 14, weight: .semibold))
@@ -139,18 +146,17 @@ struct MessageListView: View {
         }
         isPrepending = true
 
-        let anchor = topVisibleID == bottomID ? nil : topVisibleID
-        let fallbackAnchor = anchor ?? store.items.first?.id
+        let anchor = store.items.first?.id
 
         Task {
             await store.loadOlder()
             defer { isPrepending = false }
 
-            guard let fallbackAnchor else { return }
+            guard let anchor else { return }
             // Let the newly inserted rows lay out before restoring the anchor.
             try? await Task.sleep(for: .milliseconds(60))
             withAnimation(nil) {
-                proxy.scrollTo(fallbackAnchor, anchor: .top)
+                proxy.scrollTo(anchor, anchor: .top)
             }
         }
     }
