@@ -228,9 +228,88 @@ export async function scanLinesBackwards(
   }
 }
 
+/*
+ * omp stores a session as a tree: each entry names its parent, and /tree (or
+ * re-editing an interrupted prompt) starts a new branch from an earlier entry.
+ * The old branch stays in the file, so reading it top to bottom would show
+ * messages the user backed out of. Like omp when it reopens a file, relay
+ * treats the newest entry as the tip of the active branch.
+ *
+ * Usage records are the exception: omp files them under the turn that spent
+ * the tokens even after the user has moved to another branch, so they never
+ * decide which branch is active.
+ */
+
+function entryIdOf(entry: Record<string, unknown>): string | null {
+  return typeof entry.id === "string" ? entry.id : null;
+}
+
+function isUsageRecord(entry: Record<string, unknown>): boolean {
+  return entry.type === "model_usage";
+}
+
+/** For a newest-first scan: returns true for the entries on the active branch. */
+function activeBranchFilter(): (entry: Record<string, unknown>) => boolean {
+  // The id of the next older entry on the active branch; undefined until the tip is found.
+  let nextOnBranch: string | null | undefined;
+  return (entry) => {
+    const id = entryIdOf(entry);
+    if (!id) return false;
+    if (nextOnBranch === undefined) {
+      if (isUsageRecord(entry)) return false;
+      nextOnBranch = id;
+    }
+    if (id !== nextOnBranch) return false;
+    nextOnBranch = typeof entry.parentId === "string" ? entry.parentId : null;
+    return true;
+  };
+}
+
+/** Follows the active branch while the live stream reads newly appended entries. */
+export class BranchTracker {
+  #tip: string | null = null;
+  /** Usage records filed after the tip; the next entry may hang off one of them. */
+  #usageAfterTip = new Set<string>();
+
+  /** Starts from the end of the file as it is now. */
+  static async atEndOf(filePath: string): Promise<BranchTracker> {
+    const tracker = new BranchTracker();
+    await scanLinesBackwards(filePath, (line) => {
+      const entry = parseJsonEntry(line);
+      const id = entry ? entryIdOf(entry) : null;
+      if (!entry || !id) return true;
+      if (isUsageRecord(entry)) {
+        tracker.#usageAfterTip.add(id);
+        return true;
+      }
+      tracker.#tip = id;
+      return false;
+    });
+    return tracker;
+  }
+
+  /**
+   * Records a newly appended entry. Returns false when it starts a different branch than
+   * the one shown so far; the tracker then follows that new branch.
+   */
+  advance(entry: Record<string, unknown>): boolean {
+    const id = entryIdOf(entry);
+    if (!id) return true;
+    const parentId = typeof entry.parentId === "string" ? entry.parentId : null;
+    const continuesBranch = parentId === this.#tip || (parentId !== null && this.#usageAfterTip.has(parentId));
+    if (isUsageRecord(entry)) {
+      if (continuesBranch) this.#usageAfterTip.add(id);
+      return true;
+    }
+    this.#tip = id;
+    this.#usageAfterTip.clear();
+    return continuesBranch;
+  }
+}
+
 export type MessagePage = { messages: Message[]; hasMore: boolean; beforeFound: boolean };
 
-/** Reads up to `limit` messages ending just before `before` (or at the end of the file). */
+/** Reads up to `limit` active-branch messages ending just before `before` (or at the tip). */
 export async function readMessagePage(
   filePath: string,
   paneId: string,
@@ -239,10 +318,11 @@ export async function readMessagePage(
   const newestFirst: Message[] = [];
   let beforeFound = options.before === undefined;
   let hasMore = false;
+  const onActiveBranch = activeBranchFilter();
 
   await scanLinesBackwards(filePath, (line) => {
     const entry = parseJsonEntry(line);
-    if (!entry || entry.type !== "message") return true;
+    if (!entry || !onActiveBranch(entry) || entry.type !== "message") return true;
     const id = typeof entry.id === "string" ? entry.id : "";
     if (!beforeFound) {
       if (id === options.before) beforeFound = true;
