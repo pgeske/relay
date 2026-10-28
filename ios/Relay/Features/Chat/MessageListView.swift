@@ -9,12 +9,16 @@ struct MessageListView: View {
     /// user scrolls (or sends), so a growing composer shrinking the viewport doesn't unpin it.
     @State private var followsBottom = true
     @State private var topVisibleID: String?
-    @State private var showJumpButton = false
     @State private var isPrepending = false
 
     @Environment(\.appTheme) private var theme
 
     private let bottomID = "chat-bottom"
+
+    /// Offered whenever the newest message is out of view.
+    private var showJumpButton: Bool {
+        !isNearBottom && !store.items.isEmpty
+    }
 
     var body: some View {
         ScrollViewReader { proxy in
@@ -56,7 +60,6 @@ struct MessageListView: View {
                     >= geometry.contentSize.height - 120
             } action: { _, nearBottom in
                 isNearBottom = nearBottom
-                showJumpButton = !nearBottom && !followsBottom && !store.items.isEmpty
             }
             .onScrollPhaseChange { oldPhase, newPhase in
                 let userScrolled = oldPhase == .interacting || oldPhase == .decelerating
@@ -78,8 +81,6 @@ struct MessageListView: View {
                 }
                 if followsBottom {
                     scrollToBottom(proxy, animated: true)
-                } else if !store.items.isEmpty {
-                    showJumpButton = true
                 }
             }
             .onChange(of: store.working) { _, working in
@@ -93,9 +94,12 @@ struct MessageListView: View {
                 }
             }
             .overlay(alignment: .bottomTrailing) {
-                if showJumpButton {
-                    jumpToBottomButton(proxy: proxy)
+                ZStack {
+                    if showJumpButton {
+                        jumpToBottomButton(proxy: proxy)
+                    }
                 }
+                .animation(.easeOut(duration: 0.15), value: showJumpButton)
             }
         }
     }
