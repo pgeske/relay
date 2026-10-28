@@ -69,10 +69,14 @@ final class AppModel {
         }
         didFinishLaunching = true
         chooseInitialSessionIfNeeded(waitForSavedHost: false)
-        if reportErrors, currentSession == nil,
-           let failed = sessions.hosts.first(where: { $0.lastError != nil }),
-           let error = failed.lastError {
-            showError(error, from: failed.host)
+        guard reportErrors, currentSession == nil else { return }
+        let failed = sessions.hosts.filter { $0.lastError != nil }
+        if failed.count > 1 {
+            // Naming only the first would wrongly suggest the others are fine.
+            let names = failed.map(\.host.name).joined(separator: ", ")
+            showError("Can't reach \(names). Still trying in the background.")
+        } else if let host = failed.first, let error = host.lastError {
+            showError(error, from: host.host)
         }
     }
 

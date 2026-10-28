@@ -47,6 +47,14 @@ struct RootView: View {
                 onRetry: { Task { await model.retry() } },
                 onSettings: { model.isShowingSettings = true }
             )
+            // A host that was asleep or unreachable at launch may come back, or the phone's
+            // network may only just have connected; keep checking so its sessions open on
+            // their own instead of needing Refresh.
+            .task {
+                while (try? await Task.sleep(for: .seconds(3))) != nil {
+                    await model.retry(reportErrors: false)
+                }
+            }
         } else {
             ProgressView("Connecting…")
                 .tint(theme.accent)
