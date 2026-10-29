@@ -72,13 +72,30 @@ export function tmuxBinary(): string {
 }
 
 /**
- * Writes relay's tmux config to disk when it differs from the copy on disk, returning
- * whether it changed. Machines whose terminfo lacks tmux-256color (older ncurses) fall
- * back to screen-256color so programs inside panes still recognise the terminal.
+ * Builds relay's tmux config for the installed tmux. tmux before 3.4 rejects the "us="
+ * underline colour, and a rejected style leaves tmux's default green bar, so older tmux
+ * gets the same colours without the underline. Machines whose terminfo lacks
+ * tmux-256color (older ncurses) fall back to screen-256color so programs inside panes
+ * still recognise the terminal.
  */
+export function configFor(tmuxVersion: string, hasTmuxTerminfo: boolean): string {
+  const config = supportsUnderlineColour(tmuxVersion) ? bundledConfig : bundledConfig.replaceAll(/,underscore,us=#[0-9a-f]{6}/gi, "");
+  return hasTmuxTerminfo ? config : `${config}\nset -g default-terminal "screen-256color"\n`;
+}
+
+/** Whether `tmux -V` output ("tmux 3.2a", "tmux next-3.6") names tmux 3.4 or newer. */
+function supportsUnderlineColour(tmuxVersion: string): boolean {
+  const match = /(\d+)\.(\d+)/.exec(tmuxVersion);
+  if (!match) return true; // Builds from git report "tmux master"; assume they are current.
+  const [major, minor] = [Number(match[1]), Number(match[2])];
+  return major > 3 || (major === 3 && minor >= 4);
+}
+
+/** Writes relay's tmux config when it differs from the copy on disk, returning whether it changed. */
 export function writeConfig(): boolean {
+  const tmuxVersion = spawnSync(tmuxBinary(), ["-V"], { encoding: "utf8" }).stdout ?? "";
   const hasTmuxTerminfo = spawnSync("infocmp", ["tmux-256color"], { stdio: "ignore" }).status === 0;
-  const config = hasTmuxTerminfo ? bundledConfig : `${bundledConfig}\nset -g default-terminal "screen-256color"\n`;
+  const config = configFor(tmuxVersion, hasTmuxTerminfo);
   if (existsSync(TMUX_CONF_PATH) && readFileSync(TMUX_CONF_PATH, "utf8") === config) return false;
   mkdirSync(dirname(TMUX_CONF_PATH), { recursive: true });
   writeFileSync(TMUX_CONF_PATH, config);
