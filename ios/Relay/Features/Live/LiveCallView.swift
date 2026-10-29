@@ -11,7 +11,7 @@ struct LiveCallView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            Text(chat.info.title)
+            Text(chat.info.displayTitle)
                 .font(.subheadline.weight(.semibold))
                 .foregroundStyle(theme.secondaryText)
                 .lineLimit(1)

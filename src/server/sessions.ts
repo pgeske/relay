@@ -1,4 +1,5 @@
 import { stat } from "node:fs/promises";
+import { basename } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import { ensureSession, listOmpPanes, listTmuxSessions, type Pane } from "../tmux.ts";
 import { resolveSessionFile, type ResolveOptions } from "./sessionFile.ts";
@@ -26,8 +27,15 @@ export type Session = {
 /**
  * omp's pane title is `π > <title>` while idle and `π <spinner> <title>` while working.
  * The nerd-font glyph that omp puts in front of the title is kept as-is.
+ * Until omp names the session, the title is just the directory name; that comes back
+ * empty so the app shows its placeholder instead of an internal path like "tmp".
  */
-export function parsePaneTitle(raw: string): { title: string; status: SessionStatus } {
+export function parsePaneTitle(raw: string, cwd: string): { title: string; status: SessionStatus } {
+  const { title, status } = splitPaneTitle(raw);
+  return { title: title === basename(cwd) ? "" : title, status };
+}
+
+function splitPaneTitle(raw: string): { title: string; status: SessionStatus } {
   const trimmed = raw.trim();
   if (!trimmed.startsWith("π")) return { title: trimmed, status: "idle" };
   const rest = trimmed.slice(1).trimStart();
@@ -41,7 +49,7 @@ export function parsePaneTitle(raw: string): { title: string; status: SessionSta
 
 export async function toSession(pane: Pane, options: ResolveOptions = {}): Promise<Session> {
   const sessionFile = await resolveSessionFile(pane, options);
-  const { title, status } = parsePaneTitle(pane.title);
+  const { title, status } = parsePaneTitle(pane.title, pane.cwd);
   let updatedAt = new Date(0).toISOString();
   if (sessionFile) {
     try {

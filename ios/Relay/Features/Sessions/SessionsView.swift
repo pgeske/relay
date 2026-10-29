@@ -175,16 +175,12 @@ struct SessionRow: View {
                     .font(.body)
                     .foregroundStyle(theme.primaryText)
                     .lineLimit(1)
-                HStack(spacing: 4) {
-                    Text(session.directoryName)
-                    if let updated = relativeUpdated {
-                        Text("·")
-                        Text(updated)
-                    }
+                if let updated = relativeUpdated {
+                    Text(updated)
+                        .font(.caption)
+                        .foregroundStyle(theme.secondaryText)
+                        .lineLimit(1)
                 }
-                .font(.caption)
-                .foregroundStyle(theme.secondaryText)
-                .lineLimit(1)
             }
 
             Spacer(minLength: 0)

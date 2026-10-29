@@ -18,12 +18,7 @@ struct Session: Decodable, Identifiable, Hashable, Sendable {
     let thinkingLevel: String?
 
     var displayTitle: String {
-        title.isEmpty ? "Untitled session" : title
-    }
-
-    var directoryName: String {
-        let name = URL(fileURLWithPath: cwd).lastPathComponent
-        return name.isEmpty ? cwd : name
+        title.isEmpty ? "New session" : title
     }
 
     var updatedDate: Date? {
