@@ -20,6 +20,7 @@ final class LiveCallController {
     private var latestPhase = "connecting"
     private var socket: URLSessionWebSocketTask?
     private var receiveTask: Task<Void, Never>?
+    private var didStart = false
 
     private struct Event: Decodable {
         let type: String
@@ -27,11 +28,17 @@ final class LiveCallController {
         let error: String?
     }
 
+    /// Opens the call once; later calls (the view re-appearing) do nothing, so one screen
+    /// never opens a second socket that hanging up would leave running.
     func start(chat: ChatStore) async {
+        guard !didStart else { return }
+        didStart = true
         guard await VoiceController.requestMicrophonePermission() else {
             finish(error: "Microphone access is off. Enable it in Settings.")
             return
         }
+        // Hanging up while the permission prompt was open must not connect afterwards.
+        guard !isEnded else { return }
         let request: URLRequest
         do {
             request = try chat.liveCallRequest()
