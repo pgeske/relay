@@ -29,8 +29,16 @@ const SAMPLE_RATE = 24_000;
 const PHASE_POLL_MS = 400;
 const START_TIMEOUT_MS = 20_000;
 const STOP_TIMEOUT_MS = 3_000;
+/** How long Ctrl+L gets to show a live panel when probing for a hidden live mode. */
+const PROBE_TIMEOUT_MS = 1_500;
 /** BlackHole streams silence nonstop, so a capture that stays empty this long is blocked. */
 const CAPTURE_TIMEOUT_MS = 5_000;
+/**
+ * The phone answers pings on its own, even while muted. One that stays silent this long
+ * is gone (app killed, network lost) without having closed the socket.
+ */
+const HEARTBEAT_INTERVAL_MS = 5_000;
+const HEARTBEAT_TIMEOUT_MS = 15_000;
 
 const SETUP_HINT =
   "Live voice needs a few audio tools on this Mac. Run: brew install ffmpeg sox switchaudio-osx && brew install --cask blackhole-2ch blackhole-16ch";
@@ -44,12 +52,11 @@ const MIC_PERMISSION_HINT =
 const LIVE_BORDER = /^\s*[╰└]─ \S+ (connecting|listening|working|speaking|muted|error)\b/m;
 
 type AudioDefaults = { input: string; output: string };
+/** What a call in progress saves on disk, so a restarted server can clean up after it. */
+type SavedCall = AudioDefaults & { paneId?: string };
 
 /** A message the phone receives as a WebSocket text frame. */
 type CallEvent = { type: "phase"; phase: string } | { type: "ended"; error?: string };
-
-/** Live mode uses the Mac's one set of default devices, so only one call runs at a time. */
-let activeCall: LiveCall | null = null;
 
 function run(command: string, args: string[]): Promise<string> {
   const { promise, resolve, reject } = Promise.withResolvers<string>();
@@ -60,8 +67,43 @@ function run(command: string, args: string[]): Promise<string> {
   return promise;
 }
 
+/** omp's live phase as shown on a captured pane screen, or null when no live panel shows. */
+export function livePhaseOnScreen(screen: string): string | null {
+  return LIVE_BORDER.exec(screen)?.[1] ?? null;
+}
+
 async function livePhase(paneId: string): Promise<string | null> {
-  return LIVE_BORDER.exec(await capturePane(paneId))?.[1] ?? null;
+  return livePhaseOnScreen(await capturePane(paneId));
+}
+
+/** Waits until the live panel is shown (or gone, with `shown` false); false on timeout. */
+async function waitForLivePanel(paneId: string, shown: boolean, timeoutMs: number): Promise<boolean> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (((await livePhase(paneId)) !== null) === shown) return true;
+    await sleep(150);
+  }
+  return false;
+}
+
+/**
+ * Ends omp's live mode in the pane. Esc ends it while its panel shows. omp can also keep
+ * live mode running with no panel: a dialog such as the `ask` tool's replaces the panel,
+ * and closing the dialog brings back the message box instead. Nothing on screen shows
+ * that, so with no panel in sight press Ctrl+L, which toggles live mode from the message
+ * box, and if that started a new live session instead, end it again with Esc.
+ */
+async function stopLiveMode(paneId: string): Promise<void> {
+  if (!(await livePhase(paneId))) {
+    console.log(`live: no live panel on ${paneId}; pressing Ctrl+L in case live mode is hidden`);
+    await sendKeys(paneId, ["C-l"]);
+    if (!(await waitForLivePanel(paneId, true, PROBE_TIMEOUT_MS))) return;
+  }
+  // Esc ends live mode; outside it, Esc would interrupt the agent, so only press it here.
+  await sendKeys(paneId, ["Escape"]);
+  if (!(await waitForLivePanel(paneId, false, STOP_TIMEOUT_MS))) {
+    console.error(`live: omp's live mode on ${paneId} did not end after Esc`);
+  }
 }
 
 async function setAudioDevices(defaults: AudioDefaults): Promise<void> {
@@ -99,40 +141,50 @@ async function audioToolboxIndex(deviceName: string): Promise<number> {
   throw new Error(`ffmpeg cannot find the "${deviceName}" audio device.`);
 }
 
-/** Points the Mac's default devices at BlackHole, remembering the old ones on disk first. */
-async function routeAudioThroughRelay(): Promise<void> {
-  const previous: AudioDefaults = {
+/** Points the Mac's default devices at BlackHole, remembering the old ones and the pane on disk first. */
+async function routeAudioThroughRelay(paneId: string): Promise<void> {
+  // A previous call that never cleaned up already holds the real devices; keep those.
+  const previous: AudioDefaults = (await readSavedCall()) ?? {
     input: (await run("SwitchAudioSource", ["-c", "-t", "input"])).trim(),
     output: (await run("SwitchAudioSource", ["-c", "-t", "output"])).trim(),
   };
-  // A previous call that never cleaned up already holds the real devices; keep those.
-  const saved = await readSavedAudioDefaults();
-  if (!saved) {
-    await mkdir(dirname(LIVE_AUDIO_BACKUP_PATH), { recursive: true });
-    await writeFile(LIVE_AUDIO_BACKUP_PATH, JSON.stringify(previous));
-  }
+  const saved: SavedCall = { input: previous.input, output: previous.output, paneId };
+  await mkdir(dirname(LIVE_AUDIO_BACKUP_PATH), { recursive: true });
+  await writeFile(LIVE_AUDIO_BACKUP_PATH, JSON.stringify(saved));
   await setAudioDevices({ input: PHONE_MIC_DEVICE, output: PHONE_SPEAKER_DEVICE });
 }
 
-async function readSavedAudioDefaults(): Promise<AudioDefaults | null> {
+async function readSavedCall(): Promise<SavedCall | null> {
   try {
-    const parsed = JSON.parse(await readFile(LIVE_AUDIO_BACKUP_PATH, "utf8")) as Partial<AudioDefaults>;
+    const parsed = JSON.parse(await readFile(LIVE_AUDIO_BACKUP_PATH, "utf8")) as Partial<SavedCall>;
     if (typeof parsed.input === "string" && typeof parsed.output === "string") {
-      return { input: parsed.input, output: parsed.output };
+      return { input: parsed.input, output: parsed.output, ...(typeof parsed.paneId === "string" ? { paneId: parsed.paneId } : {}) };
     }
   } catch {}
   return null;
 }
 
-/**
- * Puts back the devices saved before a call. Also runs at server start, so a crash
- * mid-call cannot leave the Mac silently routed into BlackHole.
- */
-export async function restoreAudioDevices(): Promise<void> {
-  const saved = await readSavedAudioDefaults();
+/** Puts back the devices saved before a call. */
+async function restoreAudioDevices(): Promise<void> {
+  const saved = await readSavedCall();
   if (!saved) return;
   await setAudioDevices(saved);
   await rm(LIVE_AUDIO_BACKUP_PATH, { force: true });
+}
+
+/**
+ * Runs at server start: a server that stopped mid-call (crash, kill) leaves the Mac
+ * routed into BlackHole and omp possibly still live. End live mode before putting the
+ * devices back, or omp would go on listening and talking through the Mac itself.
+ */
+export async function recoverInterruptedCall(): Promise<void> {
+  const saved = await readSavedCall();
+  if (!saved) return;
+  console.log("live: cleaning up after a call the previous server did not finish");
+  if (saved.paneId) {
+    await stopLiveMode(saved.paneId).catch((error: unknown) => console.error("live: could not stop omp's live mode", error));
+  }
+  await restoreAudioDevices();
 }
 
 /** Spawns an audio tool (ffmpeg or sox) and reports an unexpected exit as a readable error. */
@@ -152,14 +204,66 @@ function spawnAudioTool(command: string, args: string[], onExit: (error: string)
   return child;
 }
 
-class LiveCall {
+/** What `CallSlot` needs from a call. */
+export type SlotCall = {
+  /** Starts the call unless it already ended; resolves once it has ended and cleaned up. */
+  run(): Promise<void>;
+  /** Hangs up; resolves once cleaned up. Safe to call more than once, and before `run`. */
+  end(error?: string): Promise<void>;
+};
+
+const REPLACED_ERROR = "A newer call took over from this one.";
+
+/**
+ * Live mode uses the Mac's one set of default devices, so only one call runs at a time.
+ * A new call hangs up the current one and starts only after that one has cleaned up, so
+ * the old call can't put the Mac's devices back underneath the new one. Starting the
+ * newest call, rather than refusing it, also takes over from a call whose phone vanished
+ * before the heartbeat noticed.
+ */
+export class CallSlot<Call extends SlotCall> {
+  #current: Call | null = null;
+  #handover: Promise<void> = Promise.resolve();
+  /** Set by `close`; calls still waiting for their turn end with it instead of starting. */
+  #closeError: string | null = null;
+
+  start(call: Call): void {
+    const previous = this.#current;
+    this.#current = call;
+    this.#handover = this.#handover.then(async () => {
+      await previous?.end(REPLACED_ERROR);
+      if (this.#closeError !== null || this.#current !== call) {
+        await call.end(this.#closeError ?? REPLACED_ERROR);
+        return;
+      }
+      void call.run().finally(() => {
+        if (this.#current === call) this.#current = null;
+      });
+    });
+  }
+
+  /** Hangs up the current call and keeps waiting calls from starting, for shutdown. */
+  async close(error: string): Promise<void> {
+    this.#closeError = error;
+    await this.#current?.end(error);
+    await this.#handover;
+  }
+}
+
+class LiveCall implements SlotCall {
   readonly #socket: WebSocket;
   readonly #pane: Pane;
   #starting: Promise<void> = Promise.resolve();
   #ending: Promise<void> | null = null;
+  #ended = Promise.withResolvers<void>();
+  #started = false;
+  /** Set once this call takes over omp's live mode, so hanging up must end it. */
+  #tookOverLive = false;
   #phoneMic: ChildProcessWithoutNullStreams | null = null;
   #phoneSpeaker: ChildProcessWithoutNullStreams | null = null;
   #poll: NodeJS.Timeout | undefined;
+  #heartbeat: NodeJS.Timeout | undefined;
+  #lastHeardAt = Date.now();
   #phase: string | null = null;
   #startedAt = Date.now();
   /** Per-call totals for the server log, so a silent call shows which direction failed. */
@@ -168,11 +272,13 @@ class LiveCall {
   constructor(socket: WebSocket, pane: Pane) {
     this.#socket = socket;
     this.#pane = pane;
-  }
-
-  async run(): Promise<void> {
-    this.#socket.on("close", () => void this.end());
-    this.#socket.on("message", (data, isBinary) => {
+    // Listen from the start: a call waiting for the previous one to end can hang up too.
+    socket.on("close", () => void this.end());
+    socket.on("pong", () => {
+      this.#lastHeardAt = Date.now();
+    });
+    socket.on("message", (data, isBinary) => {
+      this.#lastHeardAt = Date.now();
       if (!isBinary || this.#ending) return;
       const chunk = data as Buffer;
       this.#stats.fromPhoneBytes += chunk.length;
@@ -181,19 +287,39 @@ class LiveCall {
       }
       this.#phoneMic?.stdin.write(chunk);
     });
+  }
+
+  async run(): Promise<void> {
+    // The phone may have hung up while this call waited for the previous one to end.
+    if (this.#ending) return this.#ending;
+    this.#started = true;
     console.log(`live: call started on ${this.#pane.paneId}`);
+    this.#lastHeardAt = Date.now();
+    this.#heartbeat = setInterval(() => this.#checkHeartbeat(), HEARTBEAT_INTERVAL_MS);
     this.#starting = this.#start();
     try {
       await this.#starting;
     } catch (error) {
-      await this.end(error instanceof Error ? error.message : String(error));
+      void this.end(error instanceof Error ? error.message : String(error));
     }
+    await this.#ended.promise;
+  }
+
+  /** Hangs up when the phone stops answering pings: a dead network never closes the socket. */
+  #checkHeartbeat(): void {
+    if (Date.now() - this.#lastHeardAt > HEARTBEAT_TIMEOUT_MS) {
+      console.log(`live: the phone stopped answering on ${this.#pane.paneId}`);
+      void this.end("Lost the connection to the phone.");
+      this.#socket.terminate();
+      return;
+    }
+    if (this.#socket.readyState === this.#socket.OPEN) this.#socket.ping();
   }
 
   async #start(): Promise<void> {
     await checkPrerequisites();
     const micIndex = await audioToolboxIndex(PHONE_MIC_DEVICE);
-    await routeAudioThroughRelay();
+    await routeAudioThroughRelay(this.#pane.paneId);
 
     const fail = (error: string) => void this.end(error);
     // Phone mic → BlackHole 16ch, which omp records as its microphone. Sent as stereo so
@@ -237,6 +363,7 @@ class LiveCall {
     });
 
     // Ctrl+L toggles omp's live mode; only press it when the pane is not live already.
+    this.#tookOverLive = true;
     if (!(await livePhase(this.#pane.paneId))) await sendKeys(this.#pane.paneId, ["C-l"]);
     this.#startedAt = Date.now();
     this.#poll = setInterval(() => void this.#checkPhase().catch((error: Error) => this.end(error.message)), PHASE_POLL_MS);
@@ -251,7 +378,8 @@ class LiveCall {
       this.#stats.phases.push(phase);
     }
     if (!phase && this.#phase) {
-      // Someone ended live mode on the computer (or omp hit an error and showed it there).
+      // Someone ended live mode on the computer, omp hit an error and showed it there,
+      // or a dialog hid the live panel; hanging up handles the hidden case too.
       await this.end();
       return;
     }
@@ -274,52 +402,46 @@ class LiveCall {
   async #finish(error: string | undefined): Promise<void> {
     await this.#starting.catch(() => {});
     clearInterval(this.#poll);
+    clearInterval(this.#heartbeat);
 
-    try {
-      // Esc ends live mode; outside it, Esc would interrupt the agent, so check first.
-      if (await livePhase(this.#pane.paneId)) {
-        await sendKeys(this.#pane.paneId, ["Escape"]);
-        const deadline = Date.now() + STOP_TIMEOUT_MS;
-        while (Date.now() < deadline && (await livePhase(this.#pane.paneId))) await sleep(150);
+    if (this.#started) {
+      if (this.#tookOverLive) {
+        try {
+          await stopLiveMode(this.#pane.paneId);
+        } catch (stopError) {
+          console.error("live: could not stop omp's live mode", stopError);
+        }
       }
-    } catch (stopError) {
-      console.error("live: could not stop omp's live mode", stopError);
-    }
+      // SIGTERM leaves ffmpeg blocked on its stdin pipe; these hold no files, so kill outright.
+      for (const child of [this.#phoneMic, this.#phoneSpeaker]) child?.kill("SIGKILL");
+      try {
+        await restoreAudioDevices();
+      } catch (restoreError) {
+        console.error("live: could not restore audio devices", restoreError);
+      }
 
-    // SIGTERM leaves ffmpeg blocked on its stdin pipe; these hold no files, so kill outright.
-    for (const child of [this.#phoneMic, this.#phoneSpeaker]) child?.kill("SIGKILL");
-    try {
-      await restoreAudioDevices();
-    } catch (restoreError) {
-      console.error("live: could not restore audio devices", restoreError);
+      const seconds = (bytes: number) => (bytes / 2 / SAMPLE_RATE).toFixed(1);
+      console.log(
+        `live: call ended on ${this.#pane.paneId} after ${((Date.now() - this.#startedAt) / 1000).toFixed(0)}s;` +
+          ` phone sent ${seconds(this.#stats.fromPhoneBytes)}s of audio (peak ${this.#stats.fromPhonePeak}),` +
+          ` phone got ${seconds(this.#stats.toPhoneBytes)}s; phases ${this.#stats.phases.join(">") || "none"}` +
+          (error ? `; error: ${error}` : ""),
+      );
     }
-
-    const seconds = (bytes: number) => (bytes / 2 / SAMPLE_RATE).toFixed(1);
-    console.log(
-      `live: call ended on ${this.#pane.paneId} after ${((Date.now() - this.#startedAt) / 1000).toFixed(0)}s;` +
-        ` phone sent ${seconds(this.#stats.fromPhoneBytes)}s of audio (peak ${this.#stats.fromPhonePeak}),` +
-        ` phone got ${seconds(this.#stats.toPhoneBytes)}s; phases ${this.#stats.phases.join(">") || "none"}` +
-        (error ? `; error: ${error}` : ""),
-    );
     this.#send({ type: "ended", ...(error ? { error } : {}) });
     if (this.#socket.readyState === this.#socket.OPEN) this.#socket.close(1000);
-    if (activeCall === this) activeCall = null;
+    this.#ended.resolve();
   }
 }
 
-/** Runs one phone call on an accepted WebSocket until either side hangs up. */
+const calls = new CallSlot<LiveCall>();
+
+/** Runs one phone call on an accepted WebSocket until either side hangs up or a newer call takes over. */
 export function startLiveCall(socket: WebSocket, pane: Pane): void {
-  if (activeCall) {
-    socket.send(JSON.stringify({ type: "ended", error: "Another live call is already running on this computer." } satisfies CallEvent));
-    socket.close(1000);
-    return;
-  }
-  const call = new LiveCall(socket, pane);
-  activeCall = call;
-  void call.run();
+  calls.start(new LiveCall(socket, pane));
 }
 
 /** Hangs up the current call, if any, so shutdown leaves omp and the Mac's audio as they were. */
 export async function endLiveCall(): Promise<void> {
-  await activeCall?.end("The relay server is shutting down.");
+  await calls.close("The relay server is shutting down.");
 }

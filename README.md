@@ -50,7 +50,7 @@ The app lives in [`ios/`](ios/README.md); build it with Xcode and install it on 
 
 Voice calls are an early, Mac-only feature and are **off by default**. Turn them on with `relay voice on` (and off again with `relay voice off`); until then the phone shows no call button for that computer.
 
-The waveform button in a chat (shown when the message box is empty) starts a voice call with that session's agent. It reuses omp's own `/live` mode. That mode always talks through the Mac's default microphone and speakers, so during a call relay points those at two [BlackHole](https://existential.audio/blackhole/) loopback devices and streams the audio to and from the phone. When the call ends, relay switches the devices back. One-time setup:
+The waveform button in a chat (shown when the message box is empty) starts a voice call with that session's agent. It reuses omp's own `/live` mode. That mode always talks through the Mac's default microphone and speakers, so during a call relay points those at two [BlackHole](https://existential.audio/blackhole/) loopback devices and streams the audio to and from the phone. When the call ends, relay ends `/live` and switches the devices back. That also happens when the phone stops answering for 15 seconds (app killed, network lost) and when the server stops; a server that was killed mid-call cleans up when it next starts. A Mac runs one call at a time: starting a new call hangs up the old one first. One-time setup:
 
 ```sh
 brew install ffmpeg sox switchaudio-osx

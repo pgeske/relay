@@ -5,7 +5,7 @@ import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import { WebSocketServer } from "ws";
-import { endLiveCall, restoreAudioDevices, startLiveCall } from "./live.ts";
+import { endLiveCall, recoverInterruptedCall, startLiveCall } from "./live.ts";
 import { askAnswerSteps, findPendingAsk, validateAskAnswers, type AskAnswer } from "./ask.ts";
 import { startSessionEvents } from "./events.ts";
 import { readEntryImage, readMessagePage } from "./messages.ts";
@@ -35,6 +35,8 @@ const MAX_BODY_BYTES = 30 * 1024 * 1024;
 const DEFAULT_PAGE_LIMIT = 60;
 const MAX_PAGE_LIMIT = 500;
 const UPDATE_CHECK_INTERVAL_MS = 6 * 60 * 60 * 1000;
+/** Room for hanging up a live call (ending omp's live mode, restoring devices) before exiting. */
+const SHUTDOWN_TIMEOUT_MS = 12_000;
 
 const UPLOAD_EXTENSIONS: Record<string, string> = {
   "image/png": "png",
@@ -468,8 +470,6 @@ async function handleUpgrade(req: IncomingMessage, socket: Duplex, head: Buffer)
 export function runServer(): void {
   loadToken();
   writeConfig();
-  // A server that crashed mid-call may have left the Mac's audio routed into BlackHole.
-  void restoreAudioDevices().catch((error: unknown) => console.error("live: could not restore audio devices", error));
 
   const server = createServer((req, res) => {
     handle(req, res).catch((error: unknown) => {
@@ -492,10 +492,16 @@ export function runServer(): void {
     });
   });
 
-  server.listen(SERVER_PORT, "0.0.0.0", () => {
-    console.log(`relay ${VERSION} server listening on http://0.0.0.0:${SERVER_PORT}`);
-    console.log(`auth token: ${TOKEN_PATH}`);
-  });
+  // A server that stopped mid-call may have left omp live and the Mac's audio routed into
+  // BlackHole; clean that up before taking new calls.
+  void recoverInterruptedCall()
+    .catch((error: unknown) => console.error("live: could not clean up the interrupted call", error))
+    .finally(() => {
+      server.listen(SERVER_PORT, "0.0.0.0", () => {
+        console.log(`relay ${VERSION} server listening on http://0.0.0.0:${SERVER_PORT}`);
+        console.log(`auth token: ${TOKEN_PATH}`);
+      });
+    });
 
   // The server is the long-lived process, so it keeps the "update available" tab hint fresh.
   const checkForUpdate = () => void refreshUpdateNotice().catch(() => {});
@@ -505,8 +511,10 @@ export function runServer(): void {
   for (const signal of ["SIGINT", "SIGTERM"] as const) {
     process.on(signal, () => {
       // Hang up first so omp leaves live mode and the Mac gets its own audio devices back.
-      void endLiveCall().finally(() => server.close(() => process.exit(0)));
-      setTimeout(() => process.exit(0), 6000).unref();
+      // Open event streams would keep server.close() waiting, so exit once the call is down.
+      server.close();
+      void endLiveCall().finally(() => process.exit(0));
+      setTimeout(() => process.exit(0), SHUTDOWN_TIMEOUT_MS).unref();
     });
   }
 }
