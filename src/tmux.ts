@@ -18,6 +18,15 @@ export const AGENT_COMMAND = "omp";
 /** Field separator for tmux -F output; a control character that never appears in titles. */
 const FIELD_SEPARATOR = "\u001f";
 
+/**
+ * Splits one line of tmux -F output into fields. tmux 3.5 prints control characters
+ * as octal text, so the separator arrives as the four characters `\037` there and as
+ * the raw byte on newer tmux.
+ */
+export function splitFields(line: string): string[] {
+  return line.replaceAll("\\037", FIELD_SEPARATOR).split(FIELD_SEPARATOR);
+}
+
 const PANE_FORMAT = [
   "#{session_name}",
   "#{window_id}",
@@ -164,7 +173,7 @@ function tmuxWithInput(args: string[], input: string): Promise<void> {
 }
 
 function parsePaneLine(line: string): Pane | null {
-  const fields = line.split(FIELD_SEPARATOR);
+  const fields = splitFields(line);
   if (fields.length < 12) return null;
   const [sessionName, windowId, windowIndex, windowActive, sessionAttached, paneId, panePid, paneTty, command, cwd, bellFlag] = fields;
   const title = fields.slice(11).join(FIELD_SEPARATOR);
@@ -216,7 +225,7 @@ export async function listTmuxSessions(): Promise<TmuxSession[]> {
       .split("\n")
       .filter((line) => line.length > 0)
       .map((line) => {
-        const [name, attached, activity] = line.split(FIELD_SEPARATOR);
+        const [name, attached, activity] = splitFields(line);
         return {
           name,
           attached: Number.parseInt(attached, 10) > 0,
