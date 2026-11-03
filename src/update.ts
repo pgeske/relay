@@ -1,7 +1,9 @@
+import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { chmodSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
-import { dirname } from "node:path";
-import { GITHUB_REPO, UPDATE_CACHE_PATH } from "./paths.ts";
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { release } from "node:os";
+import { basename, dirname, join } from "node:path";
+import { BOARD_APP_ASSET, BOARD_APP_PATH, GITHUB_REPO, UPDATE_CACHE_PATH } from "./paths.ts";
 import { setGlobalOption } from "./tmux.ts";
 import { VERSION } from "./version.ts";
 
@@ -69,25 +71,58 @@ async function download(url: string): Promise<Buffer> {
   return Buffer.from(await response.arrayBuffer());
 }
 
+/** The SHA-256 `checksums.txt` lists for `asset`, if it lists it. */
+export function expectedChecksum(checksums: string, asset: string): string | undefined {
+  return checksums
+    .split("\n")
+    .map((line) => line.trim().split(/\s+/))
+    .find(([, name]) => name === asset)?.[0];
+}
+
+function verified(bytes: Buffer, asset: string, checksums: string): Buffer {
+  const expected = expectedChecksum(checksums, asset);
+  const actual = createHash("sha256").update(bytes).digest("hex");
+  if (!expected || expected !== actual) throw new Error(`checksum mismatch for ${asset}; nothing was changed`);
+  return bytes;
+}
+
+/** Unpacks the Relay Board app's release zip over the installed app, in ~/Applications. */
+function installBoardApp(zip: Buffer): void {
+  const applications = dirname(BOARD_APP_PATH);
+  mkdirSync(applications, { recursive: true });
+  const staging = mkdtempSync(join(applications, ".relay-board-"));
+  try {
+    const archive = join(staging, BOARD_APP_ASSET);
+    writeFileSync(archive, zip);
+    const unzip = spawnSync("ditto", ["-x", "-k", archive, staging], { encoding: "utf8" });
+    if (unzip.status !== 0) throw new Error(`couldn't unpack ${BOARD_APP_ASSET}: ${unzip.stderr.trim()}`);
+    rmSync(BOARD_APP_PATH, { recursive: true, force: true });
+    renameSync(join(staging, basename(BOARD_APP_PATH)), BOARD_APP_PATH);
+  } finally {
+    rmSync(staging, { recursive: true, force: true });
+  }
+}
+
 /**
- * Replaces the running binary with the latest release after checking its SHA-256 against
- * the release's checksums.txt. Returns the installed version, or null when already current.
+ * Replaces the running binary with the latest release after checking its SHA-256 against the
+ * release's checksums.txt, and on a Mac the Relay Board app too, so the app and the server it
+ * reads stay on one version. Returns what was installed, or null when already current.
  */
-export async function installLatestRelease(): Promise<string | null> {
+export async function installLatestRelease(): Promise<{ version: string; boardApp: boolean } | null> {
   const latest = await fetchLatestVersion();
   if (!isNewerVersion(latest, VERSION)) return null;
 
   const asset = releaseAssetName();
   const base = `https://github.com/${GITHUB_REPO}/releases/download/v${latest}`;
-  const [binary, checksums] = await Promise.all([download(`${base}/${asset}`), download(`${base}/checksums.txt`)]);
-  const expected = checksums
-    .toString("utf8")
-    .split("\n")
-    .map((line) => line.trim().split(/\s+/))
-    .find(([, name]) => name === asset)?.[0];
-  const actual = createHash("sha256").update(binary).digest("hex");
-  if (!expected || expected !== actual) throw new Error(`checksum mismatch for ${asset}; nothing was changed`);
+  const [binaryDownload, checksums] = await Promise.all([download(`${base}/${asset}`), download(`${base}/checksums.txt`).then(String)]);
+  const binary = verified(binaryDownload, asset, checksums);
+  // The app needs macOS 26 (Darwin 25), and releases from before it have no zip.
+  const macOS26 = process.platform === "darwin" && Number(release().split(".")[0]) >= 25;
+  const withApp = macOS26 && expectedChecksum(checksums, BOARD_APP_ASSET) !== undefined;
+  const app = withApp ? verified(await download(`${base}/${BOARD_APP_ASSET}`), BOARD_APP_ASSET, checksums) : null;
 
+  // The app goes first: if it can't be installed, the binary stays as it was.
+  if (app) installBoardApp(app);
   // Write next to the current binary and rename over it: atomic, and safe while running.
   const target = process.execPath;
   const staged = `${target}.new`;
@@ -99,5 +134,5 @@ export async function installLatestRelease(): Promise<string | null> {
     rmSync(staged, { force: true });
     throw error;
   }
-  return latest;
+  return { version: latest, boardApp: app !== null };
 }

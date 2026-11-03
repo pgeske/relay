@@ -26,3 +26,5 @@ export const BOARD_APP_ID = "io.github.pgeske.relay.board";
 export const BOARD_APP_PATH = join(homedir(), "Applications", `${BOARD_APP_NAME}.app`);
 /** Where `relay board` looks for it, besides asking Launch Services by bundle identifier. */
 export const BOARD_APP_PATHS = [BOARD_APP_PATH, join("/Applications", `${BOARD_APP_NAME}.app`)];
+/** The app's release asset: one universal zip for every Mac. */
+export const BOARD_APP_ASSET = "relay-board-macos.zip";

@@ -38,18 +38,43 @@ echo "Downloading relay $tag ($os-$arch)…"
 curl -fsSL -o "$tmp/$asset" "https://github.com/$REPO/releases/download/$tag/$asset"
 curl -fsSL -o "$tmp/checksums.txt" "https://github.com/$REPO/releases/download/$tag/checksums.txt"
 
-expected="$(awk -v name="$asset" '$2 == name { print $1 }' "$tmp/checksums.txt")"
-if command -v sha256sum >/dev/null 2>&1; then
-  actual="$(sha256sum "$tmp/$asset" | awk '{ print $1 }')"
-else
-  actual="$(shasum -a 256 "$tmp/$asset" | awk '{ print $1 }')"
-fi
-[ -n "$expected" ] && [ "$expected" = "$actual" ] || fail "checksum mismatch for $asset"
+checksum() {
+  awk -v name="$1" '$2 == name { print $1 }' "$tmp/checksums.txt"
+}
 
+# Fails unless the downloaded asset $1 matches its line in checksums.txt.
+verify() {
+  expected="$(checksum "$1")"
+  if command -v sha256sum >/dev/null 2>&1; then
+    actual="$(sha256sum "$tmp/$1" | awk '{ print $1 }')"
+  else
+    actual="$(shasum -a 256 "$tmp/$1" | awk '{ print $1 }')"
+  fi
+  [ -n "$expected" ] && [ "$expected" = "$actual" ] || fail "checksum mismatch for $1"
+}
+
+verify "$asset"
 mkdir -p "$INSTALL_DIR"
 chmod 755 "$tmp/$asset"
 mv "$tmp/$asset" "$INSTALL_DIR/relay"
 echo "Installed relay $tag to $INSTALL_DIR/relay"
+
+# The PR board's app (relay board), on macOS 26 and newer, from releases that have it.
+app_asset="relay-board-macos.zip"
+app="$HOME/Applications/Relay Board.app"
+if [ "$os" = "darwin" ] && [ -n "$(checksum "$app_asset")" ]; then
+  if [ "$(sw_vers -productVersion | cut -d. -f1)" -ge 26 ]; then
+    curl -fsSL -o "$tmp/$app_asset" "https://github.com/$REPO/releases/download/$tag/$app_asset"
+    verify "$app_asset"
+    mkdir -p "$tmp/app" "$HOME/Applications"
+    ditto -x -k "$tmp/$app_asset" "$tmp/app"
+    rm -rf "$app"
+    mv "$tmp/app/Relay Board.app" "$app"
+    echo "Installed the Relay Board app to $app"
+  else
+    echo "Note: the Relay Board app (relay board) needs macOS 26 or newer; skipped it."
+  fi
+fi
 
 command -v tmux >/dev/null 2>&1 || echo "Note: relay needs tmux (macOS: brew install tmux; Debian/Ubuntu: sudo apt install tmux)."
 command -v omp >/dev/null 2>&1 || echo "Note: relay runs omp in every tab; install it from https://github.com/can1357/oh-my-pi."

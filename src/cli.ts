@@ -2,6 +2,7 @@
 import { spawn, spawnSync } from "node:child_process";
 import { boardCommand } from "./board/command.ts";
 import { printPairing } from "./pair.ts";
+import { BOARD_APP_NAME } from "./paths.ts";
 import { runServer } from "./server/main.ts";
 import { installService, isServiceInstalled, restartService, serviceStatus, uninstallService } from "./service.ts";
 import { installSkill } from "./skill.ts";
@@ -24,7 +25,7 @@ const HELP = `relay ${VERSION}: an agent multiplexer for omp, with an iPhone com
 
 Usage:
   relay                    Open relay (creates the session on first run)
-  relay board              Show where each of your pull requests is (relay board --help)
+  relay board              Open the PR board app (relay board --help)
   relay pair [address]     Show a QR code that adds this computer to the Relay iPhone app
   relay server             Run the phone server in the foreground
   relay server install     Run the phone server in the background, starting at login
@@ -85,7 +86,7 @@ async function update(): Promise<void> {
     console.log("Already up to date.");
     return;
   }
-  console.log(`Installed relay ${installed}.`);
+  console.log(`Installed relay ${installed.version}${installed.boardApp ? ` and the ${BOARD_APP_NAME} app` : ""}.`);
   // The new binary carries the new tmux config; let it apply that to the running session.
   spawnSync(process.execPath, ["reload"], { stdio: "inherit" });
   await setGlobalOption("@relay_update", null);
