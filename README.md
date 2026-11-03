@@ -10,7 +10,7 @@ Every tab runs an omp agent. The tab bar shows each agent's state: a spinner whi
 curl -fsSL https://raw.githubusercontent.com/pgeske/relay/main/install.sh | sh
 ```
 
-This puts a single `relay` binary in `~/.local/bin` (set `RELAY_INSTALL_DIR` to change that). relay needs [tmux](https://github.com/tmux/tmux) and omp on your `PATH`. It runs on macOS and Linux (Apple Silicon/Intel, x64/arm64).
+This puts a single `relay` binary in `~/.local/bin` (set `RELAY_INSTALL_DIR` to change that), and on macOS 26 or newer the [Relay Board](#pr-board) app in `~/Applications`. relay needs [tmux](https://github.com/tmux/tmux) and omp on your `PATH`. It runs on macOS and Linux (Apple Silicon/Intel, x64/arm64).
 
 ## Use
 
@@ -65,23 +65,25 @@ The first call makes macOS ask whether relay may use the microphone; click Allow
 relay board          # or prefix B inside relay
 ```
 
-This opens the board in your browser at `http://localhost:7878/board`. relay's server (`relay server install`) serves it, only to this computer. Every load asks GitHub fresh, and the page reloads itself every minute, or every 10 seconds while a session is on one of the board's requests, so a finished step shows soon. It doesn't reload while its dialog is open or a button is working.
+This opens **Relay Board**, a macOS app (macOS 26 or newer) that relay's installer puts in `~/Applications` and `relay update` keeps on the same version as relay. The app reads the board from relay's server (`relay server install`); when the server isn't running, it says so and shows the command that starts it. Every refresh asks GitHub fresh. The app refreshes every minute, or every 10 seconds while a session is on one of the board's requests so a finished step shows soon, and whenever you press ⌘R; it holds off while a confirmation is open or a button is working. Elsewhere, read the board with `relay board --json`.
 
-Your open pull requests sit in columns left to right as work moves: **Draft**, **Agent review**, **Human review**, **Approved · blocked** (CI red or running, or a merge gate said no), and **Ready to merge**, then the PRs you merged lately. Each card shows CI, how long the PR has been quiet, and whether an agent reviewed it. PRs waiting on your review stay off the page, and the page doesn't search for them; `relay board --json` still lists them (`teammates`, and `bots` counted per bot). GitHub's search can list a PR as open for a little while after it merged or closed; the board goes by the PR's own state, so it leaves the lanes right away (a merged one joins the merged list), and PRs the board recently asked to merge are read directly to be sure.
+Your open pull requests sit in columns left to right as work moves: **Draft**, **Agent review**, **Human review**, **Approved · blocked** (CI red or running, or a merge gate said no), and **Ready to merge**, then the PRs you merged lately. The sidebar shows how many each lane holds and opens one on its own, and the Dock icon counts the PRs waiting on you (Approved · blocked and Ready to merge). Each card shows CI, how long the PR has been quiet (stale after a week), the ticket its title starts with, and whether an agent reviewed it; click a card to open the PR in your browser. PRs waiting on your review stay off the board, and the app doesn't search for them; `relay board --json` still lists them (`teammates`, and `bots` counted per bot). GitHub's search can list a PR as open for a little while after it merged or closed; the board goes by the PR's own state, so it leaves the lanes right away (a merged one joins the merged list), and PRs the board recently asked to merge are read directly to be sure.
 
-Hover one of your PR cards and click its **×** to close the PR on GitHub (after you confirm in the board's dialog); its branch stays.
+Hover one of your PR cards and click its **×** (or right-click it and choose **Close PR…**) to close the PR on GitHub, after you confirm; its branch stays.
 
-When an omp session opened or claimed a PR, the card's bottom row names that session behind an `omp` tag. Click it to jump to the session: relay switches to its tab, reopening it if it was closed, and brings your terminal to the front.
+When an omp session opened or claimed a PR, the card's bottom row names that session. Click it to jump to the session: relay switches to its tab, reopening it if it was closed, and brings your terminal to the front.
 
-Cards in **Agent review** also get a **Review** button that asks the session to run a reviewer agent on the PR, and cards in **Ready to merge** a **Merge** button that asks it to merge the PR the repo's normal way, checking checks and approvals first and never bypassing branch protection. These step buttons move a PR to its next lane. CI can go red in any lane, so fixing it isn't a button: on any card with a session, the red **CI red** pill (marked with a wrench) asks the session to fix CI. It looks at the failing checks, retries the jobs if the failure was flaky, or fixes a real failure with a new signed commit, without force-pushing or bypassing checks. Merge and Fix CI ask you to confirm first. Each one reopens a closed session in a background tab first, says no while the session is busy, and says no if the PR already merged or closed (then the page reloads to catch up).
+Cards in **Agent review** also get a **Review** button that asks the session to run a reviewer agent on the PR, and cards in **Ready to merge** a **Merge** button that asks it to merge the PR the repo's normal way, checking checks and approvals first and never bypassing branch protection. These step buttons move a PR to its next lane. CI can go red in any lane, so fixing it isn't a button: on any card with a session, the red **CI red** tag (marked with a wrench) asks the session to fix CI. It looks at the failing checks, retries the jobs if the failure was flaky, or fixes a real failure with a new signed commit, without force-pushing or bypassing checks. Merge and Fix CI ask you to confirm first. Each one reopens a closed session in a background tab first, says no while the session is busy, and says no if the PR already merged or closed (then the board refreshes to catch up).
 
-Once the session takes a request on, its button gives way to a pulsing tag (**agent reviewing…**, **agent merging…**, **agent fixing CI…**, the last next to the CI pill) until it's done: a review or CI fix when the agent records its result, a merge when the PR merges or closes. If the session goes idle or closes first, the card says the request stopped without a result and offers it again (**Review again**, **Merge again**; for CI, the **CI fix stopped without a result** tag asks again while CI is still red).
+Once the session takes a request on, its button gives way to a pulsing tag with a spinner (**Agent reviewing…**, **Agent merging…**, **Agent fixing CI…**, the last next to the CI tag) until it's done: a review or CI fix when the agent records its result, a merge when the PR merges or closes. If the session goes idle or closes first, the card says the request stopped without a result and offers it again (**Review Again**, **Merge Again**; for CI, the **CI fix stopped without a result** tag asks again while CI is still red).
 
 GitHub can't tell whether a reviewer agent looked at a PR, so relay keeps that itself, in `~/.local/share/relay/board.db`, together with what the reviewer said: click a card's agent tag to read it. A review is tied to the commit it covered: push new commits and the PR goes back to Agent review until it is reviewed again.
 
-A Fix CI result is kept the same way, tied to the head commit when it was recorded. After a fix, the CI pill gets an asterisk (**CI running\***, then **CI green\***) that opens what the agent found and did; if it couldn't fix CI, an **agent couldn't fix CI** tag opens why. Either goes away with the next commit.
+A Fix CI result is kept the same way, tied to the head commit when it was recorded. After a fix, the CI tag gets an asterisk (**CI running\***, then **CI green\***) that opens what the agent found and did; if it couldn't fix CI, an **Agent couldn't fix CI** tag opens why. Either goes away with the next commit.
 
-Cards in **Human review** move on through Slack. **Ask for approval** asks the session to draft a Slack message asking for a review: `<PR URL>. <what it does and why>`, casual and lowercase, in the channel you usually post `lfr`s in for that repo (it asks you when that's unclear). Once the ask is recorded, the button becomes **Bump**: the session finds the message you sent (or tells you if you never sent the draft) and drafts a short bump in its thread. Both only ever create drafts; you send them. A tag (**approval asked 2d ago**, then **bumped 1d ago**) opens the ask in Slack in a new tab. Both confirm first, and follow a request like the other steps (**agent drafting approval ask…**, **agent drafting bump…**, or **Ask for approval again** / **Bump again** if the session stopped before recording the draft).
+Cards in **Human review** move on through Slack. **Ask for Approval** asks the session to draft a Slack message asking for a review: `<PR URL>. <what it does and why>`, casual and lowercase, in the channel you usually post `lfr`s in for that repo (it asks you when that's unclear). Once the ask is recorded, the button becomes **Bump**: the session finds the message you sent (or tells you if you never sent the draft) and drafts a short bump in its thread. Both only ever create drafts; you send them. A tag (**Approval asked 2d ago**, then **Bumped 1d ago**) opens the ask in Slack. Both confirm first, and follow a request like the other steps (**Agent drafting approval ask…**, **Agent drafting bump…**, or **Ask for Approval Again** / **Bump Again** if the session stopped before recording the draft).
+
+The board's buttons type into your sessions, so its endpoints (`GET /api/board` and `POST /api/board/actions/<action>`) answer only this computer: a request must come over loopback and name `localhost`, and it must carry the bearer token in `~/.config/relay/token`, a mode-600 file the app reads and a web page can't. A page that rebinds its domain to 127.0.0.1 fails the first check, and no page can read the token.
 
 ```sh
 relay board review <pr-url> --passed --summary "Found nothing to change."
@@ -119,13 +121,13 @@ relay checks for new releases in the background and shows `relay x.y.z available
 relay update
 ```
 
-It downloads the new binary, checks its SHA-256, swaps it in place, re-applies the tmux config to your running session, and restarts the phone server. Running agents keep running.
+It downloads the new binary (and on a Mac the Relay Board app), checks its SHA-256, swaps it in place, re-applies the tmux config to your running session, and restarts the phone server. Running agents keep running.
 
 ## Commands
 
 ```
 relay                    Open relay (creates the session on first run)
-relay board              Open the PR board in your browser (relay board --help)
+relay board              Open the PR board app (relay board --help)
 relay pair [address]     Show a QR code that adds this computer to the Relay iPhone app
 relay server             Run the phone server in the foreground
 relay server install     Run the phone server in the background, starting at login
@@ -146,11 +148,14 @@ bun run dev          # run from source
 bun run typecheck
 bun test
 bun run build        # dist/relay
+macos/scripts/build.sh   # build the Relay Board app and install it to ~/Applications
 ```
 
-`RELAY_TMUX_SOCKET` and `RELAY_PORT` let a development copy run beside your real relay without touching it.
+`RELAY_TMUX_SOCKET` and `RELAY_PORT` let a development copy run beside your real relay without touching it; `relay board` passes `RELAY_PORT` on to the app.
 
-To release, bump `version` in `package.json`, commit, and push a matching `vX.Y.Z` tag. The release workflow builds binaries for every platform, publishes them with a `checksums.txt`, and every machine then sees the update.
+The Relay Board app in [`macos/`](macos/) is a SwiftUI app built with Swift Package Manager, so it needs only the Command Line Tools with the macOS 26 SDK (Swift 6.2 or newer), not Xcode. `macos/scripts/build.sh` builds it for this Mac, turns the iPhone app's icon into a macOS one, ad-hoc signs the bundle, and installs it as `~/Applications/Relay Board.app`, reopening it if it was open.
+
+To release, bump `version` in `package.json`, commit, and push a matching `vX.Y.Z` tag. The release workflow builds binaries for every platform and the Relay Board app (a universal `relay-board-macos.zip`), publishes them with a `checksums.txt`, and every machine then sees the update.
 
 ## License
 

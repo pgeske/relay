@@ -15,12 +15,12 @@ description: Relay's PR board. Use when asked where pull requests stand, what's 
 | Human review | A reviewer agent passed the current commit; waiting on a person |
 | Draft | Still being shaped |
 
-After the lanes: PRs merged recently. PRs waiting on the user's review aren't on the page; `--json` lists them (`teammates`, and `bots` counted per bot).
+After the lanes: PRs merged recently. PRs waiting on the user's review aren't on the board; `--json` lists them (`teammates`, and `bots` counted per bot).
 
 ## Reading the board
 
 - `relay board --json` for data. Each card has `pr`, `ci` (`passed`/`failed`/`running`/`none`), `gateBlocked`, `agentReview`, `ciFix` (the latest Fix CI result: `fixed`/`not-fixed`, with `stale` once newer commits landed), `approval` (the Slack message asking for approval: `not-asked`, or `asked`/`bumped` with `askedAt`, `bumpedAt`, and `slackUrl`), and `requests`: where each request the board sent the PR's session stands, per step (`review`, `merge`, `fix-ci`, `ask-approval`, `bump`: `none`, `running`, or `stalled` when the session stopped without finishing). `owners` maps "owner/repo#number" to the session in charge of it.
-- `relay board` opens the human view in the browser (prefix `B` inside relay does the same). It is for the user; read `--json` yourself.
+- `relay board` opens the human view, the Relay Board macOS app (prefix `B` inside relay does the same). It is for the user; read `--json` yourself.
 
 ## The session in charge of a PR
 
@@ -54,7 +54,7 @@ EOF
 
 ## Recording a Fix CI result
 
-Clicking a card's red **CI red** pill on the board (it works in any lane) asks the session in charge to find out why CI failed on the PR's head commit, then retry flaky or infrastructure failures, or fix a real failure with a new signed commit (never force-push, amend shared history, or bypass or disable checks). When you finish one, **always** record how it went, fixed or not, so the card stops showing the request as running:
+Clicking a card's red **CI red** tag on the board (it works in any lane) asks the session in charge to find out why CI failed on the PR's head commit, then retry flaky or infrastructure failures, or fix a real failure with a new signed commit (never force-push, amend shared history, or bypass or disable checks). When you finish one, **always** record how it went, fixed or not, so the card stops showing the request as running:
 
 ```sh
 relay board ci-fix <pr-url> --fixed --summary - <<'EOF'
@@ -72,7 +72,7 @@ EOF
 
 ## Recording an approval ask or bump
 
-In **Human review**, the board's **Ask for approval** button asks the session in charge to draft a Slack message asking for a review; once an ask is recorded, the button becomes **Bump**, which asks it to draft a short bump in the ask's thread. The user sends every message:
+In **Human review**, the board's **Ask for Approval** button asks the session in charge to draft a Slack message asking for a review; once an ask is recorded, the button becomes **Bump**, which asks it to draft a short bump in the ask's thread. The user sends every message:
 
 - Only ever draft, with the Slack MCP draft tool (`slack_send_message_draft`). Never send or schedule a message.
 - The ask reads `<full PR URL>. <one plain-English sentence on what the PR does and why>`, casual and lowercase, like the user's recent messages in that channel.
@@ -89,6 +89,6 @@ relay board approval <pr-url> --asked --slack https://app.slack.com/client/T0123
 relay board approval <pr-url> --bumped --slack https://acme.slack.com/archives/C0456/p1793643074057839
 ```
 
-- `--slack` must be a Slack link (https on slack.com). The card's tag (**approval asked 2d ago**, **bumped 1d ago**) opens it.
+- `--slack` must be a Slack link (https on slack.com). The card's tag (**Approval asked 2d ago**, **Bumped 1d ago**) opens it.
 - `--bumped` moves the recorded link to the permalink, so later bumps and the board go straight to the thread. It needs an ask recorded first.
 - Recording `--asked` again (say, re-drafting an ask that was never sent) starts over: it replaces the ask and forgets its bumps.
