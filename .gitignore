@@ -5,3 +5,4 @@ ios/*.xcodeproj/
 .DS_Store
 DerivedData/
 *.bun-build
+macos/.build/
