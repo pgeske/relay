@@ -5,6 +5,7 @@ import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import { WebSocketServer } from "ws";
+import { boardPage, isBoardAction, isLocalBrowserRequest, readActionBody, runBoardAction } from "../board/serve.ts";
 import { endLiveCall, recoverInterruptedCall, startLiveCall } from "./live.ts";
 import { askAnswerSteps, findPendingAsk, validateAskAnswers, type AskAnswer } from "./ask.ts";
 import { startSessionEvents } from "./events.ts";
@@ -29,6 +30,7 @@ import {
 import { TOKEN_PATH, UPLOADS_DIR, SERVER_PORT } from "../paths.ts";
 import { loadToken, tokenMatches } from "../token.ts";
 import { refreshUpdateNotice } from "../update.ts";
+import { installSkill } from "../skill.ts";
 import { VERSION } from "../version.ts";
 
 const MAX_BODY_BYTES = 30 * 1024 * 1024;
@@ -433,6 +435,31 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
     sendJson(res, 200, { ok: true, version: VERSION, voice: isVoiceEnabled() });
     return;
   }
+  // The board is a page for this computer's browser, which has no way to send the phone token.
+  if (req.method === "GET" && segments.length === 1 && segments[0] === "board") {
+    if (!isLocalBrowserRequest(req)) {
+      sendJson(res, 403, { error: "the board is only served to this computer" });
+      return;
+    }
+    res.writeHead(200, { "content-type": "text/html; charset=utf-8", "cache-control": "no-store" });
+    res.end(await boardPage());
+    return;
+  }
+  if (req.method === "POST" && segments.length === 3 && segments[0] === "board" && segments[1] === "actions") {
+    if (!isBoardAction(req)) {
+      sendJson(res, 403, { error: "board buttons only work from the board page on this computer" });
+      return;
+    }
+    let pr: string;
+    try {
+      pr = await readActionBody(req);
+    } catch (error) {
+      throw new HttpError(400, error instanceof Error ? error.message : "bad request");
+    }
+    const result = await runBoardAction(segments[2], pr);
+    sendJson(res, result.status, result.status < 300 ? { message: result.message } : { error: result.message });
+    return;
+  }
   if (segments[0] !== "api") {
     sendJson(res, 404, { error: "not found" });
     return;
@@ -470,6 +497,7 @@ async function handleUpgrade(req: IncomingMessage, socket: Duplex, head: Buffer)
 export function runServer(): void {
   loadToken();
   writeConfig();
+  installSkill();
 
   const server = createServer((req, res) => {
     handle(req, res).catch((error: unknown) => {

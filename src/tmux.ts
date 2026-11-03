@@ -268,8 +268,8 @@ export async function ensureSession(): Promise<void> {
   await createDetachedSession(homedir());
 }
 
-/** Creates a window running omp without selecting it, returning the new pane id. */
-export async function newWindow(sessionName: string, cwd: string): Promise<string> {
+/** Creates a window running omp (with `agentArgs`, e.g. `--resume <file>`) without selecting it, returning the new pane id. */
+export async function newWindow(sessionName: string, cwd: string, agentArgs: string[] = []): Promise<string> {
   const output = await tmux([
     "new-window",
     "-d",
@@ -283,6 +283,7 @@ export async function newWindow(sessionName: string, cwd: string): Promise<strin
     "-F",
     "#{pane_id}",
     AGENT_COMMAND,
+    ...agentArgs,
   ]);
   return output.trim();
 }
@@ -293,6 +294,19 @@ export async function killWindow(windowId: string): Promise<void> {
 
 export async function selectWindow(windowId: string): Promise<void> {
   await tmux(["select-window", "-t", windowId]);
+}
+
+/** Process ids of the terminals attached to relay's tmux server; empty when none are. */
+export async function listClientPids(): Promise<number[]> {
+  try {
+    const output = await tmux(["list-clients", "-F", "#{client_pid}"]);
+    return output
+      .split("\n")
+      .map((line) => Number.parseInt(line, 10))
+      .filter((pid) => pid > 0);
+  } catch {
+    return [];
+  }
 }
 
 /** Pastes text into the pane, as bracketed paste when the TUI supports it, without pressing Enter. */

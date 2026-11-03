@@ -1,8 +1,10 @@
 #!/usr/bin/env bun
 import { spawn, spawnSync } from "node:child_process";
+import { boardCommand } from "./board/command.ts";
 import { printPairing } from "./pair.ts";
 import { runServer } from "./server/main.ts";
 import { installService, isServiceInstalled, restartService, serviceStatus, uninstallService } from "./service.ts";
+import { installSkill } from "./skill.ts";
 import {
   AGENT_COMMAND,
   SESSION_NAME,
@@ -22,6 +24,7 @@ const HELP = `relay ${VERSION}: an agent multiplexer for omp, with an iPhone com
 
 Usage:
   relay                    Open relay (creates the session on first run)
+  relay board              Show where each of your pull requests is (relay board --help)
   relay pair [address]     Show a QR code that adds this computer to the Relay iPhone app
   relay server             Run the phone server in the foreground
   relay server install     Run the phone server in the background, starting at login
@@ -33,7 +36,7 @@ Usage:
   relay version            Print the version
 
 Inside relay: Ctrl+N new agent tab, Ctrl+K tab picker, Alt+Shift+[ / ] switch tabs,
-Ctrl+B or Ctrl+A is the tmux prefix.`;
+prefix B the PR board. Ctrl+B or Ctrl+A is the tmux prefix.`;
 
 function hasCommand(command: string, args: string[]): boolean {
   return spawnSync(command, args, { stdio: "ignore" }).status === 0;
@@ -57,6 +60,7 @@ async function openRelay(): Promise<number> {
   }
 
   if (writeConfig()) await reloadConfig();
+  installSkill();
 
   // -A attaches to the relay session when it exists and creates it otherwise.
   const child = spawn(tmuxBinary(), tmuxArgs(["new-session", "-A", "-s", SESSION_NAME, AGENT_COMMAND]), {
@@ -125,6 +129,9 @@ async function main(args: string[]): Promise<number | null> {
     case "pair":
       await printPairing(rest[0]);
       return 0;
+    case "board":
+      await boardCommand(rest);
+      return 0;
     case "server":
       if (rest[0] === undefined) {
         runServer();
@@ -140,6 +147,7 @@ async function main(args: string[]): Promise<number | null> {
       return 0;
     case "reload":
       writeConfig();
+      installSkill();
       await reloadConfig();
       return 0;
     case "version":
