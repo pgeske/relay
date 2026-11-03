@@ -5,7 +5,7 @@ import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import { WebSocketServer } from "ws";
-import { boardPage, isBoardAction, isLocalBrowserRequest, readActionBody, runBoardAction } from "../board/serve.ts";
+import { fetchBoardView, isLocalRequest, readActionBody, runBoardAction } from "../board/serve.ts";
 import { endLiveCall, recoverInterruptedCall, startLiveCall } from "./live.ts";
 import { askAnswerSteps, findPendingAsk, validateAskAnswers, type AskAnswer } from "./ask.ts";
 import { startSessionEvents } from "./events.ts";
@@ -332,6 +332,31 @@ async function handleImage(
   res.end(image.bytes);
 }
 
+/**
+ * The Relay Board app's endpoints: `GET /api/board` is the board as the app shows it, and
+ * `POST /api/board/actions/<action>` with `{ "pr": "owner/repo#12" }` runs one of a card's controls.
+ */
+async function routeBoard(req: IncomingMessage, res: ServerResponse, rest: string[]): Promise<void> {
+  if (rest.length === 0) {
+    if (req.method !== "GET") throw new HttpError(405, "method not allowed");
+    sendJson(res, 200, await fetchBoardView());
+    return;
+  }
+  if (rest.length !== 2 || rest[0] !== "actions") {
+    sendJson(res, 404, { error: "not found" });
+    return;
+  }
+  if (req.method !== "POST") throw new HttpError(405, "method not allowed");
+  let pr: string;
+  try {
+    pr = await readActionBody(req);
+  } catch (error) {
+    throw new HttpError(400, error instanceof Error ? error.message : "bad request");
+  }
+  const result = await runBoardAction(rest[1], pr);
+  sendJson(res, result.status, result.status < 300 ? { message: result.message } : { error: result.message });
+}
+
 async function route(
   req: IncomingMessage,
   res: ServerResponse,
@@ -339,6 +364,10 @@ async function route(
   segments: string[],
 ): Promise<void> {
   const [, resource, rawId, action, ...rest] = segments;
+  if (resource === "board") {
+    await routeBoard(req, res, segments.slice(2));
+    return;
+  }
   if (resource === "models" && !rawId) {
     if (req.method !== "GET") throw new HttpError(405, "method not allowed");
     sendJson(res, 200, { models: await listModels() });
@@ -435,33 +464,13 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
     sendJson(res, 200, { ok: true, version: VERSION, voice: isVoiceEnabled() });
     return;
   }
-  // The board is a page for this computer's browser, which has no way to send the phone token.
-  if (req.method === "GET" && segments.length === 1 && segments[0] === "board") {
-    if (!isLocalBrowserRequest(req)) {
-      sendJson(res, 403, { error: "the board is only served to this computer" });
-      return;
-    }
-    res.writeHead(200, { "content-type": "text/html; charset=utf-8", "cache-control": "no-store" });
-    res.end(await boardPage());
-    return;
-  }
-  if (req.method === "POST" && segments.length === 3 && segments[0] === "board" && segments[1] === "actions") {
-    if (!isBoardAction(req)) {
-      sendJson(res, 403, { error: "board buttons only work from the board page on this computer" });
-      return;
-    }
-    let pr: string;
-    try {
-      pr = await readActionBody(req);
-    } catch (error) {
-      throw new HttpError(400, error instanceof Error ? error.message : "bad request");
-    }
-    const result = await runBoardAction(segments[2], pr);
-    sendJson(res, result.status, result.status < 300 ? { message: result.message } : { error: result.message });
-    return;
-  }
   if (segments[0] !== "api") {
     sendJson(res, 404, { error: "not found" });
+    return;
+  }
+  // The board's controls type into your sessions, so its endpoints answer only this computer, besides needing the token.
+  if (segments[1] === "board" && !isLocalRequest(req)) {
+    sendJson(res, 403, { error: "the board only answers this computer" });
     return;
   }
   if (!isAuthorized(req)) {
@@ -493,26 +502,29 @@ async function handleUpgrade(req: IncomingMessage, socket: Duplex, head: Buffer)
   liveSockets.handleUpgrade(req, socket, head, (webSocket) => startLiveCall(webSocket, pane));
 }
 
+/** Answers one HTTP request, turning whatever it throws into a JSON error. */
+export function handleRequest(req: IncomingMessage, res: ServerResponse): void {
+  handle(req, res).catch((error: unknown) => {
+    if (res.headersSent) {
+      res.end();
+      return;
+    }
+    if (error instanceof HttpError) {
+      sendJson(res, error.status, { error: error.message });
+      return;
+    }
+    console.error("request failed", error);
+    sendJson(res, 500, { error: "internal error" });
+  });
+}
+
 /** Runs the phone server in the foreground until SIGINT/SIGTERM. */
 export function runServer(): void {
   loadToken();
   writeConfig();
   installSkill();
 
-  const server = createServer((req, res) => {
-    handle(req, res).catch((error: unknown) => {
-      if (res.headersSent) {
-        res.end();
-        return;
-      }
-      if (error instanceof HttpError) {
-        sendJson(res, error.status, { error: error.message });
-        return;
-      }
-      console.error("request failed", error);
-      sendJson(res, 500, { error: "internal error" });
-    });
-  });
+  const server = createServer(handleRequest);
   server.on("upgrade", (req: IncomingMessage, socket: Duplex, head: Buffer) => {
     handleUpgrade(req, socket, head).catch((error: unknown) => {
       console.error("upgrade failed", error);

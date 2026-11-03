@@ -18,3 +18,11 @@ export const UPDATE_CACHE_PATH = join(CACHE_DIR, "latest-release.json");
 
 export const GITHUB_REPO = "pgeske/relay";
 export const SERVER_PORT = Number(process.env.RELAY_PORT ?? 7878);
+
+/** The PR board's macOS app, built from macos/ and shipped with each release. */
+export const BOARD_APP_NAME = "Relay Board";
+export const BOARD_APP_ID = "io.github.pgeske.relay.board";
+/** Where relay installs the app. */
+export const BOARD_APP_PATH = join(homedir(), "Applications", `${BOARD_APP_NAME}.app`);
+/** Where `relay board` looks for it, besides asking Launch Services by bundle identifier. */
+export const BOARD_APP_PATHS = [BOARD_APP_PATH, join("/Applications", `${BOARD_APP_NAME}.app`)];

@@ -9,7 +9,7 @@ import { loadBoardConfig } from "./config.ts";
 import { closePullRequest, fetchBoardData, fetchPullRequest, type BoardData } from "./github.ts";
 import { REQUEST_MAX_AGE_MS, requestProgress, type CardOwner } from "./lanes.ts";
 import { prOwner, readSessionHeader } from "./owners.ts";
-import { renderBoardPage } from "./page.ts";
+import { BOARD_ACTIONS, boardView, type BoardAction, type BoardView } from "./view.ts";
 import {
   AGENT_ACTIONS,
   agentRequests,
@@ -32,12 +32,11 @@ const READY_SETTLE_MS = 800;
 let lastGood: { data: BoardData; at: Date } | null = null;
 
 /**
- * The board page. Every view fetches from GitHub, so a reload always shows what GitHub has right
- * now; the browser keeps the old page up while the new one loads. Sessions, agent results, and the
- * requests the board sent are read fresh too. The page shows only your own PRs, so it skips the
- * searches for PRs waiting on your review.
+ * The board, as the Relay Board app shows it. Every view fetches from GitHub, so a refresh always
+ * shows what GitHub has right now. Sessions, agent results, and the requests the board sent are read
+ * fresh too. The app shows only your own PRs, so it skips the searches for PRs waiting on your review.
  */
-export async function boardPage(): Promise<string> {
+export async function fetchBoardView(): Promise<BoardView> {
   const config = loadBoardConfig();
   let error: string | undefined;
   try {
@@ -45,13 +44,13 @@ export async function boardPage(): Promise<string> {
   } catch (failure) {
     error = failure instanceof Error ? failure.message : String(failure);
   }
-  const options = { now: new Date(), updatedAt: lastGood?.at ?? new Date(), error };
-  return renderBoardPage(lastGood ? await assembleBoard(lastGood.data, config) : null, options);
+  const board = lastGood ? await assembleBoard(lastGood.data, config) : null;
+  return boardView(board, { now: new Date(), updatedAt: lastGood?.at ?? null, error });
 }
 
 /**
  * PRs the board recently asked to merge. Search can keep listing a just-merged PR as open, so the
- * page re-reads these directly, and the card leaves the moment the merge lands.
+ * board re-reads these directly, and the card leaves the moment the merge lands.
  */
 function recentMergeRequests(): Set<string> {
   const db = openBoardStore();
@@ -64,22 +63,15 @@ function recentMergeRequests(): Set<string> {
 }
 
 /**
- * The page skips the phone token, so it is only served to this computer: the request must come
- * from loopback and name localhost, which also stops DNS rebinding from reading it.
+ * The board's endpoints type into your sessions, so on top of the phone token they only answer this
+ * computer: the request must come from loopback and name localhost, which also stops a page that
+ * rebinds its domain to 127.0.0.1 from talking to them.
  */
-export function isLocalBrowserRequest(req: IncomingMessage): boolean {
+export function isLocalRequest(req: IncomingMessage): boolean {
   const address = req.socket.remoteAddress ?? "";
   const loopback = address === "::1" || /^(::ffff:)?127\./.test(address);
   const host = (req.headers.host ?? "").replace(/:\d+$/, "");
   return loopback && (host === "localhost" || host === "127.0.0.1" || host === "[::1]");
-}
-
-/**
- * Buttons type into your sessions, so they also need the board page itself to have sent them:
- * browsers stamp every POST with its page's origin, and a page on another site can't fake ours.
- */
-export function isBoardAction(req: IncomingMessage): boolean {
-  return isLocalBrowserRequest(req) && req.headers.origin === `http://${req.headers.host}`;
 }
 
 export type BoardActionResult = { status: number; message: string };
@@ -119,7 +111,7 @@ const DRAFT_ONLY =
 
 function askApprovalPrompt(url: string): string {
   return (
-    `I pressed Ask for approval on the relay board for ${url}. Draft a Slack message asking for a review of it. ${DRAFT_ONLY} ` +
+    `I pressed Ask for Approval on the relay board for ${url}. Draft a Slack message asking for a review of it. ${DRAFT_ONLY} ` +
     `Write it as \`${url}. <one plain-English sentence on what the PR does and why>\`, casual and lowercase, ` +
     `matching my recent messages in that channel. Draft it where I usually ask for reviews for this repo or its team: search my recent ` +
     `Slack messages for earlier review requests to find the channel. If the right channel is unclear, ask me which instead of guessing, and don't draft yet. ` +
@@ -149,10 +141,8 @@ const REQUESTS: Record<AgentAction, { prompt: (url: string, ask: ApprovalAsk | u
   bump: { prompt: bumpPrompt, asked: "draft a Slack bump for", running: "drafting a bump for" },
 };
 
-const BUTTONS = ["open", "close", ...AGENT_ACTIONS] as const;
-
-function isButton(action: string): action is (typeof BUTTONS)[number] {
-  return (BUTTONS as readonly string[]).includes(action);
+function isBoardAction(action: string): action is BoardAction {
+  return (BOARD_ACTIONS as readonly string[]).includes(action);
 }
 
 /** Reopens a closed session in a new relay tab, returning its pane; `focus` switches relay to it. */
@@ -212,7 +202,7 @@ async function promptSession(sessionFile: string, live: { paneId: string; status
  * note the request so the card can follow it until it's done. `close` closes the PR on GitHub, and needs no session.
  */
 export async function runBoardAction(action: string, prRef: string): Promise<BoardActionResult> {
-  if (!isButton(action)) return { status: 404, message: `no such action: ${action}` };
+  if (!isBoardAction(action)) return { status: 404, message: `no such action: ${action}` };
   const { repo, number } = parsePrRef(prRef);
   if (action === "close") {
     try {
@@ -284,7 +274,7 @@ function runningRequest(repo: string, number: number, live: CardOwner["live"]): 
   }
 }
 
-/** Reads a button's small JSON body: `{ "pr": "owner/repo#12" }`. */
+/** Reads an action's small JSON body: `{ "pr": "owner/repo#12" }`. */
 export async function readActionBody(req: IncomingMessage): Promise<string> {
   let raw = "";
   for await (const chunk of req) {

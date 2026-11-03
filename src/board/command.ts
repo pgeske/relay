@@ -1,5 +1,6 @@
 import { spawnSync } from "node:child_process";
-import { SERVER_PORT } from "../paths.ts";
+import { existsSync } from "node:fs";
+import { BOARD_APP_ID, BOARD_APP_NAME, BOARD_APP_PATHS, GITHUB_REPO } from "../paths.ts";
 import { resolveSessionFile } from "../server/sessionFile.ts";
 import { parsePaneTitle } from "../server/sessions.ts";
 import { listOmpPanes, listPanes, type Pane } from "../tmux.ts";
@@ -21,12 +22,10 @@ import {
   type CiFixVerdict,
 } from "./store.ts";
 
-export const BOARD_URL = `http://localhost:${SERVER_PORT}/board`;
-
 export const BOARD_HELP = `relay board: where each of your pull requests is, from draft to merged.
 
 Usage:
-  relay board                         Open the board in your browser (${BOARD_URL})
+  relay board                         Open the ${BOARD_APP_NAME} app (macOS)
   relay board --json                  Print the board as JSON (for agents)
   relay board review <pr> --passed [--summary <text|->]
                                       Record that a reviewer agent passed the PR's current commit
@@ -45,7 +44,7 @@ Usage:
   relay board claim <pr>              Put the omp session this runs in in charge of the PR
 
 <pr> is a PR URL or owner/repo#number. Settings live in ~/.config/relay/board.json.
-The page is served by relay's server (relay server install).`;
+The app reads the board from relay's server (relay server install).`;
 
 /** The relay tab each open omp session runs in, keyed by its session file. */
 export async function liveSessions(): Promise<Map<string, Pane>> {
@@ -235,15 +234,22 @@ async function claim(args: string[]): Promise<void> {
   console.log(`${repo}#${number} is now in the care of "${readSessionHeader(sessionFile).title || sessionFile}"`);
 }
 
-async function openInBrowser(): Promise<void> {
-  const healthy = await fetch(`http://127.0.0.1:${SERVER_PORT}/api/health`, { signal: AbortSignal.timeout(2000) })
-    .then((res) => res.ok)
-    .catch(() => false);
-  if (!healthy) {
-    throw new Error(`relay's server isn't running, and it serves the board. Start it with: relay server install`);
-  }
-  const opener = process.platform === "darwin" ? "open" : "xdg-open";
-  if (spawnSync(opener, [BOARD_URL], { stdio: "ignore" }).status !== 0) console.log(BOARD_URL);
+/**
+ * Opens the Relay Board app. `--env` hands it this relay's port and config directory (where the
+ * token it authenticates with lives); an app that's already running keeps the ones it has.
+ */
+function openApp(): void {
+  if (process.platform !== "darwin") throw new Error("the board is a macOS app; elsewhere, read it with: relay board --json");
+  const env = ["RELAY_PORT", "XDG_CONFIG_HOME"].flatMap((name) => (process.env[name] ? ["--env", `${name}=${process.env[name]}`] : []));
+  const installed = BOARD_APP_PATHS.find((path) => existsSync(path));
+  // Elsewhere, Launch Services may still know it by its bundle identifier.
+  const target = installed ? ["-a", installed] : ["-b", BOARD_APP_ID];
+  if (spawnSync("open", [...target, ...env], { stdio: "ignore" }).status === 0) return;
+  throw new Error(
+    `the ${BOARD_APP_NAME} app isn't installed. Install it with relay's installer ` +
+      `(curl -fsSL https://raw.githubusercontent.com/${GITHUB_REPO}/main/install.sh | sh), ` +
+      `or build it from a relay checkout with macos/scripts/build.sh`,
+  );
 }
 
 export async function boardCommand(args: string[]): Promise<void> {
@@ -261,5 +267,5 @@ export async function boardCommand(args: string[]): Promise<void> {
     return;
   }
   if (subcommand !== undefined) throw new Error(`unknown option: ${subcommand}\n\n${BOARD_HELP}`);
-  await openInBrowser();
+  openApp();
 }
