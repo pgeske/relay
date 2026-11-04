@@ -63,7 +63,8 @@ export type AgentRequests = Partial<Record<AgentAction, string>>;
 
 /**
  * A Slack message asking one reviewer (a person or a team) to approve a PR, as the PR's session
- * recorded it after drafting it. Reviewers who share a channel can share a message; each still has its own ask.
+ * recorded it after drafting it, or after finding one already sent. Reviewers who share a channel can
+ * share a message; each still has its own ask.
  */
 export interface ApprovalAsk {
   repo: string;
@@ -72,12 +73,19 @@ export interface ApprovalAsk {
   reviewer: string | null;
   /** The channel it went to, as Slack names it ("#team-reviews"); null when unknown. */
   channel: string | null;
+  /** When it was asked: when the session drafted it, or when a found message was sent. */
   askedAt: string;
+  /** When the session recorded it; later than `askedAt` for an ask it found already sent. */
+  recordedAt: string;
+  /** `drafted` by the session, or `found` in Slack already sent (one the user wrote outside the board). */
+  source: AskSource;
   /** When the session last drafted a bump in the message's thread; null until the first. */
   bumpedAt: string | null;
-  /** Where the ask is in Slack: the channel its draft went to, then the sent message's permalink once a bump found it. */
+  /** Where the ask is in Slack: the channel its draft went to, then the sent message's permalink once a bump found it (a found ask's from the start). */
   slackUrl: string;
 }
+
+export type AskSource = "drafted" | "found";
 
 interface ApprovalAskRow {
   repo: string;
@@ -85,6 +93,9 @@ interface ApprovalAskRow {
   reviewer: string;
   channel: string | null;
   asked_at: string;
+  /** Null for an ask recorded before asks kept when they were recorded: then, when it was asked. */
+  recorded_at: string | null;
+  source: AskSource;
   bumped_at: string | null;
   slack_url: string;
 }
@@ -98,6 +109,8 @@ const APPROVAL_ASKS_TABLE = `CREATE TABLE IF NOT EXISTS approval_asks (
   reviewer TEXT NOT NULL DEFAULT '' COLLATE NOCASE,
   channel TEXT,
   asked_at TEXT NOT NULL,
+  recorded_at TEXT,
+  source TEXT NOT NULL DEFAULT 'drafted' CHECK (source IN ('drafted', 'found')),
   bumped_at TEXT,
   slack_url TEXT NOT NULL,
   PRIMARY KEY (repo, number, reviewer)
@@ -162,6 +175,11 @@ export function openBoardStore(path = BOARD_DB_PATH): Database {
     })();
   } else {
     db.run(APPROVAL_ASKS_TABLE);
+    // Asks kept no source or recording time before the board could link one already sent: they were all drafted.
+    if (askColumns.length > 0 && !askColumns.some((column) => column.name === "source")) {
+      db.run("ALTER TABLE approval_asks ADD COLUMN recorded_at TEXT");
+      db.run("ALTER TABLE approval_asks ADD COLUMN source TEXT NOT NULL DEFAULT 'drafted' CHECK (source IN ('drafted', 'found'))");
+    }
   }
   // Review requests had a table of their own before every button shared agent_requests.
   if (db.query("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'review_requests'").get()) {
@@ -278,16 +296,11 @@ export function agentRequests(db: Database): Map<string, AgentRequests> {
 /** Records a fresh ask of `reviewer`; one recorded earlier for the same reviewer of the PR, and its bumps, give way to it. */
 export function recordApprovalAsk(
   db: Database,
-  ask: { repo: string; number: number; reviewer: string; channel: string; slackUrl: string; askedAt: string },
+  ask: { repo: string; number: number; reviewer: string; channel: string; slackUrl: string; askedAt: string; recordedAt: string; source: AskSource },
 ): void {
-  db.query("INSERT OR REPLACE INTO approval_asks (repo, number, reviewer, channel, asked_at, bumped_at, slack_url) VALUES (?, ?, ?, ?, ?, NULL, ?)").run(
-    ask.repo,
-    ask.number,
-    ask.reviewer,
-    ask.channel,
-    ask.askedAt,
-    ask.slackUrl,
-  );
+  db.query(
+    "INSERT OR REPLACE INTO approval_asks (repo, number, reviewer, channel, asked_at, recorded_at, source, bumped_at, slack_url) VALUES (?, ?, ?, ?, ?, ?, ?, NULL, ?)",
+  ).run(ask.repo, ask.number, ask.reviewer, ask.channel, ask.askedAt, ask.recordedAt, ask.source, ask.slackUrl);
 }
 
 /**
@@ -316,6 +329,8 @@ export function approvalAsks(db: Database): Map<string, ApprovalAsk[]> {
       reviewer: row.reviewer || null,
       channel: row.channel,
       askedAt: row.asked_at,
+      recordedAt: row.recorded_at ?? row.asked_at,
+      source: row.source,
       bumpedAt: row.bumped_at,
       slackUrl: row.slack_url,
     };

@@ -114,7 +114,17 @@ describe("status rows", () => {
   const approved = { reviewDecision: "APPROVED" as const, approvedBy: ["pat", "sara"] };
 
   test("each lane shows only the rows that matter there, in a fixed order", () => {
-    const asked: ApprovalAsk = { repo: "acme/api", number: 1, reviewer: "sre", channel: "#sre", askedAt: minutesAgo(20), bumpedAt: null, slackUrl: "https://app.slack.com/client/T1/C1" };
+    const asked: ApprovalAsk = {
+      repo: "acme/api",
+      number: 1,
+      reviewer: "sre",
+      channel: "#sre",
+      askedAt: minutesAgo(20),
+      recordedAt: minutesAgo(20),
+      source: "drafted",
+      bumpedAt: null,
+      slackUrl: "https://app.slack.com/client/T1/C1",
+    };
     const cases: [PullRequest, Local, string, RowView["kind"][]][] = [
       [pr({ isDraft: true }), {}, "draft", ["ci"]],
       [pr(), {}, "agent-review", ["ci", "agent"]],
@@ -340,7 +350,9 @@ describe("Ask for Approval, then Bump", () => {
     number: 1,
     reviewer: "cache-team",
     channel: "#cache-team",
-    askedAt: minutesAgo(2 * 24 * 60),
+    askedAt: overrides.askedAt ?? minutesAgo(2 * 24 * 60),
+    recordedAt: overrides.askedAt ?? minutesAgo(2 * 24 * 60),
+    source: "drafted",
     bumpedAt: null,
     slackUrl: "https://app.slack.com/client/T1/C1",
     ...overrides,
@@ -367,6 +379,17 @@ describe("Ask for Approval, then Bump", () => {
     ]);
     expect(view.steps).toMatchObject([{ action: "bump", label: "Bump", confirm: { title: "Bump the approval ask for acme/api#1?", button: "Draft Bump" } }]);
     expect(view.steps[0].confirm?.message).toContain("each ask still waiting (in #cache-team)");
+  });
+
+  test("an ask found already sent reads like a drafted one, saying so only in its hint, and the card offers Bump", () => {
+    const permalink = "https://acme.slack.com/archives/C5/p1793746643786509";
+    const found = asked({ channel: "#cache-help", askedAt: minutesAgo(3 * 60), recordedAt: minutesAgo(1), source: "found", slackUrl: permalink });
+    const view = card(waiting, { review: passed, approvals: [found] });
+    expect(slack(view)).toMatchObject({ value: "#cache-help · asked 3h ago", link: permalink });
+    expect(slack(view)?.items).toEqual([
+      { text: "#cache-help", note: "asked 3h ago", tone: "link", hint: "Found your earlier ask. Open the ask to cache-team in Slack", link: permalink, done: false },
+    ]);
+    expect(steps(view)).toEqual(["Bump"]);
   });
 
   test("a reviewer with no ask yet brings Ask for Approval back, for just that reviewer", () => {

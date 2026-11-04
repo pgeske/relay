@@ -19,7 +19,7 @@ After the lanes: PRs merged recently. PRs waiting on the user's review aren't on
 
 ## Reading the board
 
-- `relay board --json` for data. Each card has `pr` (including `mergeState`, `approvedBy`, `approvedFor`: the teams those approvals were on behalf of, and `waitingOn`: reviewers, people or teams, still asked), `ci` (`passed`/`failed`/`running`/`none`), `mergeBlocker` (what keeps it from merging besides CI, e.g. "1 approval missing", or null), `agentReview`, `ciFix` (the latest Fix CI result: `fixed`/`not-fixed`, with `stale` once newer commits landed), `approval` (the Slack asks for approval: `asks`, one per reviewer, each with `reviewer`, `channel`, `askedAt`, `bumpedAt`, `slackUrl`, and `approved` once that reviewer approved; and `unasked`: reviewers the PR waits on that no ask went to yet), and `requests`: where each request the board sent the PR's session stands, per step (`review`, `merge`, `fix-ci`, `ask-approval`, `bump`: `none`, `running`, or `stalled` when the session stopped without finishing). `owners` maps "owner/repo#number" to the session in charge of it.
+- `relay board --json` for data. Each card has `pr` (including `mergeState`, `approvedBy`, `approvedFor`: the teams those approvals were on behalf of, and `waitingOn`: reviewers, people or teams, still asked), `ci` (`passed`/`failed`/`running`/`none`), `mergeBlocker` (what keeps it from merging besides CI, e.g. "1 approval missing", or null), `agentReview`, `ciFix` (the latest Fix CI result: `fixed`/`not-fixed`, with `stale` once newer commits landed), `approval` (the Slack asks for approval: `asks`, one per reviewer, each with `reviewer`, `channel`, `askedAt`, `recordedAt`, `source` (`drafted`, or `found` already sent), `bumpedAt`, `slackUrl`, and `approved` once that reviewer approved; and `unasked`: reviewers the PR waits on that no ask went to yet), and `requests`: where each request the board sent the PR's session stands, per step (`review`, `merge`, `fix-ci`, `ask-approval`, `bump`: `none`, `running`, or `stalled` when the session stopped without finishing). `owners` maps "owner/repo#number" to the session in charge of it.
 - `relay board` opens the human view, the Relay Board macOS app (prefix `B` inside relay does the same). It is for the user; read `--json` yourself.
 
 ## The session in charge of a PR
@@ -77,10 +77,11 @@ In **Human review**, the board's **Ask for Approval** button asks the session in
 - Only ever draft, with the Slack MCP draft tool (`slack_send_message_draft`). Never send or schedule a message.
 - Each ask reads `<full PR URL>. <one plain-English sentence on what the PR does and why>`, casual and lowercase, like recent messages in that channel.
 - It goes where that team or person takes review requests: search Slack for the team's channel, or earlier review requests to them. If the channel is unclear, ask the user instead of guessing. One message per channel: reviewers who share a channel share one.
+- Find before drafting: the user often asks for review in Slack himself. Search Slack with `slack_search_public_and_private` (review channels can be private) for messages containing the PR URL, and for `<repo>#<number>`, from the user or anyone. A message that asks for the PR's review in a reviewer's channel, or clearly asks their team elsewhere, is that reviewer's ask: don't draft, record it with `--existing` and the message's own permalink. If it's unclear whether a message counts, ask the user. Draft only for the rest, then tell the user which asks you found and linked and which you drafted.
 - When GitHub lists nobody the PR waits on but approvals are still missing, work out who from its required reviewers or CODEOWNERS.
-- Before a bump, find the ask as sent: search its channel for the user's message containing the PR URL. If the draft was never sent, say so and offer to draft it again instead of bumping. A bump is a reply in that message's thread (`thread_ts` is its ts). Skip asks whose reviewer has approved.
+- Before a bump, find the ask as sent: a found ask's link is already the message; otherwise search its channel for the user's message containing the PR URL. If the draft was never sent, say so and offer to draft it again instead of bumping. A bump is a reply in that message's thread (`thread_ts` is its ts, or its thread's when the ask is itself a reply). Skip asks whose reviewer has approved.
 
-**Always** record each ask right after drafting it, naming who it asks and where, so the card lists it and stops showing the request as running:
+**Always** record each ask right after drafting it, or finding it already sent, naming who it asks and where, so the card lists it and stops showing the request as running:
 
 ```sh
 # After drafting an ask: the reviewer by GitHub login or team slug, the channel's name, and the channel_link the draft tool returned
@@ -88,6 +89,9 @@ relay board approval <pr-url> --asked --for payments --channel payments-eng --sl
 
 # One message asking two reviewers who share a channel
 relay board approval <pr-url> --asked --for payments,sara --channel payments-eng --slack https://app.slack.com/client/T0123/C0456
+
+# An ask found already sent: the message's own permalink, whose ts says when it was asked
+relay board approval <pr-url> --asked --existing --for payments --channel payments-eng --slack https://acme.slack.com/archives/C0456/p1793643074057839
 
 # After drafting a bump: whose ask it bumps, and the permalink of the ask as the user sent it
 relay board approval <pr-url> --bumped --for payments --slack https://acme.slack.com/archives/C0456/p1793643074057839

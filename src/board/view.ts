@@ -401,7 +401,8 @@ function approvalsParts(card: BoardCard, lane: Lane): { row: RowView; notices: N
 /**
  * Each approval ask in Slack, a line per message (reviewers who share a channel can share one):
  * where it went, and how long ago it was asked or last bumped, opening it. Lines still waiting come
- * first; one whose reviewers all approved is checked off.
+ * first; one whose reviewers all approved is checked off. An ask found already sent reads the same,
+ * saying so only in its hint.
  */
 function slackRow(approval: ApprovalState, now: Date): RowView | null {
   const items = [...Map.groupBy(approval.asks, (ask) => ask.slackUrl)]
@@ -413,11 +414,12 @@ function slackRow(approval: ApprovalState, now: Date): RowView | null {
       const reviewers = asks.flatMap((ask) => (ask.reviewer ? [ask.reviewer] : []));
       const approved = asks.flatMap((ask) => (ask.approved && ask.reviewer ? [ask.reviewer] : []));
       const opens = `Open ${reviewers.length ? `the ask to ${AND.format(reviewers)}` : "the approval ask"} in Slack`;
+      const found = asks.some((ask) => ask.source === "found") ? "Found your earlier ask. " : "";
       return {
         text: channel ?? when.charAt(0).toUpperCase() + when.slice(1),
         note: channel ? when : null,
         tone: done ? "muted" : "link",
-        hint: approved.length ? `${AND.format(approved)} approved. ${opens}` : opens,
+        hint: `${approved.length ? `${AND.format(approved)} approved. ` : ""}${found}${opens}`,
         link: slackUrl,
         done,
       };

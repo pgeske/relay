@@ -1,5 +1,5 @@
 import type { BoardData, Check, PullRequest } from "./github.ts";
-import { AGENT_ACTIONS, type AgentAction, type AgentRequests, type AgentReview, type ApprovalAsk, type CiFix } from "./store.ts";
+import { AGENT_ACTIONS, type AgentAction, type AgentRequests, type AgentReview, type ApprovalAsk, type AskSource, type CiFix } from "./store.ts";
 
 /** Where a PR sits on its way from draft to merged, in the order work moves through them. */
 export type Lane = "draft" | "agent-review" | "human-review" | "approved-blocked" | "ready";
@@ -22,7 +22,12 @@ export interface ApprovalAskState {
   reviewer: string | null;
   /** The channel it went to ("#team-reviews"); null when unknown. */
   channel: string | null;
+  /** When it was asked: drafted, or for a found ask, when the message was sent. */
   askedAt: string;
+  /** When the session recorded it. */
+  recordedAt: string;
+  /** `drafted` by the session, or `found` already sent in Slack. */
+  source: AskSource;
   /** When a bump was last drafted in its thread; null until the first. */
   bumpedAt: string | null;
   /** Where the ask is in Slack. */
@@ -101,16 +106,17 @@ function answered(action: AgentAction, requestedAt: string, results: RequestResu
       return results.mergedAt !== null;
     case "ask-approval": {
       if (results.approval === undefined) return false;
-      // Every reviewer the PR waits on has an ask, at least one of them from this request. An ask
-      // that named no reviewer answered a request from before asks did, whoever it left out.
-      const since = results.approval.asks.filter((ask) => ask.askedAt >= requestedAt);
+      // Every reviewer the PR waits on has an ask, at least one of them recorded for this request
+      // (drafted, or found already sent). An ask that named no reviewer answered a request from
+      // before asks did, whoever it left out.
+      const since = results.approval.asks.filter((ask) => ask.recordedAt >= requestedAt);
       return since.some((ask) => ask.reviewer === null) || (since.length > 0 && results.approval.unasked.length === 0);
     }
     case "bump": {
       if (results.approval === undefined) return false;
-      // Each ask still waiting was bumped, or asked afresh (the session found it was never sent),
+      // Each ask still waiting was bumped, or recorded afresh (the session found it was never sent),
       // since the request. An ask that named no reviewer may be skipped: whether its people approved is the session's call.
-      const since = (ask: ApprovalAskState) => ask.askedAt >= requestedAt || (ask.bumpedAt ?? "") >= requestedAt;
+      const since = (ask: ApprovalAskState) => ask.recordedAt >= requestedAt || (ask.bumpedAt ?? "") >= requestedAt;
       const waiting = waitingAsks(results.approval);
       return waiting.length === 0 || (waiting.some(since) && waiting.every((ask) => ask.reviewer === null || since(ask)));
     }
@@ -185,10 +191,12 @@ export function approvalState(pr: Pick<PullRequest, "approvedBy" | "approvedFor"
   const approvers = new Set([...pr.approvedBy, ...pr.approvedFor].map((name) => name.toLowerCase()));
   const asked = new Set(asks.flatMap((ask) => (ask.reviewer === null ? [] : [ask.reviewer.toLowerCase()])));
   return {
-    asks: asks.map(({ reviewer, channel, askedAt, bumpedAt, slackUrl }) => ({
+    asks: asks.map(({ reviewer, channel, askedAt, recordedAt, source, bumpedAt, slackUrl }) => ({
       reviewer,
       channel,
       askedAt,
+      recordedAt,
+      source,
       bumpedAt,
       slackUrl,
       approved: reviewer !== null && approvers.has(reviewer.toLowerCase()),

@@ -36,13 +36,17 @@ function ciFix(overrides: Partial<CiFix> = {}): CiFix {
   return { repo: "acme/api", number: 1, headSha: "aaa", verdict: "fixed", summary: null, recordedAt: "2026-10-30T01:00:00Z", ...overrides };
 }
 
+/** A drafted ask, recorded when it was asked unless `overrides` says otherwise. */
 function approvalAsk(overrides: Partial<ApprovalAsk> = {}): ApprovalAsk {
+  const askedAt = overrides.askedAt ?? "2026-10-30T01:00:00Z";
   return {
     repo: "acme/api",
     number: 1,
     reviewer: "cache-team",
     channel: "#cache-team",
-    askedAt: "2026-10-30T01:00:00Z",
+    askedAt,
+    recordedAt: askedAt,
+    source: "drafted",
     bumpedAt: null,
     slackUrl: "https://app.slack.com/client/T1/C1",
     ...overrides,
@@ -244,6 +248,15 @@ describe("requestProgress", () => {
     expect(finished(approval([approvalAsk({ reviewer: null, channel: null, askedAt: minutesAgo(2) })], { waitingOn }))).toBe("none");
   });
 
+  test("an ask found already sent answers the request when recorded for it, though the message is older", () => {
+    const requests = { "ask-approval": minutesAgo(10) };
+    const finished = (state: ApprovalState) => requestProgress(requests, { mergedAt: null, approval: state }, live("idle"), now)["ask-approval"];
+    const found = approvalAsk({ askedAt: minutesAgo(3 * 24 * 60), recordedAt: minutesAgo(1), source: "found" });
+    expect(finished(approval([found], { waitingOn: ["cache-team"] }))).toBe("none");
+    // One found before this request doesn't answer it.
+    expect(finished(approval([{ ...found, recordedAt: minutesAgo(60) }], { waitingOn: ["cache-team"] }))).toBe("stalled");
+  });
+
   test("a bump request finishes once each ask still waiting was bumped, or asked afresh, after it; approved reviewers are skipped", () => {
     const requests = { bump: minutesAgo(10) };
     const finished = (state: ApprovalState) => requestProgress(requests, { mergedAt: null, approval: state }, live("idle"), now).bump;
@@ -315,7 +328,16 @@ describe("approvalState", () => {
   test("each ask keeps where it went and when it was asked and bumped", () => {
     const permalink = "https://acme.slack.com/archives/C1/p1793643074057839";
     expect(approval([approvalAsk({ bumpedAt: "2026-10-31T01:00:00Z", slackUrl: permalink })]).asks).toEqual([
-      { reviewer: "cache-team", channel: "#cache-team", askedAt: "2026-10-30T01:00:00Z", bumpedAt: "2026-10-31T01:00:00Z", slackUrl: permalink, approved: false },
+      {
+        reviewer: "cache-team",
+        channel: "#cache-team",
+        askedAt: "2026-10-30T01:00:00Z",
+        recordedAt: "2026-10-30T01:00:00Z",
+        source: "drafted",
+        bumpedAt: "2026-10-31T01:00:00Z",
+        slackUrl: permalink,
+        approved: false,
+      },
     ]);
   });
 
@@ -337,6 +359,14 @@ describe("approvalStep", () => {
   test("bumps once every reviewer it waits on was asked", () => {
     expect(approvalStep(approval([approvalAsk()], { waitingOn: ["cache-team"] }))).toBe("bump");
     expect(approvalStep(approval([approvalAsk({ reviewer: null })]))).toBe("bump");
+  });
+
+  test("an ask found already sent covers its reviewer like a drafted one, so the next step is Bump", () => {
+    const found = approvalAsk({ channel: "#cache-help", askedAt: "2026-11-03T22:57:23.786Z", recordedAt: "2026-11-04T01:00:00Z", source: "found" });
+    const state = approval([found], { waitingOn: ["cache-team"] });
+    expect(state.unasked).toEqual([]);
+    expect(approvalStep(state)).toBe("bump");
+    expect(waitingAsks(state)).toMatchObject([{ reviewer: "cache-team", source: "found" }]);
   });
 
   test("asks when nobody is listed and no ask still waits, so the session works out who", () => {

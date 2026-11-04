@@ -106,9 +106,14 @@ interface PromptContext {
   approvedBy: string[];
 }
 
-/** Asks each reviewer the PR waits on that no ask went to yet, in that reviewer's own channel; with none listed, the session works out who. */
+/**
+ * Asks each reviewer the PR waits on that no ask went to yet, in that reviewer's own channel; with
+ * none listed, the session works out who. It first looks for asks the user already sent outside the
+ * board, and links those instead of drafting again.
+ */
 export function askApprovalPrompt(url: string, { approval, approvedBy }: PromptContext): string {
   const { unasked } = approval;
+  const { repo, number } = parsePrRef(url);
   const asked = approval.asks.flatMap((ask) => (ask.reviewer ? [`${ask.reviewer}${ask.channel ? ` in ${ask.channel}` : ""}`] : []));
   const leaveOut = [approvedBy.length ? `approved already (${approvedBy.join(", ")})` : null, asked.length ? `was asked already (${asked.join(", ")})` : null]
     .filter((part): part is string => part !== null)
@@ -119,13 +124,18 @@ export function askApprovalPrompt(url: string, { approval, approvedBy }: PromptC
       `(the owners of the files it changes; its merge gate's status may say what's missing)${leaveOut ? `, leaving out anyone who ${leaveOut}` : ""}, and ask each of them.`;
   return (
     `I pressed Ask for Approval on the relay board for ${url}. ${who} ${DRAFT_ONLY} ` +
-    `For each reviewer, find the Slack channel where that team or person takes review requests: search Slack for the team's channel, or for earlier review requests sent to them. ` +
+    `First, find asks already sent: I often ask for review in Slack myself, outside the board. Search Slack with slack_search_public_and_private ` +
+    `(review channels can be private) for messages containing ${url}, and for ${repo.split("/")[1]}#${number}, mine or anyone's. ` +
+    `Then, for each reviewer, find the Slack channel where that team or person takes review requests: search Slack for the team's channel, or for earlier review requests sent to them. ` +
     `If a reviewer's channel is unclear, ask me which instead of guessing, and don't draft for them yet. ` +
-    `Draft one message per channel (reviewers who share a channel share one), written as \`${url}. <one plain-English sentence on what the PR does and why>\`, ` +
+    `If a message you found asks for this PR's review in that channel, or elsewhere but clearly asks that reviewer's team, don't draft for them: ` +
+    `record it with \`relay board approval ${url} --asked --existing --for <reviewer> --channel <channel-name> --slack <permalink>\`, ` +
+    `using that message's own permalink (the board reads when it was asked from it). If you can't tell whether a message you found counts as asking a reviewer, ask me instead of guessing. ` +
+    `For every other reviewer, draft one message per channel (reviewers who share a channel share one), written as \`${url}. <one plain-English sentence on what the PR does and why>\`, ` +
     `casual and lowercase, matching recent messages in that channel. Right after each draft, record it with ` +
-    `\`relay board approval ${url} --asked --for <reviewer> --channel <channel-name> --slack <link>\`, naming the reviewers it asks by GitHub login or team slug ` +
-    `(comma-separated when one message asks several), the channel by its name without the # (a shell reads # as a comment), and using the channel link the draft tool returned. ` +
-    `Then tell me, for each reviewer, the channel and what the draft says.`
+    `\`relay board approval ${url} --asked --for <reviewer> --channel <channel-name> --slack <link>\`, using the channel link the draft tool returned. ` +
+    `Either way, name the reviewers by GitHub login or team slug (comma-separated when one message asks several) and the channel by its name without the # (a shell reads # as a comment). ` +
+    `Then tell me which asks you found and linked, with each one's channel and link, and which you drafted, with each one's channel and what it says.`
   );
 }
 
@@ -133,7 +143,8 @@ export function askApprovalPrompt(url: string, { approval, approvedBy }: PromptC
 export function bumpPrompt(url: string, { approval, approvedBy }: PromptContext): string {
   const asks = waitingAsks(approval).map((ask, index) =>
     ask.reviewer
-      ? `(${index + 1}) the ask to ${ask.reviewer}${ask.channel ? ` in ${ask.channel}` : ""}, which the board has at ${ask.slackUrl}: ` +
+      ? `(${index + 1}) the ask to ${ask.reviewer}${ask.channel ? ` in ${ask.channel}` : ""}, which the board has at ${ask.slackUrl}` +
+        `${ask.source === "found" ? " (found already sent: that link is the message itself)" : ""}: ` +
         `record its bump with \`relay board approval ${url} --bumped --for ${ask.reviewer} --slack <permalink>\``
       : `(${index + 1}) an ask from before the board noted who an ask was for, which it has at ${ask.slackUrl}: find who it asked, and skip it if they've approved since` +
         `${approvedBy.length ? ` (so far ${approvedBy.join(", ")} approved)` : ""}; else record its bump with ` +
@@ -143,10 +154,12 @@ export function bumpPrompt(url: string, { approval, approvedBy }: PromptContext)
   return (
     `I pressed Bump on the relay board for ${url}: it still waits on approvals. Bump each of these asks, whose reviewer hasn't approved yet` +
     `${approved.length ? ` (leave out the asks to ${approved.join(", ")}: they approved)` : ""}: ${asks.join("; ")}. ` +
-    `For each, first find the ask as I actually sent it: I send drafts myself, so search its channel for my message containing ${url}. ` +
+    `For each, first find the ask as I actually sent it: when the board's link is a message permalink, that's the message; otherwise I send drafts myself, ` +
+    `so search its channel for my message containing ${url}. ` +
     `If I never sent it, don't bump it: tell me so, and offer to draft it again (if I say yes, draft it like a first ask and record it with ` +
     `\`relay board approval ${url} --asked --for <reviewer> --channel <channel-name> --slack <link>\`). Otherwise draft a short, casual, lowercase bump as a reply ` +
-    `in that message's thread (the draft tool's thread_ts is the message's ts); asks that share a message share one bump, recorded for each. ${DRAFT_ONLY} ` +
+    `in that message's thread (the draft tool's thread_ts is the message's ts, or its thread's when the ask is itself a reply in a thread); ` +
+    `asks that share a message share one bump, recorded for each. ${DRAFT_ONLY} ` +
     `Record each bump right after drafting it, with the sent message's permalink, so the board links to its thread. Then tell me where each draft is and what it says.`
   );
 }

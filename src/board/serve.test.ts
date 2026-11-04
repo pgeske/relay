@@ -39,6 +39,8 @@ describe("the Slack steps' prompts", () => {
     reviewer,
     channel,
     askedAt: "2026-11-01T00:00:00Z",
+    recordedAt: "2026-11-01T00:00:00Z",
+    source: "drafted",
     bumpedAt: null,
     slackUrl: `https://acme.slack.com/archives/${reviewer ?? "old"}/p1`,
   });
@@ -60,6 +62,20 @@ describe("the Slack steps' prompts", () => {
     expect(prompt).toContain("leaving out anyone who approved already (pat) or was asked already (sre in #sre)");
   });
 
+  test("Ask for Approval first looks for asks already sent, linking those it finds, and drafts only for the rest", () => {
+    const approval = approvalState({ waitingOn: ["cache-team"], approvedBy: [], approvedFor: [] }, []);
+    const prompt = askApprovalPrompt(url, { approval, approvedBy: [] });
+    const search = prompt.indexOf("slack_search_public_and_private");
+    const link = prompt.indexOf(`\`relay board approval ${url} --asked --existing --for <reviewer> --channel <channel-name> --slack <permalink>\``);
+    const draft = prompt.indexOf(`\`relay board approval ${url} --asked --for <reviewer> --channel <channel-name> --slack <link>\``);
+    // It searches for the PR both ways it's written: its URL, and repo#number.
+    expect(prompt.slice(search)).toContain(url);
+    expect(prompt.slice(search)).toContain("api#1");
+    expect([search, link, draft].every((at) => at >= 0)).toBe(true);
+    expect(search).toBeLessThan(link);
+    expect(link).toBeLessThan(draft);
+  });
+
   test("Bump lists each ask still waiting, and leaves out those whose reviewer approved", () => {
     const asks = [ask("cache-team", "#cache-team"), ask("infra", "#infra"), ask(null, null)];
     const approval = approvalState({ waitingOn: ["cache-team"], approvedBy: ["pat"], approvedFor: ["infra"] }, asks);
@@ -70,5 +86,14 @@ describe("the Slack steps' prompts", () => {
     expect(prompt).toContain(`\`relay board approval ${url} --bumped --channel <channel-name> --slack <permalink>\``);
     expect(prompt).toContain("(leave out the asks to infra: they approved)");
     expect(prompt).not.toContain("--for infra");
+  });
+
+  test("Bump treats an ask found already sent as the message itself", () => {
+    const found: ApprovalAsk = { ...ask("cache-team", "#cache-help"), source: "found", slackUrl: "https://acme.slack.com/archives/C1/p1793746643786509" };
+    const prompt = bumpPrompt(url, { approval: approvalState({ waitingOn: ["cache-team"], approvedBy: [], approvedFor: [] }, [found]), approvedBy: [] });
+    expect(prompt).toContain("which the board has at https://acme.slack.com/archives/C1/p1793746643786509 (found already sent");
+    expect(prompt).toContain(`\`relay board approval ${url} --bumped --for cache-team --slack <permalink>\``);
+    // A drafted ask isn't marked.
+    expect(bumpPrompt(url, { approval: approvalState({ waitingOn: ["cache-team"], approvedBy: [], approvedFor: [] }, [ask("cache-team", "#cc")]), approvedBy: [] })).not.toContain("found already sent");
   });
 });

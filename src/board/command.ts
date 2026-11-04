@@ -40,6 +40,10 @@ Usage:
                                       reviewers (GitHub logins or team slugs) for the PR's
                                       approval in <channel> (its name; a leading # is optional)
                                       (<link>: the channel link the draft tool gave)
+  relay board approval <pr> --asked --existing --for <reviewer>[,…] --channel <channel> --slack <permalink>
+                                      Record an ask you found already sent in Slack instead of
+                                      drafting one; it counts as asked when that message was sent
+                                      (<permalink>: the message's own, which gives its time)
   relay board approval <pr> --bumped [--for <reviewer>[,…]] [--channel <channel>] --slack <permalink>
                                       Record that you drafted a bump in an ask's thread; its
                                       link moves to <permalink>, the message as sent (no --for:
@@ -193,6 +197,16 @@ export function parseSlackLink(link: string): string {
   return url.href;
 }
 
+/**
+ * When a Slack message was sent, from its permalink: ".../archives/C0456/p1793643074057839" holds
+ * its ts, 1793643074.057839, in seconds. A thread reply's permalink names the reply's own ts the same way.
+ */
+export function permalinkTime(link: string): string {
+  const ts = /\/archives\/[^/]+\/p(\d{10})(\d{6})$/.exec(new URL(link).pathname);
+  if (!ts) throw new Error(`--existing needs the found message's permalink, like https://acme.slack.com/archives/C0456/p1793643074057839, got ${link}`);
+  return new Date(Number(ts[1]) * 1000 + Math.floor(Number(ts[2]) / 1000)).toISOString();
+}
+
 /** "@acme/cache-team,sara" → ["cache-team", "sara"]: reviewers as a PR's `waitingOn` names them, by login or team slug. */
 export function parseReviewers(value: string): string[] {
   const reviewers = value
@@ -219,6 +233,8 @@ function recordApproval(args: string[]): void {
   if (!rawRef) throw new Error(`missing <pr>\n\n${BOARD_HELP}`);
   const asked = args.includes("--asked");
   if (asked === args.includes("--bumped")) throw new Error("give exactly one of --asked or --bumped");
+  const existing = args.includes("--existing");
+  if (existing && !asked) throw new Error("--existing goes with --asked: it records an ask found already sent");
   const link = flagValue(args, "--slack");
   if (link === undefined) throw new Error("--slack <link> is required: where the ask is in Slack");
   const slackUrl = parseSlackLink(link);
@@ -231,13 +247,15 @@ function recordApproval(args: string[]): void {
   const channel = channelValue === undefined ? null : parseChannel(channelValue);
   const { repo, number } = parsePrRef(rawRef);
   const at = new Date().toISOString();
+  // A found ask was asked when its message was sent, not when the session found it.
+  const askedAt = existing ? permalinkTime(slackUrl) : at;
   const db = openBoardStore();
   try {
     db.transaction(() => {
       for (const reviewer of reviewers) {
         // An ask always names its reviewer and channel (required above); a bump may name neither.
         if (asked && reviewer !== null && channel !== null) {
-          recordApprovalAsk(db, { repo, number, reviewer, channel, slackUrl, askedAt: at });
+          recordApprovalAsk(db, { repo, number, reviewer, channel, slackUrl, askedAt, recordedAt: at, source: existing ? "found" : "drafted" });
         } else if (!recordApprovalBump(db, { repo, number, reviewer, channel, slackUrl, bumpedAt: at })) {
           throw new Error(
             reviewer === null
@@ -251,7 +269,8 @@ function recordApproval(args: string[]): void {
     db.close();
   }
   const who = forValue === undefined ? "" : ` for ${reviewers.join(", ")}`;
-  console.log(`recorded ${asked ? "approval ask" : "bump"} of ${repo}#${number}${who}${channel ? ` in ${channel}` : ""}: ${slackUrl}`);
+  const what = asked ? (existing ? "approval ask found already sent" : "approval ask") : "bump";
+  console.log(`recorded ${what} of ${repo}#${number}${who}${channel ? ` in ${channel}` : ""}: ${slackUrl}`);
 }
 
 /**
