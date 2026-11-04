@@ -13,7 +13,7 @@ struct RelayBoardApp: App {
         Window("Relay Board", id: "board") {
             BoardWindow()
                 .environment(model)
-                .frame(minWidth: 820, minHeight: 520)
+                .frame(minWidth: 520, minHeight: 520)
         }
         .defaultSize(width: 1720, height: 980)
         .commands {

@@ -67,7 +67,7 @@ private struct Sidebar: View {
 
     var body: some View {
         List(selection: $selection) {
-            Label("All Lanes", systemImage: "rectangle.split.3x1")
+            Label("All Lanes", systemImage: "rectangle.grid.1x2")
                 .badge(model.lanes.filter { $0.id != "merged" }.reduce(0) { $0 + $1.cards.count })
                 .tag(SidebarItem.all)
             if !model.lanes.isEmpty {
@@ -135,7 +135,7 @@ private struct BoardContent: View {
         } else if case .lane(let id) = selection, let lane = lanes.first(where: { $0.id == id }) {
             LaneGridView(lane: lane)
         } else {
-            KanbanView(lanes: lanes)
+            LanesView(lanes: lanes)
         }
     }
 

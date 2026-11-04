@@ -1,121 +1,157 @@
 import SwiftUI
 
-/// Every lane side by side, left to right as work moves. Columns share the window's width down
-/// to a readable minimum, then the board scrolls sideways.
-struct KanbanView: View {
+/// Every lane top to bottom in work order, each a section whose cards wrap to the window's width.
+/// Headers stay pinned while their section scrolls by; clicking one folds the section.
+struct LanesView: View {
     let lanes: [Lane]
 
-    private let spacing: CGFloat = 10
-    private let padding: CGFloat = 14
-    private var minimumWidth: CGFloat { 232 * Zoom.shared.scale }
-
     var body: some View {
-        GeometryReader { geometry in
-            let count = CGFloat(max(lanes.count, 1))
-            let width = max(minimumWidth, (geometry.size.width - padding * 2 - spacing * (count - 1)) / count)
-            ScrollView(.horizontal) {
-                HStack(alignment: .top, spacing: spacing) {
-                    ForEach(lanes) { lane in
-                        LaneColumn(lane: lane).frame(width: width)
-                    }
-                }
-                .padding(padding)
-                .frame(height: geometry.size.height)
+        ScrollView {
+            LazyVStack(alignment: .leading, spacing: 0, pinnedViews: [.sectionHeaders]) {
+                ForEach(lanes) { LaneSection(lane: $0) }
             }
+            .padding(.top, 6)
+            .padding(.bottom, 16)
         }
     }
 }
 
-/// One lane: its header, then its cards, scrolling on their own.
-private struct LaneColumn: View {
+/// One lane in the list: its header, then its cards unless it's folded or empty.
+private struct LaneSection: View {
     let lane: Lane
+    @AppStorage private var folded: Bool
+
+    init(lane: Lane) {
+        self.lane = lane
+        // Merged is history: it starts folded.
+        _folded = AppStorage(wrappedValue: lane.id == "merged", "lane.\(lane.id).folded")
+    }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            LaneHeader(lane: lane)
-                .padding(.horizontal, 14)
-                .padding(.top, 12)
-                .padding(.bottom, 10)
-            ScrollView(.vertical) {
-                LazyVStack(spacing: 8) {
-                    ForEach(lane.cards) { CardView(card: $0, muted: lane.id == "merged") }
-                    if lane.cards.isEmpty {
-                        Text("Nothing here")
-                            .font(.zoomed(.callout))
-                            .foregroundStyle(.tertiary)
-                            .frame(maxWidth: .infinity)
-                            .padding(.vertical, 28)
+        Section {
+            if !folded && !lane.cards.isEmpty {
+                CardGrid(lane: lane)
+                    .padding(8)
+                    .background {
+                        RoundedRectangle(cornerRadius: 18, style: .continuous)
+                            .fill(lane.lit ? AnyShapeStyle(lane.tint.opacity(0.08)) : AnyShapeStyle(.quinary))
                     }
-                }
-                .padding(.horizontal, 8)
-                .padding(.bottom, 8)
+                    .padding(.horizontal, 16)
+                    .padding(.bottom, 10)
             }
-            .scrollIndicators(.never)
-        }
-        .frame(maxHeight: .infinity, alignment: .top)
-        .background {
-            RoundedRectangle(cornerRadius: 18, style: .continuous)
-                .fill(lane.hot && !lane.cards.isEmpty ? AnyShapeStyle(lane.tint.opacity(0.08)) : AnyShapeStyle(.quinary))
+        } header: {
+            SectionHeader(lane: lane, folded: $folded)
         }
     }
 }
 
-struct LaneHeader: View {
+/// A lane's one-line header: chevron, symbol, title, count, and its hint. Pinned, so it hides the
+/// cards scrolling under it.
+private struct SectionHeader: View {
     let lane: Lane
-    var large = false
+    @Binding var folded: Bool
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 3) {
+        Button {
+            withAnimation(.snappy(duration: 0.25)) { folded.toggle() }
+        } label: {
             HStack(spacing: 7) {
+                Image(systemName: "chevron.right")
+                    .font(.zoomed(size: 10, weight: .semibold))
+                    .foregroundStyle(.tertiary)
+                    .rotationEffect(.degrees(folded || empty ? 0 : 90))
+                    .opacity(empty ? 0 : 1)
                 Image(systemName: lane.symbol)
+                    .font(.zoomed(.callout))
                     .foregroundStyle(lane.tint)
-                    .font(.zoomed(large ? .title3 : .callout))
                 Text(lane.title)
-                    .font(large ? .zoomed(.title2).weight(.semibold) : .zoomedHeadline)
-                    .lineLimit(1)
-                Spacer(minLength: 4)
-                count
+                    .font(.zoomedHeadline)
+                    .foregroundStyle(empty ? .secondary : .primary)
+                    // The hint gives way first when the window is narrow.
+                    .layoutPriority(1)
+                LaneCount(lane: lane)
+                Text(empty ? "Nothing here" : lane.hint)
+                    .font(.zoomed(.callout))
+                    .foregroundStyle(empty ? .tertiary : .secondary)
+                    .padding(.leading, 4)
+                    .help(lane.hint)
+                Spacer(minLength: 0)
             }
-            // One line, so every lane's cards start at the same height.
-            Text(lane.hint)
-                .font(.zoomed(large ? .callout : .caption))
-                .foregroundStyle(.secondary)
-                .lineLimit(1)
-                .help(lane.hint)
+            .lineLimit(1)
+            .padding(.horizontal, 22)
+            .padding(.vertical, 9)
+            .contentShape(.rect)
         }
+        .buttonStyle(.plain)
+        .disabled(empty)
+        .background(.background)
+        .help(empty ? lane.hint : folded ? "Show \(lane.title)" : "Fold \(lane.title)")
     }
 
-    /// Lanes waiting on you light their count up while they hold anything.
-    private var count: some View {
-        let lit = lane.hot && !lane.cards.isEmpty
-        return Text("\(lane.cards.count)")
-            .font(.zoomed(.caption).weight(.semibold))
-            .monospacedDigit()
-            .foregroundStyle(lit ? AnyShapeStyle(.white) : AnyShapeStyle(.secondary))
-            .padding(.horizontal, 7)
-            .padding(.vertical, 2)
-            .background(lit ? AnyShapeStyle(lane.tint) : AnyShapeStyle(.quaternary), in: .capsule)
-    }
+    private var empty: Bool { lane.cards.isEmpty }
 }
 
-/// One lane on its own, its cards in a grid that fills the window.
+/// One lane on its own: a larger header over the same grid of cards.
 struct LaneGridView: View {
     let lane: Lane
 
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 16) {
-                LaneHeader(lane: lane, large: true)
+                VStack(alignment: .leading, spacing: 3) {
+                    HStack(spacing: 8) {
+                        Image(systemName: lane.symbol)
+                            .font(.zoomed(.title3))
+                            .foregroundStyle(lane.tint)
+                        Text(lane.title)
+                            .font(.zoomed(.title2).weight(.semibold))
+                        LaneCount(lane: lane)
+                    }
+                    Text(lane.hint)
+                        .font(.zoomed(.callout))
+                        .foregroundStyle(.secondary)
+                }
+                .lineLimit(1)
                 if lane.cards.isEmpty {
                     ContentUnavailableView("Nothing in \(lane.title)", systemImage: lane.symbol, description: Text(lane.hint))
                         .padding(.top, 60)
                 } else {
-                    LazyVGrid(columns: [GridItem(.adaptive(minimum: 300, maximum: 440), spacing: 12, alignment: .top)], spacing: 12) {
-                        ForEach(lane.cards) { CardView(card: $0, muted: lane.id == "merged") }
-                    }
+                    CardGrid(lane: lane)
                 }
             }
             .padding(20)
         }
     }
+}
+
+/// A lane's cards, as many across as fit and top-aligned, never wider than a card reads well.
+private struct CardGrid: View {
+    let lane: Lane
+
+    var body: some View {
+        let zoom = Zoom.shared.scale
+        LazyVGrid(columns: [GridItem(.adaptive(minimum: 260 * zoom, maximum: 380 * zoom), spacing: 10, alignment: .top)], alignment: .leading, spacing: 10) {
+            ForEach(lane.cards) { CardView(card: $0, muted: lane.id == "merged") }
+        }
+    }
+}
+
+/// How many cards a lane holds; lanes waiting on you light it up while they hold anything.
+private struct LaneCount: View {
+    let lane: Lane
+
+    var body: some View {
+        Text("\(lane.cards.count)")
+            .font(.zoomed(.caption).weight(.semibold))
+            .monospacedDigit()
+            .foregroundStyle(lane.lit ? AnyShapeStyle(.white) : AnyShapeStyle(.secondary))
+            .padding(.horizontal, 7)
+            .padding(.vertical, 2)
+            .background(lane.lit ? AnyShapeStyle(lane.tint) : AnyShapeStyle(.quaternary), in: .capsule)
+    }
+}
+
+private extension Lane {
+    /// A lane waiting on you that holds anything.
+    var lit: Bool { hot && !cards.isEmpty }
 }
