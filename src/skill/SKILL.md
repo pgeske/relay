@@ -19,12 +19,12 @@ After the lanes: PRs merged recently. PRs waiting on the user's review aren't on
 
 ## Reading the board
 
-- `relay board --json` for data. Each card has `pr` (including `mergeState`, `approvedBy`, and `waitingOn`: reviewers still asked), `ci` (`passed`/`failed`/`running`/`none`), `mergeBlocker` (what keeps it from merging besides CI, e.g. "1 approval missing", or null), `agentReview`, `ciFix` (the latest Fix CI result: `fixed`/`not-fixed`, with `stale` once newer commits landed), `approval` (the Slack message asking for approval: `not-asked`, or `asked`/`bumped` with `askedAt`, `bumpedAt`, and `slackUrl`), and `requests`: where each request the board sent the PR's session stands, per step (`review`, `merge`, `fix-ci`, `ask-approval`, `bump`: `none`, `running`, or `stalled` when the session stopped without finishing). `owners` maps "owner/repo#number" to the session in charge of it.
+- `relay board --json` for data. Each card has `pr` (including `mergeState`, `approvedBy`, `approvedFor`: the teams those approvals were on behalf of, and `waitingOn`: reviewers, people or teams, still asked), `ci` (`passed`/`failed`/`running`/`none`), `mergeBlocker` (what keeps it from merging besides CI, e.g. "1 approval missing", or null), `agentReview`, `ciFix` (the latest Fix CI result: `fixed`/`not-fixed`, with `stale` once newer commits landed), `approval` (the Slack asks for approval: `asks`, one per reviewer, each with `reviewer`, `channel`, `askedAt`, `bumpedAt`, `slackUrl`, and `approved` once that reviewer approved; and `unasked`: reviewers the PR waits on that no ask went to yet), and `requests`: where each request the board sent the PR's session stands, per step (`review`, `merge`, `fix-ci`, `ask-approval`, `bump`: `none`, `running`, or `stalled` when the session stopped without finishing). `owners` maps "owner/repo#number" to the session in charge of it.
 - `relay board` opens the human view, the Relay Board macOS app (prefix `B` inside relay does the same). It is for the user; read `--json` yourself.
 
 ## The session in charge of a PR
 
-The omp session that opens a PR (`gh pr create`) is in charge of it: relay links them on its own, and the board's buttons send that session its work: run a reviewer agent on the PR, fix its failing CI, draft a Slack message asking for approval (then a bump of it), or merge it. When such a request arrives, do it in this session so the PR's history stays in one place. The board follows each request until it's done: a review, CI fix, approval ask, or bump when you record it (below), a merge when the PR merges.
+The omp session that opens a PR (`gh pr create`) is in charge of it: relay links them on its own, and the board's buttons send that session its work: run a reviewer agent on the PR, fix its failing CI, draft Slack messages asking its reviewers for approval (then bumps of them), or merge it. When such a request arrives, do it in this session so the PR's history stays in one place. The board follows each request until it's done: a review or CI fix when you record it (below), approval asks once every reviewer the PR waits on has one recorded, bumps once each ask still waiting has one recorded, a merge when the PR merges.
 
 When you take over a PR that another session opened, and will keep working on it here, claim it:
 
@@ -70,25 +70,29 @@ EOF
 - The result is tied to the PR's head commit when you record it, so record after pushing a fix. The board shows it until the next commit.
 - The summary is what the user sees when they click the result on the board: what failed, whether it was flaky, and what you did, or why it couldn't be fixed.
 
-## Recording an approval ask or bump
+## Recording approval asks and bumps
 
-In **Human review**, the board's **Ask for Approval** button asks the session in charge to draft a Slack message asking for a review; once an ask is recorded, the button becomes **Bump**, which asks it to draft a short bump in the ask's thread. The user sends every message:
+In **Human review**, the board's **Ask for Approval** button asks the session in charge to draft a Slack message asking each reviewer the PR still waits on (a person or a team) for a review, in the channel where that reviewer takes review requests. It only names reviewers no ask went to yet. Once every reviewer it waits on has an ask, the button becomes **Bump**, which asks the session to draft a short bump in the thread of each ask whose reviewer hasn't approved yet. The user sends every message:
 
 - Only ever draft, with the Slack MCP draft tool (`slack_send_message_draft`). Never send or schedule a message.
-- The ask reads `<full PR URL>. <one plain-English sentence on what the PR does and why>`, casual and lowercase, like the user's recent messages in that channel.
-- It goes where the user usually asks for reviews for that repo or team: search the user's recent Slack messages for earlier review requests. If the channel is unclear, ask the user instead of guessing.
-- Before a bump, find the ask as sent: search Slack for the user's message containing the PR URL. If the draft was never sent, say so and offer to draft it again instead of bumping. A bump is a reply in that message's thread (`thread_ts` is its ts).
+- Each ask reads `<full PR URL>. <one plain-English sentence on what the PR does and why>`, casual and lowercase, like recent messages in that channel.
+- It goes where that team or person takes review requests: search Slack for the team's channel, or earlier review requests to them. If the channel is unclear, ask the user instead of guessing. One message per channel: reviewers who share a channel share one.
+- When GitHub lists nobody the PR waits on but approvals are still missing, work out who from its required reviewers or CODEOWNERS.
+- Before a bump, find the ask as sent: search its channel for the user's message containing the PR URL. If the draft was never sent, say so and offer to draft it again instead of bumping. A bump is a reply in that message's thread (`thread_ts` is its ts). Skip asks whose reviewer has approved.
 
-**Always** record right after drafting, so the card links to the ask and stops showing the request as running:
+**Always** record each ask right after drafting it, naming who it asks and where, so the card lists it and stops showing the request as running:
 
 ```sh
-# After drafting the ask: the channel_link the draft tool returned
-relay board approval <pr-url> --asked --slack https://app.slack.com/client/T0123/C0456
+# After drafting an ask: the reviewer by GitHub login or team slug, the channel's name, and the channel_link the draft tool returned
+relay board approval <pr-url> --asked --for payments --channel payments-eng --slack https://app.slack.com/client/T0123/C0456
 
-# After drafting a bump: the permalink of the ask as the user sent it
-relay board approval <pr-url> --bumped --slack https://acme.slack.com/archives/C0456/p1793643074057839
+# One message asking two reviewers who share a channel
+relay board approval <pr-url> --asked --for payments,sara --channel payments-eng --slack https://app.slack.com/client/T0123/C0456
+
+# After drafting a bump: whose ask it bumps, and the permalink of the ask as the user sent it
+relay board approval <pr-url> --bumped --for payments --slack https://acme.slack.com/archives/C0456/p1793643074057839
 ```
 
-- `--slack` must be a Slack link (https on slack.com). The card's Slack row (**Asked 2d ago**, **Bumped 1d ago**) opens it.
-- `--bumped` moves the recorded link to the permalink, so later bumps and the board go straight to the thread. It needs an ask recorded first.
-- Recording `--asked` again (say, re-drafting an ask that was never sent) starts over: it replaces the ask and forgets its bumps.
+- `--channel` takes the channel's name without its `#`, which a shell would read as a comment. `--slack` must be a Slack link (https on slack.com). The card's Slack row lists each ask (**#payments-eng · asked 2d ago**, **#infra · bumped 1d ago**) and opens it; an ask whose reviewer approved is checked off.
+- `--bumped` moves the ask's recorded link to the permalink, so later bumps and the board go straight to the thread. It needs that reviewer's ask recorded first. An ask recorded before asks named their reviewer has none: bump it without `--for`, adding `--channel` to note where it is.
+- Recording `--asked` again for a reviewer (say, re-drafting an ask that was never sent) starts that reviewer's ask over: it replaces the ask and forgets its bumps.

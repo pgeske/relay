@@ -70,6 +70,23 @@ struct Row: Decodable, Sendable, Hashable {
     var detail: Detail?
     /// Clicking opens this, like the approval ask in Slack.
     var link: URL?
+    /// A row about several things lists them one per line in place of its value, like the Slack
+    /// row's line per approval ask. Absent from an older relay's rows.
+    var items: [RowItem]?
+}
+
+/// One line of a row that lists several things, like an approval ask in Slack.
+struct RowItem: Decodable, Sendable, Hashable {
+    /// What the line is about, like the channel an ask went to.
+    var text: String
+    /// Said after it, quieter, like how long ago the ask was sent.
+    var note: String?
+    var tone: Tone
+    var hint: String?
+    /// Clicking opens this.
+    var link: URL?
+    /// Taken care of, like an ask whose reviewer approved: checked off, its text muted.
+    var done: Bool
 }
 
 /// Something on the card that needs you, like a request that stopped without a result.

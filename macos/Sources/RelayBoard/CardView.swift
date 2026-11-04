@@ -143,14 +143,19 @@ private struct StatusRows: View {
         Grid(alignment: .leading, horizontalSpacing: 10, verticalSpacing: 5) {
             ForEach(card.rows, id: \.kind) { row in
                 GridRow(alignment: .firstTextBaseline) {
-                    HStack(alignment: .firstTextBaseline, spacing: 5) {
+                    // Symbols differ in width and baseline; a fixed centered box lines the labels up.
+                    HStack(alignment: .center, spacing: 5) {
                         Image(systemName: row.symbol)
-                            .frame(width: 13 * Zoom.shared.scale)
+                            .frame(width: 16 * Zoom.shared.scale, alignment: .center)
                         Text(row.label).lineLimit(1).fixedSize()
                     }
                     .foregroundStyle(.secondary)
                     .gridColumnAlignment(.leading)
-                    RowValue(row: row, card: card)
+                    if let items = row.items, !items.isEmpty {
+                        RowItems(row: row, items: items, card: card)
+                    } else {
+                        RowValue(row: row, card: card)
+                    }
                 }
             }
         }
@@ -226,6 +231,142 @@ private struct RowValue: View {
         .background(Color.primary.opacity(hovering && row.action == nil ? 0.07 : 0), in: .rect(cornerRadius: 5))
         .padding(.horizontal, -4)
         .contentShape(.rect)
+    }
+}
+
+/// A row about several things, a line each, like each Slack ask for the PR's approval. Past two, the
+/// rest fold into "+N more", which shows them all.
+private struct RowItems: View {
+    let row: Row
+    let items: [RowItem]
+    let card: Card
+
+    private let shown = 2
+    @State private var hovering = false
+    @State private var showingAll = false
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 3) {
+            ForEach(Array(items.prefix(shown).enumerated()), id: \.offset) { _, item in
+                ItemLine(item: item)
+            }
+            if items.count > shown {
+                Button { showingAll = true } label: { more }
+                    .buttonStyle(.plain)
+                    .onHover { hovering = $0 }
+                    .pointerStyle(.link)
+                    .help("Show all \(items.count)")
+                    .popover(isPresented: $showingAll, arrowEdge: .bottom) { ItemsPopover(title: row.label, items: items, card: card) }
+            }
+        }
+        // Takes the value column's whole width, so the grid sizes the rows above at that width too.
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private var more: some View {
+        HStack(spacing: 3) {
+            Text("+\(items.count - shown) more")
+            Image(systemName: "chevron.down").font(.zoomed(size: 7, weight: .bold))
+        }
+        .font(.zoomed(.caption).weight(.semibold))
+        .foregroundStyle(.secondary)
+        .padding(.horizontal, 4)
+        .padding(.vertical, 1)
+        .background(Color.primary.opacity(hovering ? 0.07 : 0), in: .rect(cornerRadius: 5))
+        .padding(.horizontal, -4)
+        // In line with the lines' text, past their dots.
+        .padding(.leading, 9 * Zoom.shared.scale + 5)
+        .contentShape(.rect)
+    }
+}
+
+/// One line of a row's list, in its tone, opening its link: a dot, or a check once it's taken care
+/// of, then its text and a quieter note, which goes under the text when both don't fit on one line.
+private struct ItemLine: View {
+    let item: RowItem
+
+    @Environment(\.openURL) private var openURL
+    @State private var hovering = false
+
+    var body: some View {
+        if let link = item.link {
+            Button { openURL(link) } label: { content }
+                .buttonStyle(.plain)
+                .onHover { hovering = $0 }
+                .pointerStyle(.link)
+                .help(item.hint ?? "")
+        } else {
+            content.help(item.hint ?? "")
+        }
+    }
+
+    private var content: some View {
+        HStack(alignment: .firstTextBaseline, spacing: 5) {
+            if item.done {
+                Image(systemName: "checkmark")
+                    .font(.zoomed(size: 8, weight: .heavy))
+                    .foregroundStyle(Color.boardGreen)
+                    .frame(width: 9 * Zoom.shared.scale)
+            } else {
+                ToneDot(tone: item.tone, running: false)
+            }
+            // One line when it fits; else the note goes under the text, which may wrap.
+            ViewThatFits(in: .horizontal) {
+                HStack(alignment: .firstTextBaseline, spacing: 4) {
+                    label
+                    if let note = item.note { Text(verbatim: "· \(note)").foregroundStyle(.secondary) }
+                    arrow
+                }
+                .lineLimit(1)
+                .fixedSize()
+                VStack(alignment: .leading, spacing: 1) {
+                    HStack(alignment: .firstTextBaseline, spacing: 4) {
+                        label.lineLimit(2).fixedSize(horizontal: false, vertical: true)
+                        arrow
+                    }
+                    if let note = item.note { Text(note).foregroundStyle(.secondary).lineLimit(1) }
+                }
+            }
+        }
+        .padding(.horizontal, 4)
+        .padding(.vertical, 1)
+        .background(Color.primary.opacity(hovering ? 0.07 : 0), in: .rect(cornerRadius: 5))
+        .padding(.horizontal, -4)
+        .contentShape(.rect)
+    }
+
+    private var label: some View {
+        Text(item.text).fontWeight(.medium).foregroundStyle(item.tone.textStyle)
+    }
+
+    @ViewBuilder private var arrow: some View {
+        if item.link != nil {
+            Image(systemName: "arrow.up.right").font(.zoomed(size: 8, weight: .bold)).foregroundStyle(item.tone.color)
+        }
+    }
+}
+
+/// Every line of a row's list, for a card that shows only the first few.
+private struct ItemsPopover: View {
+    let title: String
+    let items: [RowItem]
+    let card: Card
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(alignment: .firstTextBaseline, spacing: 6) {
+                Text(title).font(.zoomedHeadline)
+                Text(verbatim: "\(card.repoName) #\(card.number)").font(.zoomed(.body)).foregroundStyle(.secondary)
+            }
+            VStack(alignment: .leading, spacing: 5) {
+                ForEach(Array(items.enumerated()), id: \.offset) { _, item in
+                    ItemLine(item: item)
+                }
+            }
+            .font(.zoomed(.subheadline))
+        }
+        .padding(14)
+        .frame(minWidth: 220 * Zoom.shared.scale, alignment: .leading)
     }
 }
 

@@ -61,10 +61,17 @@ export type AgentAction = (typeof AGENT_ACTIONS)[number];
 /** When the board last sent each kind of request to a PR's session. */
 export type AgentRequests = Partial<Record<AgentAction, string>>;
 
-/** The Slack message asking people to approve a PR, as the PR's session recorded it after drafting it. */
+/**
+ * A Slack message asking one reviewer (a person or a team) to approve a PR, as the PR's session
+ * recorded it after drafting it. Reviewers who share a channel can share a message; each still has its own ask.
+ */
 export interface ApprovalAsk {
   repo: string;
   number: number;
+  /** Who it asks, as GitHub names them in a PR's `waitingOn`: a login or a team slug. Null for an ask recorded before asks named their reviewer. */
+  reviewer: string | null;
+  /** The channel it went to, as Slack names it ("#team-reviews"); null when unknown. */
+  channel: string | null;
   askedAt: string;
   /** When the session last drafted a bump in the message's thread; null until the first. */
   bumpedAt: string | null;
@@ -75,10 +82,26 @@ export interface ApprovalAsk {
 interface ApprovalAskRow {
   repo: string;
   number: number;
+  reviewer: string;
+  channel: string | null;
   asked_at: string;
   bumped_at: string | null;
   slack_url: string;
 }
+
+// The Slack messages asking for each PR's approval, one per reviewer, and each one's latest bump;
+// asking a reviewer again starts their ask over. A key never matches NULL, so an ask that named no
+// reviewer (one recorded before asks did) has ''. Logins and team slugs ignore case, and so does the key.
+const APPROVAL_ASKS_TABLE = `CREATE TABLE IF NOT EXISTS approval_asks (
+  repo TEXT NOT NULL,
+  number INTEGER NOT NULL,
+  reviewer TEXT NOT NULL DEFAULT '' COLLATE NOCASE,
+  channel TEXT,
+  asked_at TEXT NOT NULL,
+  bumped_at TEXT,
+  slack_url TEXT NOT NULL,
+  PRIMARY KEY (repo, number, reviewer)
+)`;
 
 export function openBoardStore(path = BOARD_DB_PATH): Database {
   if (path !== ":memory:") mkdirSync(DATA_DIR, { recursive: true });
@@ -127,15 +150,19 @@ export function openBoardStore(path = BOARD_DB_PATH): Database {
     requested_at TEXT NOT NULL,
     PRIMARY KEY (repo, number, action)
   )`);
-  // The Slack message asking for each PR's approval, and its latest bump. One per PR: asking again starts over.
-  db.run(`CREATE TABLE IF NOT EXISTS approval_asks (
-    repo TEXT NOT NULL,
-    number INTEGER NOT NULL,
-    asked_at TEXT NOT NULL,
-    bumped_at TEXT,
-    slack_url TEXT NOT NULL,
-    PRIMARY KEY (repo, number)
-  )`);
+  // Asks were one per PR before each reviewer got its own; those stay, as asks that named no reviewer.
+  const askColumns = db.query<{ name: string }, []>("SELECT name FROM pragma_table_info('approval_asks')").all();
+  if (askColumns.length > 0 && !askColumns.some((column) => column.name === "reviewer")) {
+    db.transaction(() => {
+      db.run("ALTER TABLE approval_asks RENAME TO approval_asks_per_pr");
+      db.run(APPROVAL_ASKS_TABLE);
+      db.run(`INSERT INTO approval_asks (repo, number, asked_at, bumped_at, slack_url)
+              SELECT repo, number, asked_at, bumped_at, slack_url FROM approval_asks_per_pr`);
+      db.run("DROP TABLE approval_asks_per_pr");
+    })();
+  } else {
+    db.run(APPROVAL_ASKS_TABLE);
+  }
   // Review requests had a table of their own before every button shared agent_requests.
   if (db.query("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'review_requests'").get()) {
     db.transaction(() => {
@@ -248,29 +275,51 @@ export function agentRequests(db: Database): Map<string, AgentRequests> {
   return requests;
 }
 
-/** Records a fresh approval ask; one recorded earlier for the PR, and its bumps, give way to it. */
-export function recordApprovalAsk(db: Database, repo: string, number: number, slackUrl: string, askedAt: string): void {
-  db.query("INSERT OR REPLACE INTO approval_asks (repo, number, asked_at, bumped_at, slack_url) VALUES (?, ?, ?, NULL, ?)").run(
-    repo,
-    number,
-    askedAt,
-    slackUrl,
+/** Records a fresh ask of `reviewer`; one recorded earlier for the same reviewer of the PR, and its bumps, give way to it. */
+export function recordApprovalAsk(
+  db: Database,
+  ask: { repo: string; number: number; reviewer: string; channel: string; slackUrl: string; askedAt: string },
+): void {
+  db.query("INSERT OR REPLACE INTO approval_asks (repo, number, reviewer, channel, asked_at, bumped_at, slack_url) VALUES (?, ?, ?, ?, ?, NULL, ?)").run(
+    ask.repo,
+    ask.number,
+    ask.reviewer,
+    ask.channel,
+    ask.askedAt,
+    ask.slackUrl,
   );
 }
 
-/** Records a bump of the PR's approval ask, moving its link to `slackUrl`; false when no ask is recorded to bump. */
-export function recordApprovalBump(db: Database, repo: string, number: number, slackUrl: string, bumpedAt: string): boolean {
-  const result = db.query("UPDATE approval_asks SET bumped_at = ?, slack_url = ? WHERE repo = ? AND number = ?").run(bumpedAt, slackUrl, repo, number);
+/**
+ * Records a bump of the ask of `reviewer` (null: the PR's ask that named no reviewer), moving its
+ * link to `slackUrl`, and its channel to `channel` when given; false when no such ask is recorded.
+ */
+export function recordApprovalBump(
+  db: Database,
+  bump: { repo: string; number: number; reviewer: string | null; channel: string | null; slackUrl: string; bumpedAt: string },
+): boolean {
+  const result = db
+    .query("UPDATE approval_asks SET bumped_at = ?, slack_url = ?, channel = COALESCE(?, channel) WHERE repo = ? AND number = ? AND reviewer = ?")
+    .run(bump.bumpedAt, bump.slackUrl, bump.channel, bump.repo, bump.number, bump.reviewer ?? "");
   return result.changes > 0;
 }
 
-/** Every PR's approval ask, keyed by "owner/repo#number". */
-export function approvalAsks(db: Database): Map<string, ApprovalAsk> {
-  const rows = db.query<ApprovalAskRow, []>("SELECT * FROM approval_asks").all();
-  return new Map(
-    rows.map((row) => [
-      `${row.repo}#${row.number}`,
-      { repo: row.repo, number: row.number, askedAt: row.asked_at, bumpedAt: row.bumped_at, slackUrl: row.slack_url },
-    ]),
-  );
+/** Every PR's approval asks, oldest first, keyed by "owner/repo#number". */
+export function approvalAsks(db: Database): Map<string, ApprovalAsk[]> {
+  const rows = db.query<ApprovalAskRow, []>("SELECT * FROM approval_asks ORDER BY asked_at, reviewer").all();
+  const asks = new Map<string, ApprovalAsk[]>();
+  for (const row of rows) {
+    const key = `${row.repo}#${row.number}`;
+    const ask: ApprovalAsk = {
+      repo: row.repo,
+      number: row.number,
+      reviewer: row.reviewer || null,
+      channel: row.channel,
+      askedAt: row.asked_at,
+      bumpedAt: row.bumped_at,
+      slackUrl: row.slack_url,
+    };
+    asks.set(key, [...(asks.get(key) ?? []), ask]);
+  }
+  return asks;
 }

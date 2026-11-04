@@ -35,7 +35,9 @@ export interface PullRequest {
   mergeState: MergeState | null;
   /** Who approved the PR, by their latest review. */
   approvedBy: string[];
-  /** Reviewers (people or teams) still asked to review. */
+  /** The teams (by slug) those approvals were given on behalf of, like a team review request they answered. */
+  approvedFor: string[];
+  /** Reviewers (people, or teams by slug) still asked to review. */
   waitingOn: string[];
   headSha: string;
   updatedAt: string;
@@ -62,7 +64,7 @@ const BASE_FIELDS = `
  */
 const REVIEW_FIELDS = `
   reviewDecision
-  latestOpinionatedReviews(first: 30) { nodes { state author { login } } }
+  latestOpinionatedReviews(first: 30) { nodes { state author { login } onBehalfOf(first: 10) { nodes { slug } } } }
   reviewRequests(first: 30) { nodes { requestedReviewer { __typename ... on User { login } ... on Team { slug } } } }`;
 
 /**
@@ -91,9 +93,12 @@ function searchQuery(fields: string, pageSize: number): string {
 /** Search pages read per list; a list longer than this is cut off. */
 const MAX_SEARCH_PAGES = 10;
 
-/** One PR's state and head commit: all that re-reading a lagging search result or recording a result needs. */
+/**
+ * One PR's state, head commit, and reviews: all that re-reading a lagging search result, recording a
+ * result, or a step asking for approval needs.
+ */
 const PR_QUERY = `query($owner: String!, $name: String!, $number: Int!) {
-  repository(owner: $owner, name: $name) { pullRequest(number: $number) { ${BASE_FIELDS} } }
+  repository(owner: $owner, name: $name) { pullRequest(number: $number) { ${BASE_FIELDS} ${REVIEW_FIELDS} } }
 }`;
 
 const FAILED_CONCLUSIONS: Record<string, true> = {
@@ -118,7 +123,7 @@ interface RawContext {
 interface RawReviewFields {
   reviewDecision?: ReviewDecision;
   mergeStateStatus?: MergeState;
-  latestOpinionatedReviews?: { nodes: { state: string; author: { login: string } | null }[] };
+  latestOpinionatedReviews?: { nodes: { state: string; author: { login: string } | null; onBehalfOf?: { nodes: { slug: string }[] } }[] };
   reviewRequests?: { nodes: { requestedReviewer: { __typename: string; login?: string; slug?: string } | null }[] };
 }
 
@@ -149,6 +154,7 @@ function toCheck(context: RawContext): Check {
 
 function toPullRequest(raw: RawPullRequest): PullRequest {
   const rollup = raw.commits?.nodes[0]?.commit.statusCheckRollup;
+  const approvals = (raw.latestOpinionatedReviews?.nodes ?? []).filter((review) => review.state === "APPROVED");
   return {
     repo: raw.repository.nameWithOwner,
     number: raw.number,
@@ -160,7 +166,8 @@ function toPullRequest(raw: RawPullRequest): PullRequest {
     state: raw.state,
     reviewDecision: raw.reviewDecision ?? null,
     mergeState: raw.mergeStateStatus ?? null,
-    approvedBy: (raw.latestOpinionatedReviews?.nodes ?? []).filter((review) => review.state === "APPROVED").map((review) => review.author?.login ?? "ghost"),
+    approvedBy: approvals.map((review) => review.author?.login ?? "ghost"),
+    approvedFor: [...new Set(approvals.flatMap((review) => review.onBehalfOf?.nodes.map((team) => team.slug) ?? []))],
     waitingOn: (raw.reviewRequests?.nodes ?? []).flatMap(({ requestedReviewer: reviewer }) => {
       const name = reviewer?.login ?? reviewer?.slug;
       return name ? [name] : [];
@@ -293,7 +300,7 @@ async function reread(source: BoardSource, pr: PullRequest, recheck: Set<string>
   }
 }
 
-/** Fetches one PR, for recording a review against its current head commit. */
+/** Fetches one PR without its checks: for recording a result against its current head commit, or a step that names its reviewers. */
 export async function fetchPullRequest(source: BoardSource, repo: string, number: number): Promise<PullRequest> {
   const [owner, name] = repo.split("/");
   const data = await graphql<{ repository: { pullRequest: RawPullRequest | null } | null }>(source, PR_QUERY, { owner, name, number });

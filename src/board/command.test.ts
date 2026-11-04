@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { parsePrRef, parseSlackLink } from "./command.ts";
+import { parseChannel, parsePrRef, parseReviewers, parseSlackLink } from "./command.ts";
 
 test("a PR can be named by URL, with or without a trailing tab, or as owner/repo#number", () => {
   expect(parsePrRef("https://github.com/acme/api/pull/12")).toEqual({ repo: "acme/api", number: 12 });
@@ -19,4 +19,17 @@ test("an approval ask's link must be a Slack link, since the board opens it", ()
   expect(() => parseSlackLink("http://acme.slack.com/archives/C1")).toThrow("not a Slack link");
   expect(() => parseSlackLink("https://slack.com.evil.example/archives/C1")).toThrow("not a Slack link");
   expect(() => parseSlackLink("#reviews")).toThrow("not a Slack link");
+});
+
+test("an ask's reviewers are named as GitHub's review requests name them, by login or team slug", () => {
+  expect(parseReviewers("cache-team")).toEqual(["cache-team"]);
+  expect(parseReviewers("@acme/cache-team, sara ,")).toEqual(["cache-team", "sara"]);
+  expect(() => parseReviewers(" , ")).toThrow("--for needs a reviewer");
+});
+
+test("an ask's channel is named as Slack names it", () => {
+  expect(parseChannel("cache-team")).toBe("#cache-team");
+  expect(parseChannel(" #sre ")).toBe("#sre");
+  expect(parseChannel("@sara")).toBe("@sara");
+  expect(() => parseChannel("#")).toThrow("--channel needs");
 });

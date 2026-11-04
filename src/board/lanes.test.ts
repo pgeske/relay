@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import type { Check, PullRequest } from "./github.ts";
-import { approvalState, buildBoard, ciFixState, ciState, requestProgress, type Lane, type RequestResults } from "./lanes.ts";
+import { approvalState, approvalStep, buildBoard, ciFixState, ciState, requestProgress, waitingAsks, type ApprovalState, type Lane, type RequestResults } from "./lanes.ts";
 import { AGENT_ACTIONS, type AgentReview, type ApprovalAsk, type CiFix } from "./store.ts";
 
 const GATE = "merge-queue/gate";
@@ -18,6 +18,7 @@ function pr(overrides: Partial<PullRequest> = {}): PullRequest {
     reviewDecision: "REVIEW_REQUIRED",
     mergeState: "CLEAN",
     approvedBy: [],
+    approvedFor: [],
     waitingOn: [],
     headSha: "aaa",
     updatedAt: "2026-10-30T00:00:00Z",
@@ -36,7 +37,21 @@ function ciFix(overrides: Partial<CiFix> = {}): CiFix {
 }
 
 function approvalAsk(overrides: Partial<ApprovalAsk> = {}): ApprovalAsk {
-  return { repo: "acme/api", number: 1, askedAt: "2026-10-30T01:00:00Z", bumpedAt: null, slackUrl: "https://app.slack.com/client/T1/C1", ...overrides };
+  return {
+    repo: "acme/api",
+    number: 1,
+    reviewer: "cache-team",
+    channel: "#cache-team",
+    askedAt: "2026-10-30T01:00:00Z",
+    bumpedAt: null,
+    slackUrl: "https://app.slack.com/client/T1/C1",
+    ...overrides,
+  };
+}
+
+/** The approval state of a PR waiting on `waitingOn`, approved by `approvedBy` (people) and `approvedFor` (teams). */
+function approval(asks: ApprovalAsk[], reviewers: { waitingOn?: string[]; approvedBy?: string[]; approvedFor?: string[] } = {}): ApprovalState {
+  return approvalState({ waitingOn: [], approvedBy: [], approvedFor: [], ...reviewers }, asks);
 }
 
 /** The lane the board puts a single PR in. */
@@ -212,22 +227,38 @@ describe("requestProgress", () => {
     expect(requestProgress(requests, open, live("idle"), now).merge).toBe("stalled");
   });
 
-  test("an approval-ask request finishes when an ask is recorded after it", () => {
+  test("an approval-ask request finishes once every reviewer the PR waits on has an ask, one at least from after it", () => {
     const requests = { "ask-approval": minutesAgo(10) };
-    const finished = (approval?: ApprovalAsk) => requestProgress(requests, { mergedAt: null, approval }, live("idle"), now)["ask-approval"];
-    expect(finished(approvalAsk({ askedAt: minutesAgo(2) }))).toBe("none");
-    // Nothing recorded, or an ask from before the request, leaves it stalled.
-    expect(finished()).toBe("stalled");
-    expect(finished(approvalAsk({ askedAt: minutesAgo(60) }))).toBe("stalled");
+    const finished = (state: ApprovalState) => requestProgress(requests, { mergedAt: null, approval: state }, live("idle"), now)["ask-approval"];
+    const waitingOn = ["cache-team", "sre"];
+    const fresh = approvalAsk({ askedAt: minutesAgo(2) });
+    expect(finished(approval([fresh, approvalAsk({ reviewer: "sre", channel: "#sre", askedAt: minutesAgo(1) })], { waitingOn }))).toBe("none");
+    // One of two asked isn't done yet.
+    expect(finished(approval([fresh], { waitingOn }))).toBe("stalled");
+    // Nobody listed: any ask from after the request finishes it.
+    expect(finished(approval([fresh]))).toBe("none");
+    // Nothing recorded, or only asks from before the request, leaves it stalled.
+    expect(finished(approval([]))).toBe("stalled");
+    expect(finished(approval([approvalAsk({ askedAt: minutesAgo(60) })]))).toBe("stalled");
+    // An ask that named no reviewer was the whole answer before asks did, whoever it left out.
+    expect(finished(approval([approvalAsk({ reviewer: null, channel: null, askedAt: minutesAgo(2) })], { waitingOn }))).toBe("none");
   });
 
-  test("a bump request finishes when a bump, or a fresh ask of an unsent one, is recorded after it", () => {
+  test("a bump request finishes once each ask still waiting was bumped, or asked afresh, after it; approved reviewers are skipped", () => {
     const requests = { bump: minutesAgo(10) };
-    const finished = (approval: ApprovalAsk) => requestProgress(requests, { mergedAt: null, approval }, live("idle"), now).bump;
-    expect(finished(approvalAsk({ askedAt: minutesAgo(60), bumpedAt: minutesAgo(2) }))).toBe("none");
-    expect(finished(approvalAsk({ askedAt: minutesAgo(2) }))).toBe("none");
-    expect(finished(approvalAsk({ askedAt: minutesAgo(60) }))).toBe("stalled");
-    expect(finished(approvalAsk({ askedAt: minutesAgo(120), bumpedAt: minutesAgo(60) }))).toBe("stalled");
+    const finished = (state: ApprovalState) => requestProgress(requests, { mergedAt: null, approval: state }, live("idle"), now).bump;
+    const bumped = approvalAsk({ askedAt: minutesAgo(60), bumpedAt: minutesAgo(2) });
+    const old = approvalAsk({ reviewer: "sre", channel: "#sre", askedAt: minutesAgo(60) });
+    expect(finished(approval([bumped]))).toBe("none");
+    expect(finished(approval([approvalAsk({ askedAt: minutesAgo(2) })]))).toBe("none");
+    expect(finished(approval([approvalAsk({ askedAt: minutesAgo(60) })]))).toBe("stalled");
+    expect(finished(approval([approvalAsk({ askedAt: minutesAgo(120), bumpedAt: minutesAgo(60) })]))).toBe("stalled");
+    // sre still waits, unbumped; once sre approved, its ask needs no bump.
+    expect(finished(approval([bumped, old], { waitingOn: ["sre"] }))).toBe("stalled");
+    expect(finished(approval([bumped, old], { approvedFor: ["sre"] }))).toBe("none");
+    // An ask from before asks named their reviewer may be skipped: the session judges whether its people approved.
+    expect(finished(approval([bumped, approvalAsk({ reviewer: null, channel: null, askedAt: minutesAgo(60) })]))).toBe("none");
+    expect(finished(approval([approvalAsk({ reviewer: null, channel: null, askedAt: minutesAgo(60) })]))).toBe("stalled");
   });
 
   test("only the newest request can be running: the board sent it because the older one had stopped", () => {
@@ -261,21 +292,55 @@ describe("ciFixState", () => {
 });
 
 describe("approvalState", () => {
-  test("not asked until an ask is recorded", () => {
-    expect(approvalState(undefined)).toEqual({ status: "not-asked" });
+  test("names the reviewers the PR waits on that no ask went to yet, ignoring case", () => {
+    const state = approval([approvalAsk({ reviewer: "Cache-Team" })], { waitingOn: ["cache-team", "sre", "sara"] });
+    expect(state.unasked).toEqual(["sre", "sara"]);
+    expect(approval([], { waitingOn: ["sre"] }).unasked).toEqual(["sre"]);
+    // An ask that named no reviewer covers nobody.
+    expect(approval([approvalAsk({ reviewer: null })], { waitingOn: ["sre"] }).unasked).toEqual(["sre"]);
   });
 
-  test("asked, then bumped, with the link to the ask", () => {
-    expect(approvalState(approvalAsk())).toEqual({ status: "asked", askedAt: "2026-10-30T01:00:00Z", bumpedAt: null, slackUrl: "https://app.slack.com/client/T1/C1" });
+  test("an ask's reviewer approved when the person did, or someone did on the team's behalf", () => {
+    const asks = [approvalAsk({ reviewer: "sara" }), approvalAsk({ reviewer: "cache-team" }), approvalAsk({ reviewer: "sre" }), approvalAsk({ reviewer: null })];
+    const state = approval(asks, { approvedBy: ["Sara", "pat"], approvedFor: ["cache-team"], waitingOn: ["sre"] });
+    expect(state.asks.map((ask) => [ask.reviewer, ask.approved])).toEqual([
+      ["sara", true],
+      ["cache-team", true],
+      ["sre", false],
+      [null, false],
+    ]);
+    expect(waitingAsks(state).map((ask) => ask.reviewer)).toEqual(["sre", null]);
+  });
+
+  test("each ask keeps where it went and when it was asked and bumped", () => {
     const permalink = "https://acme.slack.com/archives/C1/p1793643074057839";
-    expect(approvalState(approvalAsk({ bumpedAt: "2026-10-31T01:00:00Z", slackUrl: permalink }))).toMatchObject({ status: "bumped", slackUrl: permalink });
+    expect(approval([approvalAsk({ bumpedAt: "2026-10-31T01:00:00Z", slackUrl: permalink })]).asks).toEqual([
+      { reviewer: "cache-team", channel: "#cache-team", askedAt: "2026-10-30T01:00:00Z", bumpedAt: "2026-10-31T01:00:00Z", slackUrl: permalink, approved: false },
+    ]);
   });
 
-  test("each card carries its PR's ask, whatever commit it is at", () => {
-    const board = buildBoard({ mine: [pr({ headSha: "bbb" })], reviewRequested: [], merged: [] }, [], {
+  test("each card carries its PR's asks, whatever commit it is at", () => {
+    const board = buildBoard({ mine: [pr({ headSha: "bbb", waitingOn: ["cache-team", "sre"] })], reviewRequested: [], merged: [] }, [], {
       reviews: new Map([["acme/api#1", review({ headSha: "bbb" })]]),
-      approvals: new Map([["acme/api#1", approvalAsk()]]),
+      approvals: new Map([["acme/api#1", [approvalAsk()]]]),
     });
-    expect(board.lanes["human-review"][0].approval).toMatchObject({ status: "asked" });
+    expect(board.lanes["human-review"][0].approval).toMatchObject({ asks: [{ reviewer: "cache-team", approved: false }], unasked: ["sre"] });
+  });
+});
+
+describe("approvalStep", () => {
+  test("asks while a reviewer the PR waits on has no ask yet", () => {
+    expect(approvalStep(approval([], { waitingOn: ["cache-team"] }))).toBe("ask-approval");
+    expect(approvalStep(approval([approvalAsk({ reviewer: "infra" })], { waitingOn: ["cache-team"] }))).toBe("ask-approval");
+  });
+
+  test("bumps once every reviewer it waits on was asked", () => {
+    expect(approvalStep(approval([approvalAsk()], { waitingOn: ["cache-team"] }))).toBe("bump");
+    expect(approvalStep(approval([approvalAsk({ reviewer: null })]))).toBe("bump");
+  });
+
+  test("asks when nobody is listed and no ask still waits, so the session works out who", () => {
+    expect(approvalStep(approval([]))).toBe("ask-approval");
+    expect(approvalStep(approval([approvalAsk()], { approvedFor: ["cache-team"] }))).toBe("ask-approval");
   });
 });

@@ -7,20 +7,10 @@ import { listOmpPanes, mainSessionName, newWindow, pasteText, selectWindow } fro
 import { assembleBoard, describeOwner, liveSessions, parsePrRef, sourceFor } from "./command.ts";
 import { loadBoardConfig } from "./config.ts";
 import { closePullRequest, fetchBoardData, fetchPullRequest, type BoardData } from "./github.ts";
-import { REQUEST_MAX_AGE_MS, requestProgress, type CardOwner } from "./lanes.ts";
+import { REQUEST_MAX_AGE_MS, approvalState, requestProgress, waitingAsks, type ApprovalState, type CardOwner } from "./lanes.ts";
 import { prOwner, readSessionHeader } from "./owners.ts";
 import { BOARD_ACTIONS, boardView, type BoardAction, type BoardView } from "./view.ts";
-import {
-  AGENT_ACTIONS,
-  agentRequests,
-  approvalAsks,
-  latestAgentReviews,
-  latestCiFixes,
-  openBoardStore,
-  recordAgentRequest,
-  type AgentAction,
-  type ApprovalAsk,
-} from "./store.ts";
+import { AGENT_ACTIONS, agentRequests, approvalAsks, latestAgentReviews, latestCiFixes, openBoardStore, recordAgentRequest, type AgentAction } from "./store.ts";
 import { bringRelayTerminalToFront } from "./terminalApp.ts";
 
 const MAX_ACTION_BODY_BYTES = 4096;
@@ -109,36 +99,65 @@ function fixCiPrompt(url: string): string {
 const DRAFT_ONLY =
   `Only ever draft, with the Slack MCP draft tool (slack_send_message_draft); never send or schedule a message, since I send drafts myself.`;
 
-function askApprovalPrompt(url: string): string {
+/** What a step's prompt can say about the PR besides its URL. */
+interface PromptContext {
+  approval: ApprovalState;
+  /** Who approved the PR so far; empty when GitHub didn't answer. */
+  approvedBy: string[];
+}
+
+/** Asks each reviewer the PR waits on that no ask went to yet, in that reviewer's own channel; with none listed, the session works out who. */
+export function askApprovalPrompt(url: string, { approval, approvedBy }: PromptContext): string {
+  const { unasked } = approval;
+  const asked = approval.asks.flatMap((ask) => (ask.reviewer ? [`${ask.reviewer}${ask.channel ? ` in ${ask.channel}` : ""}`] : []));
+  const leaveOut = [approvedBy.length ? `approved already (${approvedBy.join(", ")})` : null, asked.length ? `was asked already (${asked.join(", ")})` : null]
+    .filter((part): part is string => part !== null)
+    .join(" or ");
+  const who = unasked.length
+    ? `It still waits on approval from ${unasked.join(", ")}, and the board has no ask for ${unasked.length === 1 ? "that reviewer yet: ask it" : "those reviewers yet: ask each of them"}.`
+    : `GitHub doesn't list anyone it still waits on, though it still needs approval: work out who from its required reviewers or CODEOWNERS ` +
+      `(the owners of the files it changes; its merge gate's status may say what's missing)${leaveOut ? `, leaving out anyone who ${leaveOut}` : ""}, and ask each of them.`;
   return (
-    `I pressed Ask for Approval on the relay board for ${url}. Draft a Slack message asking for a review of it. ${DRAFT_ONLY} ` +
-    `Write it as \`${url}. <one plain-English sentence on what the PR does and why>\`, casual and lowercase, ` +
-    `matching my recent messages in that channel. Draft it where I usually ask for reviews for this repo or its team: search my recent ` +
-    `Slack messages for earlier review requests to find the channel. If the right channel is unclear, ask me which instead of guessing, and don't draft yet. ` +
-    `Once the draft exists, record it with \`relay board approval ${url} --asked --slack <link>\`, using the channel link the draft tool returned. ` +
-    `Then tell me the channel and what the draft says.`
+    `I pressed Ask for Approval on the relay board for ${url}. ${who} ${DRAFT_ONLY} ` +
+    `For each reviewer, find the Slack channel where that team or person takes review requests: search Slack for the team's channel, or for earlier review requests sent to them. ` +
+    `If a reviewer's channel is unclear, ask me which instead of guessing, and don't draft for them yet. ` +
+    `Draft one message per channel (reviewers who share a channel share one), written as \`${url}. <one plain-English sentence on what the PR does and why>\`, ` +
+    `casual and lowercase, matching recent messages in that channel. Right after each draft, record it with ` +
+    `\`relay board approval ${url} --asked --for <reviewer> --channel <channel-name> --slack <link>\`, naming the reviewers it asks by GitHub login or team slug ` +
+    `(comma-separated when one message asks several), the channel by its name without the # (a shell reads # as a comment), and using the channel link the draft tool returned. ` +
+    `Then tell me, for each reviewer, the channel and what the draft says.`
   );
 }
 
-function bumpPrompt(url: string, ask: ApprovalAsk | undefined): string {
-  const recorded = ask ? ` The board has the ask at ${ask.slackUrl}.` : "";
+/** Bumps each ask whose reviewer hasn't approved yet, in its own thread; asks whose reviewer approved are left out. */
+export function bumpPrompt(url: string, { approval, approvedBy }: PromptContext): string {
+  const asks = waitingAsks(approval).map((ask, index) =>
+    ask.reviewer
+      ? `(${index + 1}) the ask to ${ask.reviewer}${ask.channel ? ` in ${ask.channel}` : ""}, which the board has at ${ask.slackUrl}: ` +
+        `record its bump with \`relay board approval ${url} --bumped --for ${ask.reviewer} --slack <permalink>\``
+      : `(${index + 1}) an ask from before the board noted who an ask was for, which it has at ${ask.slackUrl}: find who it asked, and skip it if they've approved since` +
+        `${approvedBy.length ? ` (so far ${approvedBy.join(", ")} approved)` : ""}; else record its bump with ` +
+        `\`relay board approval ${url} --bumped --channel <channel-name> --slack <permalink>\``,
+  );
+  const approved = approval.asks.flatMap((ask) => (ask.approved && ask.reviewer ? [ask.reviewer] : []));
   return (
-    `I pressed Bump on the relay board for ${url}: its approval ask hasn't got it approved yet.${recorded} ` +
-    `First find the ask as I actually sent it: I send drafts myself, so search Slack for my message containing ${url}. ` +
-    `If I never sent it, don't bump: tell me so, and offer to draft the ask again (if I say yes, draft it like a first ask and record it with ` +
-    `\`relay board approval ${url} --asked --slack <link>\`). Otherwise draft a short, casual, lowercase bump as a reply in that message's thread ` +
-    `(the draft tool's thread_ts is the message's ts). ${DRAFT_ONLY} Then record it with \`relay board approval ${url} --bumped --slack <permalink>\`, ` +
-    `using the sent message's permalink, so the board links to its thread. Then tell me where the draft is and what it says.`
+    `I pressed Bump on the relay board for ${url}: it still waits on approvals. Bump each of these asks, whose reviewer hasn't approved yet` +
+    `${approved.length ? ` (leave out the asks to ${approved.join(", ")}: they approved)` : ""}: ${asks.join("; ")}. ` +
+    `For each, first find the ask as I actually sent it: I send drafts myself, so search its channel for my message containing ${url}. ` +
+    `If I never sent it, don't bump it: tell me so, and offer to draft it again (if I say yes, draft it like a first ask and record it with ` +
+    `\`relay board approval ${url} --asked --for <reviewer> --channel <channel-name> --slack <link>\`). Otherwise draft a short, casual, lowercase bump as a reply ` +
+    `in that message's thread (the draft tool's thread_ts is the message's ts); asks that share a message share one bump, recorded for each. ${DRAFT_ONLY} ` +
+    `Record each bump right after drafting it, with the sent message's permalink, so the board links to its thread. Then tell me where each draft is and what it says.`
   );
 }
 
 /** What each step button pastes into the PR's session, and how the board words it. */
-const REQUESTS: Record<AgentAction, { prompt: (url: string, ask: ApprovalAsk | undefined) => string; asked: string; running: string }> = {
+const REQUESTS: Record<AgentAction, { prompt: (url: string, context: PromptContext) => string; asked: string; running: string }> = {
   review: { prompt: reviewPrompt, asked: "review", running: "reviewing" },
   merge: { prompt: mergePrompt, asked: "merge", running: "merging" },
   "fix-ci": { prompt: fixCiPrompt, asked: "fix CI on", running: "fixing CI on" },
-  "ask-approval": { prompt: askApprovalPrompt, asked: "draft a Slack approval ask for", running: "drafting an approval ask for" },
-  bump: { prompt: bumpPrompt, asked: "draft a Slack bump for", running: "drafting a bump for" },
+  "ask-approval": { prompt: askApprovalPrompt, asked: "draft Slack approval asks for", running: "drafting approval asks for" },
+  bump: { prompt: bumpPrompt, asked: "draft Slack bumps for", running: "drafting bumps for" },
 };
 
 function isBoardAction(action: string): action is BoardAction {
@@ -214,15 +233,14 @@ export async function runBoardAction(action: string, prRef: string): Promise<Boa
   }
   const db = openBoardStore();
   let owner;
-  let ask;
+  let asks;
   try {
     owner = prOwner(db, repo, number);
-    ask = approvalAsks(db).get(`${repo}#${number}`);
+    asks = approvalAsks(db).get(`${repo}#${number}`) ?? [];
   } finally {
     db.close();
   }
   if (!owner) return { status: 404, message: `no omp session is in charge of ${repo}#${number}` };
-  if (action === "bump" && !ask) return { status: 409, message: `no approval ask is recorded for ${repo}#${number} yet, so there's nothing to bump` };
   const card = describeOwner(owner, await liveSessions());
   const name = card.title || "the session";
   if (!card.live && !existsSync(owner.sessionFile)) return { status: 410, message: `"${name}" no longer exists` };
@@ -236,17 +254,20 @@ export async function runBoardAction(action: string, prRef: string): Promise<Boa
       return { status: 200, message: card.live ? `Switched relay to "${name}"` : `Reopened "${name}" in a new relay tab` };
     }
 
-    // A request sent moments ago may not show the session as working yet, while it reopens.
-    const running = runningRequest(repo, number, card.live);
-    if (running) return { status: 409, message: `"${name}" is already ${REQUESTS[running].running} ${repo}#${number}` };
     // The card may be older than the PR: a step on one that already merged or closed would only confuse its session.
-    const state = await fetchPullRequest(sourceFor(loadBoardConfig(), repo), repo, number).then(
-      (pr) => pr.state,
-      () => "OPEN", // GitHub didn't answer; the session checks the PR itself before acting.
-    );
-    if (state !== "OPEN") return { status: 409, message: `${repo}#${number} is already ${state === "MERGED" ? "merged" : "closed"}` };
+    // If GitHub doesn't answer, the session checks the PR itself before acting, and works out who to ask for approval.
+    const pr = await fetchPullRequest(sourceFor(loadBoardConfig(), repo), repo, number).catch(() => null);
+    const approval = approvalState(pr ?? { approvedBy: [], approvedFor: [], waitingOn: [] }, asks);
+    // A request sent moments ago may not show the session as working yet, while it reopens.
+    const running = runningRequest(repo, number, approval, card.live);
+    if (running) return { status: 409, message: `"${name}" is already ${REQUESTS[running].running} ${repo}#${number}` };
+    if (pr && pr.state !== "OPEN") return { status: 409, message: `${repo}#${number} is already ${pr.state === "MERGED" ? "merged" : "closed"}` };
+    if (action === "bump" && waitingAsks(approval).length === 0) {
+      const why = asks.length ? "everyone it asked has approved" : "no approval ask is recorded for it yet";
+      return { status: 409, message: `${repo}#${number} has nothing to bump: ${why}` };
+    }
     const url = `https://github.com/${repo}/pull/${number}`;
-    const reopened = await promptSession(owner.sessionFile, card.live, name, REQUESTS[action].prompt(url, ask));
+    const reopened = await promptSession(owner.sessionFile, card.live, name, REQUESTS[action].prompt(url, { approval, approvedBy: pr?.approvedBy ?? [] }));
     const store = openBoardStore();
     try {
       recordAgentRequest(store, repo, number, action, new Date().toISOString());
@@ -261,12 +282,12 @@ export async function runBoardAction(action: string, prRef: string): Promise<Boa
 }
 
 /** The request the PR's session is still on, if any. */
-function runningRequest(repo: string, number: number, live: CardOwner["live"]): AgentAction | undefined {
+function runningRequest(repo: string, number: number, approval: ApprovalState, live: CardOwner["live"]): AgentAction | undefined {
   const key = `${repo}#${number}`;
   const db = openBoardStore();
   try {
     // The PR is still open: its card offered the button, and merging takes the card away.
-    const results = { mergedAt: null, review: latestAgentReviews(db).get(key), ciFix: latestCiFixes(db).get(key), approval: approvalAsks(db).get(key) };
+    const results = { mergedAt: null, review: latestAgentReviews(db).get(key), ciFix: latestCiFixes(db).get(key), approval };
     const progress = requestProgress(agentRequests(db).get(key), results, live, new Date());
     return AGENT_ACTIONS.find((action) => progress[action] === "running");
   } finally {

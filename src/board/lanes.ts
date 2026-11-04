@@ -16,10 +16,29 @@ export type CiFixState =
   /** `stale`: commits landed after the result was recorded, so it is about older code. */
   | { status: "fixed" | "not-fixed"; stale: boolean; recordedAt: string; headSha: string; summary: string | null };
 
-export type ApprovalState =
-  | { status: "not-asked" }
-  /** `bumped` once a bump was drafted in the ask's thread; `slackUrl` is where the ask is in Slack. */
-  | { status: "asked" | "bumped"; askedAt: string; bumpedAt: string | null; slackUrl: string };
+/** One ask the PR's session recorded, and whether the reviewer it asked has approved since. */
+export interface ApprovalAskState {
+  /** Who it asks (a login or team slug); null for an ask recorded before asks named their reviewer. */
+  reviewer: string | null;
+  /** The channel it went to ("#team-reviews"); null when unknown. */
+  channel: string | null;
+  askedAt: string;
+  /** When a bump was last drafted in its thread; null until the first. */
+  bumpedAt: string | null;
+  /** Where the ask is in Slack. */
+  slackUrl: string;
+  /** Its reviewer approved: the person, or someone on the team's behalf. Never set on an ask that named no reviewer. */
+  approved: boolean;
+}
+
+/**
+ * Where asking for the PR's approval stands in Slack: every ask its session recorded, oldest first,
+ * and the reviewers GitHub still waits on that no ask went to yet.
+ */
+export interface ApprovalState {
+  asks: ApprovalAskState[];
+  unasked: string[];
+}
 
 export type RequestProgress = "none" | "running" | "stalled";
 
@@ -34,7 +53,7 @@ export interface BoardCard {
   agentReview: AgentReviewState;
   /** The latest result an agent recorded after the board asked it to fix CI. */
   ciFix: CiFixState;
-  /** The Slack message the PR's session drafted asking for approval, and its latest bump. */
+  /** The Slack messages the PR's session drafted asking its reviewers for approval, and who still has none. */
   approval: ApprovalState;
   /** Where each request the board sent the PR's session stands. */
   requests: Record<AgentAction, RequestProgress>;
@@ -69,7 +88,7 @@ export interface RequestResults {
   mergedAt: string | null;
   review?: AgentReview;
   ciFix?: CiFix;
-  approval?: ApprovalAsk;
+  approval?: ApprovalState;
 }
 
 function answered(action: AgentAction, requestedAt: string, results: RequestResults): boolean {
@@ -80,11 +99,21 @@ function answered(action: AgentAction, requestedAt: string, results: RequestResu
       return results.ciFix !== undefined && results.ciFix.recordedAt >= requestedAt;
     case "merge":
       return results.mergedAt !== null;
-    case "ask-approval":
-      return results.approval !== undefined && results.approval.askedAt >= requestedAt;
-    case "bump":
-      // A fresh ask answers a bump too: the session found the old ask was never sent and drafted it again.
-      return results.approval !== undefined && (results.approval.askedAt >= requestedAt || (results.approval.bumpedAt ?? "") >= requestedAt);
+    case "ask-approval": {
+      if (results.approval === undefined) return false;
+      // Every reviewer the PR waits on has an ask, at least one of them from this request. An ask
+      // that named no reviewer answered a request from before asks did, whoever it left out.
+      const since = results.approval.asks.filter((ask) => ask.askedAt >= requestedAt);
+      return since.some((ask) => ask.reviewer === null) || (since.length > 0 && results.approval.unasked.length === 0);
+    }
+    case "bump": {
+      if (results.approval === undefined) return false;
+      // Each ask still waiting was bumped, or asked afresh (the session found it was never sent),
+      // since the request. An ask that named no reviewer may be skipped: whether its people approved is the session's call.
+      const since = (ask: ApprovalAskState) => ask.askedAt >= requestedAt || (ask.bumpedAt ?? "") >= requestedAt;
+      const waiting = waitingAsks(results.approval);
+      return waiting.length === 0 || (waiting.some(since) && waiting.every((ask) => ask.reviewer === null || since(ask)));
+    }
   }
 }
 
@@ -147,10 +176,38 @@ export function ciFixState(pr: PullRequest, fix: CiFix | undefined): CiFixState 
   };
 }
 
-/** An approval ask speaks for the PR, not a commit: new commits don't make people's approval less needed. */
-export function approvalState(ask: ApprovalAsk | undefined): ApprovalState {
-  if (!ask) return { status: "not-asked" };
-  return { status: ask.bumpedAt ? "bumped" : "asked", askedAt: ask.askedAt, bumpedAt: ask.bumpedAt, slackUrl: ask.slackUrl };
+/**
+ * Each of the PR's approval asks, and who it still waits on without one. Asks speak for the PR, not
+ * a commit: new commits don't make people's approval less needed.
+ */
+export function approvalState(pr: Pick<PullRequest, "approvedBy" | "approvedFor" | "waitingOn">, asks: ApprovalAsk[]): ApprovalState {
+  // Logins and team slugs ignore case.
+  const approvers = new Set([...pr.approvedBy, ...pr.approvedFor].map((name) => name.toLowerCase()));
+  const asked = new Set(asks.flatMap((ask) => (ask.reviewer === null ? [] : [ask.reviewer.toLowerCase()])));
+  return {
+    asks: asks.map(({ reviewer, channel, askedAt, bumpedAt, slackUrl }) => ({
+      reviewer,
+      channel,
+      askedAt,
+      bumpedAt,
+      slackUrl,
+      approved: reviewer !== null && approvers.has(reviewer.toLowerCase()),
+    })),
+    unasked: pr.waitingOn.filter((reviewer) => !approvers.has(reviewer.toLowerCase()) && !asked.has(reviewer.toLowerCase())),
+  };
+}
+
+/** The asks a bump is for: each one whose reviewer hasn't approved yet. */
+export function waitingAsks(approval: ApprovalState): ApprovalAskState[] {
+  return approval.asks.filter((ask) => !ask.approved);
+}
+
+/**
+ * Human review's step: ask each reviewer the PR waits on that no ask went to yet, else bump the asks
+ * still waiting. With no ask waiting and nobody to ask listed, asking works out who from the PR.
+ */
+export function approvalStep(approval: ApprovalState): "ask-approval" | "bump" {
+  return approval.unasked.length > 0 || waitingAsks(approval).length === 0 ? "ask-approval" : "bump";
 }
 
 /** A gate reason that means people still have to review, like "1 approval missing". */
@@ -200,7 +257,8 @@ function botName(login: string): string {
 export interface LocalState {
   reviews?: Map<string, AgentReview>;
   ciFixes?: Map<string, CiFix>;
-  approvals?: Map<string, ApprovalAsk>;
+  /** Each PR's approval asks, oldest first. */
+  approvals?: Map<string, ApprovalAsk[]>;
   requests?: Map<string, AgentRequests>;
   /** The omp session in charge of each PR that has one. */
   owners?: Record<string, CardOwner>;
@@ -222,14 +280,14 @@ export function buildBoard(data: BoardData, gateChecks: string[], local: LocalSt
     const key = `${pr.repo}#${pr.number}`;
     const review = reviews.get(key);
     const ciFix = ciFixes.get(key);
-    const approval = approvals.get(key);
+    const approval = approvalState(pr, approvals.get(key) ?? []);
     const card: BoardCard = {
       pr,
       ci: ciState(pr.checks, gateChecks),
       mergeBlocker: mergeBlocker(pr, gateChecks),
       agentReview: agentReviewState(pr, review),
       ciFix: ciFixState(pr, ciFix),
-      approval: approvalState(approval),
+      approval,
       requests: requestProgress(requests.get(key), { mergedAt: pr.mergedAt, review, ciFix, approval }, owners[key]?.live ?? null, now),
     };
     lanes[laneFor(card)].push(card);

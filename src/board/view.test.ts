@@ -21,6 +21,7 @@ function pr(overrides: Partial<PullRequest> = {}): PullRequest {
     reviewDecision: "REVIEW_REQUIRED",
     mergeState: "CLEAN",
     approvedBy: [],
+    approvedFor: [],
     waitingOn: [],
     headSha: "aaa",
     updatedAt: "2026-11-02T00:00:00Z",
@@ -43,7 +44,7 @@ interface Local {
   requests?: AgentRequests;
   ciFix?: CiFix;
   review?: AgentReview;
-  approval?: ApprovalAsk;
+  approvals?: ApprovalAsk[];
 }
 
 function view(pullRequests: PullRequest[], local: Local = {}, merged: PullRequest[] = []) {
@@ -52,7 +53,7 @@ function view(pullRequests: PullRequest[], local: Local = {}, merged: PullReques
     requests: new Map(local.requests ? [[KEY, local.requests]] : []),
     ciFixes: new Map(local.ciFix ? [[KEY, local.ciFix]] : []),
     reviews: new Map(local.review ? [[KEY, local.review]] : []),
-    approvals: new Map(local.approval ? [[KEY, local.approval]] : []),
+    approvals: new Map(local.approvals ? [[KEY, local.approvals]] : []),
     now,
   };
   return boardView(buildBoard({ mine: pullRequests, reviewRequested: [], merged }, [], state), { now, updatedAt: now });
@@ -113,14 +114,14 @@ describe("status rows", () => {
   const approved = { reviewDecision: "APPROVED" as const, approvedBy: ["pat", "sara"] };
 
   test("each lane shows only the rows that matter there, in a fixed order", () => {
-    const asked: ApprovalAsk = { repo: "acme/api", number: 1, askedAt: minutesAgo(20), bumpedAt: null, slackUrl: "https://app.slack.com/client/T1/C1" };
+    const asked: ApprovalAsk = { repo: "acme/api", number: 1, reviewer: "sre", channel: "#sre", askedAt: minutesAgo(20), bumpedAt: null, slackUrl: "https://app.slack.com/client/T1/C1" };
     const cases: [PullRequest, Local, string, RowView["kind"][]][] = [
       [pr({ isDraft: true }), {}, "draft", ["ci"]],
       [pr(), {}, "agent-review", ["ci", "agent"]],
       [pr({ checks: green }), { review: passed }, "human-review", ["ci", "agent", "approvals"]],
-      [pr({ checks: green }), { review: passed, approval: asked }, "human-review", ["ci", "agent", "approvals", "slack"]],
-      [pr({ ...approved, mergeState: "DIRTY", checks: green }), { approval: asked }, "approved-blocked", ["ci", "approvals"]],
-      [pr({ ...approved, checks: green }), { approval: asked }, "ready", ["ci", "approvals"]],
+      [pr({ checks: green }), { review: passed, approvals: [asked] }, "human-review", ["ci", "agent", "approvals", "slack"]],
+      [pr({ ...approved, mergeState: "DIRTY", checks: green }), { approvals: [asked] }, "approved-blocked", ["ci", "approvals"]],
+      [pr({ ...approved, checks: green }), { approvals: [asked] }, "ready", ["ci", "approvals"]],
     ];
     for (const [pullRequest, local, lane, rows] of cases) {
       const shown = card(pullRequest, local);
@@ -333,10 +334,12 @@ describe("refresh", () => {
 });
 
 describe("Ask for Approval, then Bump", () => {
-  const waiting = pr({ checks: green });
+  const waiting = pr({ checks: green, waitingOn: ["cache-team"] });
   const asked = (overrides: Partial<ApprovalAsk> = {}): ApprovalAsk => ({
     repo: "acme/api",
     number: 1,
+    reviewer: "cache-team",
+    channel: "#cache-team",
     askedAt: minutesAgo(2 * 24 * 60),
     bumpedAt: null,
     slackUrl: "https://app.slack.com/client/T1/C1",
@@ -344,27 +347,81 @@ describe("Ask for Approval, then Bump", () => {
   });
   const slack = (view: CardView) => rowOf(view, "slack");
 
-  test("no ask recorded: the card offers Ask for Approval", () => {
+  test("no ask recorded: the card offers Ask for Approval, naming who it asks", () => {
     const view = card(waiting, { review: passed });
     expect(view.steps).toMatchObject([{ action: "ask-approval", label: "Ask for Approval", confirm: { button: "Draft Ask" } }]);
+    expect(view.steps[0].confirm?.message).toStartWith("Asks the session in charge to draft a Slack message asking cache-team for a review");
     expect(slack(view)).toBeUndefined();
   });
 
-  test("ask recorded: the Slack row opens it, and the card offers Bump", () => {
-    const view = card(waiting, { review: passed, approval: asked() });
-    expect(slack(view)).toMatchObject({ label: "Slack", tone: "link", value: "Asked 2d ago", link: "https://app.slack.com/client/T1/C1" });
-    expect(view.steps).toMatchObject([{ action: "bump", label: "Bump", confirm: { button: "Draft Bump" } }]);
+  test("nobody listed: Ask for Approval leaves working out who to the session", () => {
+    const view = card(pr({ checks: green }), { review: passed });
+    expect(view.steps[0].confirm?.message).toContain("asking each reviewer it still needs for a review");
   });
 
-  test("bumped: the row says when, and links to the message as sent", () => {
+  test("every reviewer asked: the Slack row opens the ask, and the card offers Bump", () => {
+    const view = card(waiting, { review: passed, approvals: [asked()] });
+    expect(slack(view)).toMatchObject({ label: "Slack", tone: "link", value: "#cache-team · asked 2d ago", link: "https://app.slack.com/client/T1/C1" });
+    expect(slack(view)?.items).toEqual([
+      { text: "#cache-team", note: "asked 2d ago", tone: "link", hint: "Open the ask to cache-team in Slack", link: "https://app.slack.com/client/T1/C1", done: false },
+    ]);
+    expect(view.steps).toMatchObject([{ action: "bump", label: "Bump", confirm: { title: "Bump the approval ask for acme/api#1?", button: "Draft Bump" } }]);
+    expect(view.steps[0].confirm?.message).toContain("each ask still waiting (in #cache-team)");
+  });
+
+  test("a reviewer with no ask yet brings Ask for Approval back, for just that reviewer", () => {
+    const view = card(pr({ checks: green, waitingOn: ["cache-team", "sre"] }), { review: passed, approvals: [asked()] });
+    expect(steps(view)).toEqual(["Ask for Approval"]);
+    expect(view.steps[0].confirm?.message).toContain("asking sre for a review");
+  });
+
+  test("an ask from before asks named their reviewer reads as before, and leaves the reviewers listed to ask", () => {
+    const legacy = asked({ reviewer: null, channel: null, askedAt: minutesAgo(40) });
+    const view = card(waiting, { review: passed, approvals: [legacy] });
+    expect(slack(view)?.items).toMatchObject([{ text: "Asked 40m ago", note: null, hint: "Open the approval ask in Slack", done: false }]);
+    expect(slack(view)?.value).toBe("Asked 40m ago");
+    expect(steps(view)).toEqual(["Ask for Approval"]);
+    expect(steps(card(pr({ checks: green }), { review: passed, approvals: [legacy] }))).toEqual(["Bump"]);
+  });
+
+  test("bumped: the line says when, and links to the message as sent", () => {
     const permalink = "https://acme.slack.com/archives/C1/p1793643074057839";
-    const view = card(waiting, { review: passed, approval: asked({ bumpedAt: minutesAgo(24 * 60), slackUrl: permalink }) });
-    expect(slack(view)).toMatchObject({ value: "Bumped 1d ago", link: permalink });
+    const view = card(waiting, { review: passed, approvals: [asked({ bumpedAt: minutesAgo(24 * 60), slackUrl: permalink })] });
+    expect(slack(view)).toMatchObject({ value: "#cache-team · bumped 1d ago", link: permalink });
     expect(steps(view)).toEqual(["Bump"]);
   });
 
+  test("several asks: a line each, those still waiting first, an approved reviewer's checked off", () => {
+    const pullRequest = pr({ checks: green, approvedBy: ["pat"], approvedFor: ["infra"], waitingOn: ["cache-team", "sre"] });
+    const approvals = [
+      asked({ reviewer: "infra", channel: "#infra", askedAt: minutesAgo(3 * 24 * 60), slackUrl: "https://app.slack.com/client/T1/C3" }),
+      asked({ askedAt: minutesAgo(20) }),
+      asked({ reviewer: "sre", channel: "#sre", askedAt: minutesAgo(2 * 24 * 60), bumpedAt: minutesAgo(24 * 60), slackUrl: "https://acme.slack.com/archives/C2/p2" }),
+    ];
+    const view = card(pullRequest, { review: passed, approvals });
+    expect(slack(view)?.items).toMatchObject([
+      { text: "#cache-team", note: "asked 20m ago", tone: "link", done: false },
+      { text: "#sre", note: "bumped 1d ago", tone: "link", link: "https://acme.slack.com/archives/C2/p2", done: false },
+      { text: "#infra", note: "asked 3d ago", tone: "muted", hint: "infra approved. Open the ask to infra in Slack", done: true },
+    ]);
+    expect(slack(view)).toMatchObject({ value: "#cache-team · asked 20m ago", tone: "link" });
+    // Bump is for the asks still waiting.
+    expect(view.steps).toMatchObject([{ action: "bump", confirm: { title: "Bump the approval asks for acme/api#1?" } }]);
+    expect(view.steps[0].confirm?.message).toContain("(in #cache-team and #sre)");
+  });
+
+  test("reviewers who share a message share its line, checked off once all of them approved", () => {
+    const shared = [asked({ channel: "#infra" }), asked({ reviewer: "sre", channel: "#infra" })];
+    const partly = card(pr({ checks: green, approvedFor: ["sre"], waitingOn: ["cache-team"] }), { review: passed, approvals: shared });
+    expect(slack(partly)?.items).toEqual([
+      { text: "#infra", note: "asked 2d ago", tone: "link", hint: "sre approved. Open the ask to cache-team and sre in Slack", link: "https://app.slack.com/client/T1/C1", done: false },
+    ]);
+    const all = card(pr({ checks: green, approvedFor: ["sre", "cache-team"] }), { review: passed, approvals: shared });
+    expect(slack(all)?.items).toMatchObject([{ tone: "muted", done: true }]);
+  });
+
   test("outside Human review, neither the row nor the steps show", () => {
-    const view = card(pr({ checks: green, reviewDecision: "APPROVED" }), { review: passed, approval: asked() });
+    const view = card(pr({ checks: green, reviewDecision: "APPROVED" }), { review: passed, approvals: [asked()] });
     expect(slack(view)).toBeUndefined();
     expect(view.steps.map((step) => step.action)).toEqual(["merge"]);
   });
@@ -373,7 +430,7 @@ describe("Ask for Approval, then Bump", () => {
     ["ask-approval", "Agent drafting approval ask…"],
     ["bump", "Agent drafting bump…"],
   ] as const)("%s in progress: the footer runs it instead of offering a step", (action, running) => {
-    const view = card(waiting, { review: passed, approval: action === "bump" ? asked() : undefined, requests: { [action]: minutesAgo(1) } });
+    const view = card(waiting, { review: passed, approvals: action === "bump" ? [asked()] : undefined, requests: { [action]: minutesAgo(1) } });
     expect(view).toMatchObject({ running, steps: [] });
   });
 
@@ -384,16 +441,16 @@ describe("Ask for Approval, then Bump", () => {
   });
 
   test("bump stalled: a notice says so, the link stays, and the card offers it again", () => {
-    const view = card(waiting, { review: passed, approval: asked(), requests: { bump: minutesAgo(10) } });
+    const view = card(waiting, { review: passed, approvals: [asked()], requests: { bump: minutesAgo(10) } });
     expect(notices(view)).toEqual(["Bump stopped without a result"]);
-    expect(slack(view)?.value).toBe("Asked 2d ago");
+    expect(slack(view)?.value).toBe("#cache-team · asked 2d ago");
     expect(steps(view)).toEqual(["Bump Again"]);
   });
 
   test("an ask recorded after the request finishes it, and Bump takes over", () => {
-    const view = card(waiting, { review: passed, approval: asked({ askedAt: minutesAgo(1) }), requests: { "ask-approval": minutesAgo(3) } });
+    const view = card(waiting, { review: passed, approvals: [asked({ askedAt: minutesAgo(1) })], requests: { "ask-approval": minutesAgo(3) } });
     expect(view.running).toBeNull();
-    expect(slack(view)?.value).toBe("Asked 1m ago");
+    expect(slack(view)?.value).toBe("#cache-team · asked 1m ago");
     expect(steps(view)).toEqual(["Bump"]);
   });
 });

@@ -1,6 +1,19 @@
 import { AGENT_COMMAND } from "../tmux.ts";
 import type { PullRequest } from "./github.ts";
-import { type AgentReviewState, type ApprovalState, type Board, type BoardCard, type CardOwner, type CiFixState, type CiState, type Lane, type RequestProgress, WAITING_ON_PEOPLE } from "./lanes.ts";
+import {
+  type AgentReviewState,
+  type ApprovalState,
+  approvalStep,
+  type Board,
+  type BoardCard,
+  type CardOwner,
+  type CiFixState,
+  type CiState,
+  type Lane,
+  type RequestProgress,
+  WAITING_ON_PEOPLE,
+  waitingAsks,
+} from "./lanes.ts";
 import { AGENT_ACTIONS, type AgentAction } from "./store.ts";
 
 /**
@@ -41,40 +54,62 @@ const STEPS: Record<AgentAction, { button?: string; does: string; running: strin
   "fix-ci": { does: "fix this PR's failing CI", running: "Agent fixing CI…", stalled: "CI fix stopped without a result" },
   "ask-approval": {
     button: "Ask for Approval",
-    does: "draft a Slack message asking for approval (you send it)",
+    does: "draft a Slack message asking each reviewer it still waits on for approval (you send it)",
     running: "Agent drafting approval ask…",
     stalled: "Approval ask stopped without a result",
   },
-  bump: { button: "Bump", does: "draft a bump in the approval ask's Slack thread (you send it)", running: "Agent drafting bump…", stalled: "Bump stopped without a result" },
+  bump: {
+    button: "Bump",
+    does: "draft a bump in the thread of each approval ask still waiting (you send it)",
+    running: "Agent drafting bump…",
+    stalled: "Bump stopped without a result",
+  },
 };
 
+/** "a, b, and c". */
+const AND = new Intl.ListFormat("en", { type: "conjunction" });
+
+/** What a control's confirm can name: the PR, and for the Slack steps, who they ask. */
+interface StepTarget {
+  ref: string;
+  approval: ApprovalState | null;
+}
+
 /** What a control that changes something asks first. Review only starts a reviewer, which asks before changing code. */
-const CONFIRMS: Partial<Record<BoardAction, (ref: string) => Confirm>> = {
-  close: (ref) => ({ title: `Close ${ref}?`, message: "This closes the pull request on GitHub. Its branch stays.", button: "Close PR", destructive: true }),
-  merge: (ref) => ({
+const CONFIRMS: Partial<Record<BoardAction, (target: StepTarget) => Confirm>> = {
+  close: ({ ref }) => ({ title: `Close ${ref}?`, message: "This closes the pull request on GitHub. Its branch stays.", button: "Close PR", destructive: true }),
+  merge: ({ ref }) => ({
     title: `Merge ${ref}?`,
     message: "Asks the session in charge to merge it the repo's normal way, once its checks and approvals allow.",
     button: "Merge",
     destructive: false,
   }),
-  "fix-ci": (ref) => ({
+  "fix-ci": ({ ref }) => ({
     title: `Fix CI on ${ref}?`,
     message: "Asks the session in charge to find out why CI failed, then retry flaky jobs or push a fix.",
     button: "Fix CI",
     destructive: false,
   }),
-  "ask-approval": (ref) => ({
+  "ask-approval": ({ ref, approval }) => ({
     title: `Ask for approval of ${ref}?`,
-    message: "Asks the session in charge to draft a Slack message asking for a review, in the channel you usually ask in. It only drafts; you send it.",
+    message:
+      `Asks the session in charge to draft a Slack message asking ${approval?.unasked.length ? AND.format(approval.unasked) : "each reviewer it still needs"} ` +
+      "for a review, in the channel where they take review requests. It only drafts; you send it.",
     button: "Draft Ask",
     destructive: false,
   }),
-  bump: (ref) => ({
-    title: `Bump the approval ask for ${ref}?`,
-    message: "Asks the session in charge to find the ask you sent and draft a short bump in its thread. It only drafts; you send it.",
-    button: "Draft Bump",
-    destructive: false,
-  }),
+  bump: ({ ref, approval }) => {
+    const waiting = approval ? waitingAsks(approval) : [];
+    const channels = [...new Set(waiting.flatMap((ask) => (ask.channel ? [ask.channel] : [])))];
+    return {
+      title: `Bump the approval ${waiting.length > 1 ? "asks" : "ask"} for ${ref}?`,
+      message:
+        `Asks the session in charge to find each ask still waiting${channels.length ? ` (in ${AND.format(channels)})` : ""} as you sent it, ` +
+        "and draft a short bump in its thread. It only drafts; you send it.",
+      button: "Draft Bump",
+      destructive: false,
+    };
+  },
 };
 
 /** CI as a card's CI row words it. */
@@ -128,6 +163,20 @@ export interface DetailView {
 /** What a status row is about; the app picks each kind's symbol. */
 export type RowKind = "ci" | "agent" | "approvals" | "slack";
 
+/** One line of a row that lists several things, like each Slack ask for the PR's approval. */
+export interface RowItemView {
+  /** What the line is about, like the channel an ask went to. */
+  text: string;
+  /** Said after it, quieter, like how long ago the ask was sent; null when the text says it all. */
+  note: string | null;
+  tone: Tone;
+  hint: string | null;
+  /** Clicking opens this. */
+  link: string | null;
+  /** Taken care of, like an ask whose reviewer approved: shown checked off, its text muted. */
+  done: boolean;
+}
+
 /**
  * One line of a card's status: a short label, then a short value in its tone. A card has its rows
  * in a fixed order (CI, Agent, Approvals, Slack), and only the ones that matter in its lane. A row
@@ -147,6 +196,12 @@ export interface RowView {
   detail: DetailView | null;
   /** Clicking opens this, like the approval ask in Slack. */
   link: string | null;
+  /**
+   * A row about several things lists them here, one line each, in place of its value: the Slack row
+   * has a line per approval ask. Empty for other rows. The value, tone, hint, and link repeat the
+   * first line, for an app that shows only one.
+   */
+  items: RowItemView[];
 }
 
 /**
@@ -237,7 +292,7 @@ function timeAgo(iso: string, now: Date): string {
 const LABELS: Record<RowKind, string> = { ci: "CI", agent: "Agent", approvals: "Approvals", slack: "Slack" };
 
 function row(kind: RowKind, tone: Tone, value: string, extra: Partial<Omit<RowView, "kind" | "label" | "tone" | "value">> = {}): RowView {
-  return { kind, label: LABELS[kind], value, tone, hint: null, running: false, action: null, detail: null, link: null, ...extra };
+  return { kind, label: LABELS[kind], value, tone, hint: null, running: false, action: null, detail: null, link: null, items: [], ...extra };
 }
 
 function notice(tone: Tone, text: string, extra: Partial<Omit<NoticeView, "tone" | "text">> = {}): NoticeView {
@@ -248,8 +303,8 @@ function plural(count: number, noun: string): string {
   return `${count} ${noun}${count === 1 ? "" : "s"}`;
 }
 
-function stepAction(action: AgentAction, ref: string, hint: string, label = STEPS[action].button ?? action): ActionView {
-  return { action, label, hint, running: STEPS[action].running, confirm: CONFIRMS[action]?.(ref) ?? null };
+function stepAction(action: AgentAction, target: StepTarget, hint: string, label = STEPS[action].button ?? action): ActionView {
+  return { action, label, hint, running: STEPS[action].running, confirm: CONFIRMS[action]?.(target) ?? null };
 }
 
 function ciFixDetail(fix: Extract<CiFixState, { status: "fixed" | "not-fixed" }>): DetailView {
@@ -270,7 +325,7 @@ function ciFixDetail(fix: Extract<CiFixState, { status: "fixed" | "not-fixed" }>
  * stopped, it asks again while a notice says so. The row says when a fix runs, and marks CI an
  * agent fixed at this commit with an asterisk that opens what it did.
  */
-function ciParts(card: BoardCard, ref: string, owner: CardOwner | undefined, busy: AgentAction | null): { row: RowView; notices: NoticeView[] } {
+function ciParts(card: BoardCard, target: StepTarget, owner: CardOwner | undefined, busy: AgentAction | null): { row: RowView; notices: NoticeView[] } {
   const { ci, requests, ciFix } = card;
   const [tone, value] = CI_VALUES[ci];
   const fixable = ci === "failed" && owner !== undefined && busy === null;
@@ -286,13 +341,13 @@ function ciParts(card: BoardCard, ref: string, owner: CardOwner | undefined, bus
     const stalled = [notice("warn", STEPS["fix-ci"].stalled)];
     if (!fixable) return { row: row("ci", tone, value), notices: stalled };
     const hint = `${fixHint} again`;
-    return { row: row("ci", tone, value, { hint, action: stepAction("fix-ci", ref, hint, "Fix CI Again") }), notices: stalled };
+    return { row: row("ci", tone, value, { hint, action: stepAction("fix-ci", target, hint, "Fix CI Again") }), notices: stalled };
   }
   const notices: NoticeView[] = [];
   if (fix?.status === "not-fixed") notices.push(notice("bad", "Agent couldn't fix CI", { hint: "See why the agent couldn't fix CI", detail: fixDetail }));
   if (fixable) {
     if (fix?.status === "fixed") notices.push(notice("warn", "Red again after the agent's fix", { hint: fixedHint, detail: fixDetail }));
-    return { row: row("ci", tone, value, { hint: fixHint, action: stepAction("fix-ci", ref, fixHint, "Fix CI") }), notices };
+    return { row: row("ci", tone, value, { hint: fixHint, action: stepAction("fix-ci", target, fixHint, "Fix CI") }), notices };
   }
   if (fix?.status === "fixed") return { row: row("ci", tone, `${value}*`, { hint: fixedHint, detail: fixDetail }), notices };
   return { row: row("ci", tone, value), notices };
@@ -343,11 +398,34 @@ function approvalsParts(card: BoardCard, lane: Lane): { row: RowView; notices: N
   return { row: row("approvals", tone, parts.join(" · "), { hint }), notices: blocker ? [blocker] : [] };
 }
 
-/** Where the PR's approval ask is in Slack, saying how long ago it was asked or last bumped. */
+/**
+ * Each approval ask in Slack, a line per message (reviewers who share a channel can share one):
+ * where it went, and how long ago it was asked or last bumped, opening it. Lines still waiting come
+ * first; one whose reviewers all approved is checked off.
+ */
 function slackRow(approval: ApprovalState, now: Date): RowView | null {
-  if (approval.status === "not-asked") return null;
-  const value = approval.bumpedAt ? `Bumped ${timeAgo(approval.bumpedAt, now)}` : `Asked ${timeAgo(approval.askedAt, now)}`;
-  return row("slack", "link", value, { hint: "Open the approval ask in Slack", link: approval.slackUrl });
+  const items = [...Map.groupBy(approval.asks, (ask) => ask.slackUrl)]
+    .map(([slackUrl, asks]): RowItemView => {
+      const done = asks.every((ask) => ask.approved);
+      const channel = asks.find((ask) => ask.channel !== null)?.channel ?? null;
+      const bumpedAt = asks.flatMap((ask) => (ask.bumpedAt ? [ask.bumpedAt] : [])).toSorted().at(-1);
+      const when = bumpedAt ? `bumped ${timeAgo(bumpedAt, now)}` : `asked ${timeAgo(asks.map((ask) => ask.askedAt).toSorted().at(-1)!, now)}`;
+      const reviewers = asks.flatMap((ask) => (ask.reviewer ? [ask.reviewer] : []));
+      const approved = asks.flatMap((ask) => (ask.approved && ask.reviewer ? [ask.reviewer] : []));
+      const opens = `Open ${reviewers.length ? `the ask to ${AND.format(reviewers)}` : "the approval ask"} in Slack`;
+      return {
+        text: channel ?? when.charAt(0).toUpperCase() + when.slice(1),
+        note: channel ? when : null,
+        tone: done ? "muted" : "link",
+        hint: approved.length ? `${AND.format(approved)} approved. ${opens}` : opens,
+        link: slackUrl,
+        done,
+      };
+    })
+    .toSorted((a, b) => Number(a.done) - Number(b.done));
+  const [first] = items;
+  if (!first) return null;
+  return row("slack", first.tone, first.note ? `${first.text} · ${first.note}` : first.text, { hint: first.hint, link: first.link, items });
 }
 
 /**
@@ -356,7 +434,7 @@ function slackRow(approval: ApprovalState, now: Date): RowView | null {
  * card says so instead: no steps. A step whose request stalled offers itself again.
  */
 function sessionParts(
-  ref: string,
+  target: StepTarget,
   owner: CardOwner | undefined,
   offered: AgentAction[],
   busy: AgentAction | null,
@@ -371,7 +449,7 @@ function sessionParts(
         .filter((action) => STEPS[action].button)
         .map((action) => {
           const again = requests?.[action] === "stalled" ? " Again" : "";
-          return stepAction(action, ref, `${asks} ${STEPS[action].does}`, `${STEPS[action].button}${again}`);
+          return stepAction(action, target, `${asks} ${STEPS[action].does}`, `${STEPS[action].button}${again}`);
         });
   const open: ActionView = {
     action: "open",
@@ -416,16 +494,17 @@ const APPROVAL_LANES: Lane[] = ["human-review", "approved-blocked", "ready"];
 function laneCard(boardCard: BoardCard, lane: Lane, owners: Board["owners"], now: Date): CardView {
   const { requests } = boardCard;
   const ref = `${boardCard.pr.repo}#${boardCard.pr.number}`;
+  const target: StepTarget = { ref, approval: boardCard.approval };
   const owner = owners[ref];
   const offered: AgentAction[] = [];
   if (lane === "agent-review") offered.push("review");
   if (lane === "ready") offered.push("merge");
-  // Human review moves on through Slack: ask for approval once, then bump the ask.
-  if (lane === "human-review") offered.push(boardCard.approval.status === "not-asked" ? "ask-approval" : "bump");
+  // Human review moves on through Slack: ask each reviewer once, then bump the asks still waiting.
+  if (lane === "human-review") offered.push(approvalStep(boardCard.approval));
   // Only the newest request can run.
   const busy = AGENT_ACTIONS.find((action) => requests[action] === "running") ?? null;
 
-  const ci = ciParts(boardCard, ref, owner, busy);
+  const ci = ciParts(boardCard, target, owner, busy);
   const showsAgent = AGENT_LANES.includes(lane);
   const approvals = APPROVAL_LANES.includes(lane) ? approvalsParts(boardCard, lane) : null;
   const rows = [
@@ -443,13 +522,13 @@ function laneCard(boardCard: BoardCard, lane: Lane, owners: Board["owners"], now
   const inRow = busy === "fix-ci" || (busy === "review" && showsAgent);
   const running = busy && !inRow ? STEPS[busy].running : null;
 
-  const close: ActionView = { action: "close", label: "Close PR…", hint: "Close this PR on GitHub", running: null, confirm: CONFIRMS.close!(ref) };
-  return { ...cardBase(boardCard.pr, now), rows, notices, ...sessionParts(ref, owner, offered, busy, requests), running, close };
+  const close: ActionView = { action: "close", label: "Close PR…", hint: "Close this PR on GitHub", running: null, confirm: CONFIRMS.close!(target) };
+  return { ...cardBase(boardCard.pr, now), rows, notices, ...sessionParts(target, owner, offered, busy, requests), running, close };
 }
 
 function mergedCard(pr: PullRequest, owners: Board["owners"], now: Date): CardView {
   const ref = `${pr.repo}#${pr.number}`;
-  return { ...cardBase(pr, now), rows: [], notices: [], ...sessionParts(ref, owners[ref], [], null, undefined), running: null, close: null };
+  return { ...cardBase(pr, now), rows: [], notices: [], ...sessionParts({ ref, approval: null }, owners[ref], [], null, undefined), running: null, close: null };
 }
 
 export interface ViewOptions {

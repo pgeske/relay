@@ -1,6 +1,8 @@
-import { expect, test } from "bun:test";
+import { describe, expect, test } from "bun:test";
 import type { IncomingMessage } from "node:http";
-import { isLocalRequest, runBoardAction } from "./serve.ts";
+import { approvalState } from "./lanes.ts";
+import { askApprovalPrompt, bumpPrompt, isLocalRequest, runBoardAction } from "./serve.ts";
+import type { ApprovalAsk } from "./store.ts";
 
 function request(remoteAddress: string, host: string): IncomingMessage {
   return { socket: { remoteAddress }, headers: { host } } as unknown as IncomingMessage;
@@ -27,4 +29,46 @@ test("an action the board doesn't have is refused", async () => {
 
 test.each(["open", "review", "merge", "fix-ci", "ask-approval", "bump"])("%s needs a session in charge of the PR", async (action) => {
   expect(await runBoardAction(action, "acme/api#1")).toEqual({ status: 404, message: "no omp session is in charge of acme/api#1" });
+});
+
+describe("the Slack steps' prompts", () => {
+  const url = "https://github.com/acme/api/pull/1";
+  const ask = (reviewer: string | null, channel: string | null): ApprovalAsk => ({
+    repo: "acme/api",
+    number: 1,
+    reviewer,
+    channel,
+    askedAt: "2026-11-01T00:00:00Z",
+    bumpedAt: null,
+    slackUrl: `https://acme.slack.com/archives/${reviewer ?? "old"}/p1`,
+  });
+
+  test("Ask for Approval names only the reviewers no ask went to yet, each to be asked in their own channel", () => {
+    const approval = approvalState({ waitingOn: ["cache-team", "sre"], approvedBy: ["pat"], approvedFor: [] }, [ask("sre", "#sre")]);
+    const prompt = askApprovalPrompt(url, { approval, approvedBy: ["pat"] });
+    expect(prompt).toContain("It still waits on approval from cache-team, and the board has no ask for that reviewer yet: ask it.");
+    expect(prompt).not.toContain("sre");
+    expect(prompt).toContain("find the Slack channel where that team or person takes review requests");
+    expect(prompt).toContain(`\`relay board approval ${url} --asked --for <reviewer> --channel <channel-name> --slack <link>\``);
+    expect(prompt).toContain("never send or schedule");
+  });
+
+  test("with nobody listed, Ask for Approval has the session work out who, leaving out who approved or was asked", () => {
+    const approval = approvalState({ waitingOn: [], approvedBy: ["pat"], approvedFor: [] }, [ask("sre", "#sre")]);
+    const prompt = askApprovalPrompt(url, { approval, approvedBy: ["pat"] });
+    expect(prompt).toContain("work out who from its required reviewers or CODEOWNERS");
+    expect(prompt).toContain("leaving out anyone who approved already (pat) or was asked already (sre in #sre)");
+  });
+
+  test("Bump lists each ask still waiting, and leaves out those whose reviewer approved", () => {
+    const asks = [ask("cache-team", "#cache-team"), ask("infra", "#infra"), ask(null, null)];
+    const approval = approvalState({ waitingOn: ["cache-team"], approvedBy: ["pat"], approvedFor: ["infra"] }, asks);
+    const prompt = bumpPrompt(url, { approval, approvedBy: ["pat"] });
+    expect(prompt).toContain("(1) the ask to cache-team in #cache-team, which the board has at https://acme.slack.com/archives/cache-team/p1");
+    expect(prompt).toContain(`\`relay board approval ${url} --bumped --for cache-team --slack <permalink>\``);
+    expect(prompt).toContain("(2) an ask from before the board noted who an ask was for");
+    expect(prompt).toContain(`\`relay board approval ${url} --bumped --channel <channel-name> --slack <permalink>\``);
+    expect(prompt).toContain("(leave out the asks to infra: they approved)");
+    expect(prompt).not.toContain("--for infra");
+  });
 });

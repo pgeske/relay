@@ -35,12 +35,15 @@ Usage:
   relay board ci-fix <pr> --fixed|--not-fixed [--summary <text|->]
                                       Record how a Fix CI request went: what failed, whether
                                       it was flaky, and what was done (or why it couldn't be)
-  relay board approval <pr> --asked --slack <link>
-                                      Record that you drafted a Slack message asking for the
-                                      PR's approval (<link>: the channel link the draft tool gave)
-  relay board approval <pr> --bumped --slack <permalink>
-                                      Record that you drafted a bump in the ask's thread; the
-                                      ask's link moves to <permalink>, the message as sent
+  relay board approval <pr> --asked --for <reviewer>[,<reviewer>…] --channel <channel> --slack <link>
+                                      Record that you drafted a Slack message asking these
+                                      reviewers (GitHub logins or team slugs) for the PR's
+                                      approval in <channel> (its name; a leading # is optional)
+                                      (<link>: the channel link the draft tool gave)
+  relay board approval <pr> --bumped [--for <reviewer>[,…]] [--channel <channel>] --slack <permalink>
+                                      Record that you drafted a bump in an ask's thread; its
+                                      link moves to <permalink>, the message as sent (no --for:
+                                      the ask recorded before asks named their reviewer)
   relay board claim <pr>              Put the omp session this runs in in charge of the PR
 
 <pr> is a PR URL or owner/repo#number. Settings live in ~/.config/relay/board.json.
@@ -190,7 +193,27 @@ export function parseSlackLink(link: string): string {
   return url.href;
 }
 
-/** Records an approval ask or bump an agent drafted in Slack; the user sends drafts, so drafting is the agent's whole step. */
+/** "@acme/cache-team,sara" → ["cache-team", "sara"]: reviewers as a PR's `waitingOn` names them, by login or team slug. */
+export function parseReviewers(value: string): string[] {
+  const reviewers = value
+    .split(",")
+    .map((reviewer) => reviewer.trim().replace(/^@/, "").replace(/^.*\//, ""))
+    .filter((reviewer) => reviewer !== "");
+  if (reviewers.length === 0) throw new Error(`--for needs a reviewer: a GitHub login or team slug (comma-separated for several), got "${value}"`);
+  return reviewers;
+}
+
+/** "team-reviews" → "#team-reviews": a channel as Slack names it, given with or without its # (which a shell reads as a comment unquoted). A DM's "@name" stays. */
+export function parseChannel(value: string): string {
+  const channel = value.trim();
+  if (channel === "" || channel === "#") throw new Error(`--channel needs the Slack channel's name, like team-reviews`);
+  return /^[#@]/.test(channel) ? channel : `#${channel}`;
+}
+
+/**
+ * Records approval asks or bumps an agent drafted in Slack, one per reviewer; the user sends drafts,
+ * so drafting is the agent's whole step. Reviewers sharing one message share its link.
+ */
 function recordApproval(args: string[]): void {
   const [rawRef] = args;
   if (!rawRef) throw new Error(`missing <pr>\n\n${BOARD_HELP}`);
@@ -199,18 +222,36 @@ function recordApproval(args: string[]): void {
   const link = flagValue(args, "--slack");
   if (link === undefined) throw new Error("--slack <link> is required: where the ask is in Slack");
   const slackUrl = parseSlackLink(link);
+  const forValue = flagValue(args, "--for");
+  const channelValue = flagValue(args, "--channel");
+  if (asked && forValue === undefined) throw new Error("--for <reviewer> is required: who the ask is for, by GitHub login or team slug");
+  if (asked && channelValue === undefined) throw new Error("--channel <channel> is required: the name of the Slack channel the ask went to");
+  // A bump without --for is of the ask recorded before asks named their reviewer.
+  const reviewers = forValue === undefined ? [null] : parseReviewers(forValue);
+  const channel = channelValue === undefined ? null : parseChannel(channelValue);
   const { repo, number } = parsePrRef(rawRef);
   const at = new Date().toISOString();
   const db = openBoardStore();
   try {
-    if (asked) recordApprovalAsk(db, repo, number, slackUrl, at);
-    else if (!recordApprovalBump(db, repo, number, slackUrl, at)) {
-      throw new Error(`no approval ask is recorded for ${repo}#${number} to bump; record the ask with --asked first`);
-    }
+    db.transaction(() => {
+      for (const reviewer of reviewers) {
+        // An ask always names its reviewer and channel (required above); a bump may name neither.
+        if (asked && reviewer !== null && channel !== null) {
+          recordApprovalAsk(db, { repo, number, reviewer, channel, slackUrl, askedAt: at });
+        } else if (!recordApprovalBump(db, { repo, number, reviewer, channel, slackUrl, bumpedAt: at })) {
+          throw new Error(
+            reviewer === null
+              ? `${repo}#${number} has no approval ask from before asks named their reviewer; say whose ask you bumped with --for <reviewer>`
+              : `no approval ask for ${reviewer} is recorded for ${repo}#${number} to bump; record the ask with --asked first`,
+          );
+        }
+      }
+    })();
   } finally {
     db.close();
   }
-  console.log(`recorded ${asked ? "approval ask" : "bump"} of ${repo}#${number}: ${slackUrl}`);
+  const who = forValue === undefined ? "" : ` for ${reviewers.join(", ")}`;
+  console.log(`recorded ${asked ? "approval ask" : "bump"} of ${repo}#${number}${who}${channel ? ` in ${channel}` : ""}: ${slackUrl}`);
 }
 
 /**
