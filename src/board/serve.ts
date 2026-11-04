@@ -131,8 +131,8 @@ export function askApprovalPrompt(url: string, { approval, approvedBy }: PromptC
     `If a message you found asks for this PR's review in that channel, or elsewhere but clearly asks that reviewer's team, don't draft for them: ` +
     `record it with \`relay board approval ${url} --asked --existing --for <reviewer> --channel <channel-name> --slack <permalink>\`, ` +
     `using that message's own permalink (the board reads when it was asked from it). If you can't tell whether a message you found counts as asking a reviewer, ask me instead of guessing. ` +
-    `For every other reviewer, draft one message per channel (reviewers who share a channel share one), written as \`${url}. <one plain-English sentence on what the PR does and why>\`, ` +
-    `casual and lowercase, matching recent messages in that channel. Right after each draft, record it with ` +
+    `For every other reviewer, draft one message per channel (reviewers who share a channel share one): the PR's link (${url}) and one plain-English sentence on what the PR does and why, ` +
+    `in the same format and tone as my earlier review requests (the ones you found while searching), or casual and short if there are none. Right after each draft, record it with ` +
     `\`relay board approval ${url} --asked --for <reviewer> --channel <channel-name> --slack <link>\`, using the channel link the draft tool returned. ` +
     `Either way, name the reviewers by GitHub login or team slug (comma-separated when one message asks several) and the channel by its name without the # (a shell reads # as a comment). ` +
     `Then tell me which asks you found and linked, with each one's channel and link, and which you drafted, with each one's channel and what it says.`
