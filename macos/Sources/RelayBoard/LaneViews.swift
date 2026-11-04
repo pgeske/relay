@@ -58,12 +58,11 @@ private struct SectionHeader: View {
             withAnimation(.snappy(duration: 0.25)) { folded.toggle() }
         } label: {
             HStack(spacing: 7) {
-                // An empty lane can't fold: its chevron's box stays, empty.
-                Image(systemName: "chevron.right")
-                    .font(.zoomed(size: 10, weight: .semibold))
+                // An empty lane can't fold: a quiet dot holds the chevron's place, so every header has a mark there.
+                Image(systemName: empty ? "circle.fill" : "chevron.right")
+                    .font(.zoomed(size: empty ? 4 : 10, weight: .semibold))
                     .foregroundStyle(.tertiary)
                     .rotationEffect(.degrees(folded || empty ? 0 : 90))
-                    .opacity(empty ? 0 : 1)
                     .frame(width: 10 * scale)
                 Image(systemName: lane.symbol)
                     .font(.zoomed(.callout))

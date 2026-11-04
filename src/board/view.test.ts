@@ -252,6 +252,13 @@ describe("Merge", () => {
     expect(steps(view)).toEqual(["Merge Again"]);
     expect(view.steps[0].hint).toBe("Reopens the session in relay, then asks it to merge this PR");
   });
+
+  test("a stopped merge on a PR that moved back to Human review is moot: no notice", () => {
+    const view = card(pr({ checks: [{ name: "test", state: "passed" }], approvedBy: ["pat"] }), { requests: { merge: minutesAgo(600) } });
+    expect(view.lane).toBe("human-review");
+    expect(view.notices).toEqual([]);
+    expect(steps(view)).toEqual(["Ask for Approval"]);
+  });
 });
 
 describe("Approvals", () => {

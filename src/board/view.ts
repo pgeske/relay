@@ -517,8 +517,9 @@ function laneCard(boardCard: BoardCard, lane: Lane, owners: Board["owners"], now
     lane === "human-review" ? slackRow(boardCard.approval, now) : null,
   ].filter((candidate): candidate is RowView => candidate !== null);
 
-  // A stopped request needs you; its step offers it again. A stopped CI fix is the CI row's or its own notice.
-  const stalled = (["review", "ask-approval", "bump", "merge"] as const).filter((action) => requests[action] === "stalled").map((action) => notice("warn", STEPS[action].stalled));
+  // A stopped request needs you while its step is still the card's next one, which then offers it again.
+  // One for a step the PR has moved past (or back from) is moot. A stopped CI fix is the CI row's or its own notice.
+  const stalled = offered.filter((action) => requests[action] === "stalled").map((action) => notice("warn", STEPS[action].stalled));
   const notices = [...ci.notices, ...stalled, ...(approvals?.notices ?? [])];
 
   // A step's request shows where its button was, so the card keeps its shape; a CI fix, in the CI row it was asked from.
