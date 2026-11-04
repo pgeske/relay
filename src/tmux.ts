@@ -5,6 +5,7 @@ import { dirname } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import bundledConfig from "./mux/tmux.conf" with { type: "text" };
 import { TMUX_CONF_PATH } from "./paths.ts";
+import { loginShellEnv } from "./shellEnv.ts";
 
 /**
  * relay runs a private tmux server on its own socket, started with relay's own config
@@ -125,20 +126,53 @@ export function tmuxArgs(args: string[]): string[] {
  * Variables from an enclosing tmux or Herdr pane are dropped so relay never nests into
  * or reports itself as part of another multiplexer.
  */
-const hasUtf8Locale = /utf-?8/i.test(process.env.LC_ALL || process.env.LC_CTYPE || process.env.LANG || "");
-export const TMUX_ENV: NodeJS.ProcessEnv = Object.fromEntries(
-  Object.entries({ ...process.env, ...(hasUtf8Locale ? {} : { LC_ALL: "en_US.UTF-8", LANG: "en_US.UTF-8" }) }).filter(
-    ([key]) => key !== "TMUX" && key !== "TMUX_PANE" && !key.startsWith("HERDR_"),
-  ),
-);
+export function tmuxEnvFrom(base: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+  const hasUtf8Locale = /utf-?8/i.test(base.LC_ALL || base.LC_CTYPE || base.LANG || "");
+  return Object.fromEntries(
+    Object.entries({ ...base, ...(hasUtf8Locale ? {} : { LC_ALL: "en_US.UTF-8", LANG: "en_US.UTF-8" }) }).filter(
+      ([key]) => key !== "TMUX" && key !== "TMUX_PANE" && !key.startsWith("HERDR_"),
+    ),
+  );
+}
+export const TMUX_ENV = tmuxEnvFrom(process.env);
+
+/** What tmux runs with; a tmux server started by one of these calls hands it to every tab. */
+let serverEnv: Promise<NodeJS.ProcessEnv> = Promise.resolve(TMUX_ENV);
+
+/**
+ * The phone server runs under launchd or systemd, whose bare environment would reach
+ * every agent through a tmux server it starts. This switches its tmux calls to the
+ * user's login-shell environment and copies that into an already running relay tmux
+ * server, so new tabs see the variables a terminal has either way.
+ */
+export async function adoptLoginShellEnv(): Promise<void> {
+  const resolved = loginShellEnv().then((env) => (env ? tmuxEnvFrom(env) : TMUX_ENV));
+  serverEnv = resolved;
+  const env = await resolved;
+  if (env === TMUX_ENV || (await listTmuxSessions()).length === 0) return;
+  await tmux(setEnvironmentArgs(env));
+}
+
+/**
+ * One tmux invocation that sets every variable in tmux's global environment. tmux reads
+ * an argument ending in `;` as a command separator, and `\;` as a literal `;`.
+ */
+export function setEnvironmentArgs(env: NodeJS.ProcessEnv): string[] {
+  return Object.entries(env)
+    .flatMap(([key, value]) =>
+      value === undefined ? [] : [";", "set-environment", "-g", key, value.endsWith(";") ? `${value.slice(0, -1)}\\;` : value],
+    )
+    .slice(1);
+}
 
 /** Runs tmux with an argv array. Never goes through a shell. */
-function tmux(args: string[]): Promise<string> {
+async function tmux(args: string[]): Promise<string> {
+  const env = await serverEnv;
   const { promise, resolve, reject } = Promise.withResolvers<string>();
   execFile(
     tmuxBinary(),
     tmuxArgs(args),
-    { encoding: "utf8", maxBuffer: 64 * 1024 * 1024, env: TMUX_ENV },
+    { encoding: "utf8", maxBuffer: 64 * 1024 * 1024, env },
     (error, stdout, stderr) => {
       if (error) {
         const message = (stderr || error.message).trim();
@@ -152,9 +186,10 @@ function tmux(args: string[]): Promise<string> {
 }
 
 /** Pipes stdin into tmux (load-buffer needs a stream, execFile cannot feed one). */
-function tmuxWithInput(args: string[], input: string): Promise<void> {
+async function tmuxWithInput(args: string[], input: string): Promise<void> {
+  const env = await serverEnv;
   const { promise, resolve, reject } = Promise.withResolvers<void>();
-  const child = spawn(tmuxBinary(), tmuxArgs(args), { stdio: ["pipe", "ignore", "pipe"], env: TMUX_ENV });
+  const child = spawn(tmuxBinary(), tmuxArgs(args), { stdio: ["pipe", "ignore", "pipe"], env });
   let stderr = "";
   child.stderr.setEncoding("utf8");
   child.stderr.on("data", (chunk: string) => {

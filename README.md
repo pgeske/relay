@@ -44,6 +44,8 @@ relay is built on tmux but runs its own tmux server (`tmux -L relay`) started wi
 
 The server listens on port 7878 (`RELAY_PORT` to change), only answers loopback, private LAN, and Tailscale addresses, and requires the bearer token stored in `~/.config/relay/token`. `relay pair` prefers the computer's Tailscale address so the phone can reach it away from home.
 
+The background server starts outside any terminal, so on startup it asks your login shell (`$SHELL -l -i`) for its environment and gives that to every agent tab, whether the server starts relay's tmux or relay is already running: agents see what you export in `~/.zshenv`, `~/.zprofile`, `~/.zshrc` and the like, as in a terminal. While it asks, `RELAY_RESOLVING_ENVIRONMENT=1` is set, so your rc files can skip slow steps. Restart the server (`relay server install`) after changing those files.
+
 The app lives in [`ios/`](ios/README.md); build it with Xcode and install it on your phone.
 
 ### Live voice (Mac only)
