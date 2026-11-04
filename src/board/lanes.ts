@@ -26,8 +26,11 @@ export type RequestProgress = "none" | "running" | "stalled";
 export interface BoardCard {
   pr: PullRequest;
   ci: CiState;
-  /** A gate check finished and said no; the PR can't merge until that changes. */
-  gateBlocked: boolean;
+  /**
+   * What keeps the PR from merging besides CI, in a few words ("1 approval missing", "Merge
+   * conflicts"); null when nothing does. See `mergeBlocker`.
+   */
+  mergeBlocker: string | null;
   agentReview: AgentReviewState;
   /** The latest result an agent recorded after the board asked it to fix CI. */
   ciFix: CiFixState;
@@ -150,19 +153,42 @@ export function approvalState(ask: ApprovalAsk | undefined): ApprovalState {
   return { status: ask.bumpedAt ? "bumped" : "asked", askedAt: ask.askedAt, bumpedAt: ask.bumpedAt, slackUrl: ask.slackUrl };
 }
 
+/** A gate reason that means people still have to review, like "1 approval missing". */
+const WAITING_ON_PEOPLE = /approv|review/i;
+
 /**
- * A human approval outranks everything before it: an approved PR is about merging, whatever
- * the agent review says. Before approval, a PR waits on its agent review until a review of
- * its current commit passed.
+ * Why GitHub won't merge the PR yet, apart from CI, in a few words. A gate check that failed says
+ * why in its title, and so does a pending one still waiting on reviewers ("1 pending: 1 approval
+ * missing" → "1 approval missing"). GitHub calling an approved PR BLOCKED means a required check
+ * or rule is unmet.
+ */
+export function mergeBlocker(pr: PullRequest, gateChecks: string[]): string | null {
+  const gate = pr.checks.find((check) => gateChecks.includes(check.name) && check.state !== "passed");
+  const reason = gate?.title?.replace(/^\d+ pending:\s*/i, "");
+  const gateReason = reason ? reason.charAt(0).toUpperCase() + reason.slice(1) : null;
+  if (gate?.state === "failed") return gateReason ?? "Merge gate blocked";
+  if (gateReason && WAITING_ON_PEOPLE.test(gateReason)) return gateReason;
+  if (pr.mergeState === "DIRTY") return "Merge conflicts";
+  if (pr.mergeState === "BEHIND") return "Behind its base branch";
+  if (pr.mergeState === "BLOCKED") return gateReason ?? "Blocked by branch rules";
+  return null;
+}
+
+/**
+ * A PR stays with people until it has every approval it needs: GitHub's own review decision, and
+ * a merge gate that can ask for more. Before anyone approved, it waits on its agent review until a
+ * review of its current commit passed. Fully approved, it is ready once nothing else (CI, a gate,
+ * conflicts) stops GitHub from merging it.
  */
 export function laneFor(card: BoardCard): Lane {
-  const { pr, ci, gateBlocked, agentReview } = card;
+  const { pr, ci, mergeBlocker, agentReview } = card;
   if (pr.isDraft) return "draft";
-  if (pr.reviewDecision === "APPROVED") {
-    return gateBlocked || ci === "failed" || ci === "running" ? "approved-blocked" : "ready";
+  const fullyApproved = pr.reviewDecision === "APPROVED" && !WAITING_ON_PEOPLE.test(mergeBlocker ?? "");
+  if (!fullyApproved) {
+    const peopleStarted = pr.approvedBy.length > 0 || pr.reviewDecision === "APPROVED";
+    return peopleStarted || (agentReview.status === "passed" && !agentReview.stale) ? "human-review" : "agent-review";
   }
-  if (agentReview.status === "passed" && !agentReview.stale) return "human-review";
-  return "agent-review";
+  return mergeBlocker || ci === "failed" || ci === "running" ? "approved-blocked" : "ready";
 }
 
 /** "acme-deploy-bot-c2e9d4" → "acme-deploy-bot": GitHub app bots end in a random suffix. */
@@ -200,7 +226,7 @@ export function buildBoard(data: BoardData, gateChecks: string[], local: LocalSt
     const card: BoardCard = {
       pr,
       ci: ciState(pr.checks, gateChecks),
-      gateBlocked: pr.checks.some((check) => gateChecks.includes(check.name) && check.state === "failed"),
+      mergeBlocker: mergeBlocker(pr, gateChecks),
       agentReview: agentReviewState(pr, review),
       ciFix: ciFixState(pr, ciFix),
       approval: approvalState(approval),

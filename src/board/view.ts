@@ -25,8 +25,8 @@ export type BoardAction = (typeof BOARD_ACTIONS)[number];
 const LANES: { id: Lane; title: string; hint: string; hot: boolean }[] = [
   { id: "draft", title: "Draft", hint: "Still being shaped", hot: false },
   { id: "agent-review", title: "Agent review", hint: "No passing review of the current commit", hot: false },
-  { id: "human-review", title: "Human review", hint: "Agent passed; waiting on a person", hot: false },
-  { id: "approved-blocked", title: "Approved · blocked", hint: "CI red or running, or gate said no", hot: true },
+  { id: "human-review", title: "Human review", hint: "Waiting on people's approvals", hot: false },
+  { id: "approved-blocked", title: "Approved · blocked", hint: "All approvals in; CI or GitHub says not yet", hot: true },
   { id: "ready", title: "Ready to merge", hint: "Approved and green", hot: true },
 ];
 
@@ -122,7 +122,7 @@ export interface DetailView {
 }
 
 export interface TagView {
-  kind: "ci" | "ci-fix" | "gate" | "changes-requested" | "agent-review" | "approval" | "request" | "merged";
+  kind: "ci" | "ci-fix" | "gate" | "approvals" | "changes-requested" | "agent-review" | "approval" | "request" | "merged";
   tone: Tone;
   text: string;
   hint: string | null;
@@ -341,10 +341,20 @@ function laneCard(boardCard: BoardCard, lane: Lane, owners: Board["owners"], now
         (fix?.status === "fixed" && fixable ? tag("ci-fix", "ok", "Agent fixed CI", { hint: fixedHint, detail: fixDetail }) : null));
 
   const reviewing = lane === "agent-review" || lane === "human-review" ? agentReviewTag(boardCard.agentReview) : null;
+  // Once people review, the card shows who approved and what GitHub still wants before it will merge.
+  const awaitingPeople = lane === "human-review" || lane === "approved-blocked";
+  const waitingOn = pr.waitingOn.length > 2 ? [...pr.waitingOn.slice(0, 2), `+${pr.waitingOn.length - 2}`] : pr.waitingOn;
+  const blocker = boardCard.mergeBlocker
+    ? tag("gate", lane === "approved-blocked" ? "bad" : "wait", [boardCard.mergeBlocker, ...(waitingOn.length ? [`needs ${waitingOn.join(", ")}`] : [])].join(" · "), {
+        hint: pr.waitingOn.length ? `Still waiting on ${pr.waitingOn.join(", ")}` : null,
+      })
+    : null;
+  const approvals = pr.approvedBy.length ? tag("approvals", "ok", plural(pr.approvedBy.length, "approval"), { hint: `Approved by ${pr.approvedBy.join(", ")}` }) : null;
   const tags = [
     ciTag,
     fixTag,
-    boardCard.gateBlocked ? tag("gate", "bad", "Merge gate blocked") : null,
+    awaitingPeople ? approvals : null,
+    awaitingPeople ? blocker : null,
     pr.reviewDecision === "CHANGES_REQUESTED" ? tag("changes-requested", "bad", "Changes requested") : null,
     requestTag("review", requests.review) ?? reviewing,
     lane === "human-review" ? approvalTag(boardCard.approval, now) : null,

@@ -19,6 +19,9 @@ function pr(overrides: Partial<PullRequest> = {}): PullRequest {
     isDraft: false,
     state: "OPEN",
     reviewDecision: "REVIEW_REQUIRED",
+    mergeState: "CLEAN",
+    approvedBy: [],
+    waitingOn: [],
     headSha: "aaa",
     updatedAt: "2026-11-02T00:00:00Z",
     mergedAt: null,
@@ -195,6 +198,16 @@ describe("Merge", () => {
     expect(steps(view)).toEqual(["Merge Again"]);
     expect(view.steps[0].hint).toBe("Reopens the session in relay, then asks it to merge this PR");
   });
+});
+
+test("a PR still missing an approval shows who approved and who it waits on, and keeps asking people", () => {
+  const gate = { name: "merge-queue/gate", state: "pending" as const, title: "1 pending: 1 approval missing" };
+  const pending = pr({ reviewDecision: "APPROVED", mergeState: "BLOCKED", approvedBy: ["pat"], waitingOn: ["cache-team"], checks: [{ name: "test", state: "passed" }, gate] });
+  const view = boardView(buildBoard({ mine: [pending], reviewRequested: [], merged: [] }, [gate.name], { owners: { [KEY]: owner() }, now }), { now, updatedAt: now });
+  const shown = view.lanes.find((lane) => lane.id === "human-review")!.cards[0];
+  expect(shown.tags).toContainEqual(expect.objectContaining({ kind: "approvals", text: "1 approval", hint: "Approved by pat" }));
+  expect(shown.tags).toContainEqual(expect.objectContaining({ kind: "gate", tone: "wait", text: "1 approval missing · needs cache-team" }));
+  expect(steps(shown)).toEqual(["Ask for Approval"]);
 });
 
 test("Review is offered in Agent review, without asking first", () => {

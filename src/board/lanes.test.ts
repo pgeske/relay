@@ -16,6 +16,9 @@ function pr(overrides: Partial<PullRequest> = {}): PullRequest {
     isDraft: false,
     state: "OPEN",
     reviewDecision: "REVIEW_REQUIRED",
+    mergeState: "CLEAN",
+    approvedBy: [],
+    waitingOn: [],
     headSha: "aaa",
     updatedAt: "2026-10-30T00:00:00Z",
     mergedAt: null,
@@ -91,9 +94,24 @@ describe("lanes", () => {
     expect(laneOf(pr({ reviewDecision: "APPROVED", checks }))).toBe("approved-blocked");
   });
 
-  test("an approved PR waiting only on its running gate check is ready", () => {
+  test("an approved PR waiting only on its running gate check is ready while GitHub would merge it", () => {
     const checks: Check[] = [{ name: "test", state: "passed" }, { name: GATE, state: "pending" }];
     expect(laneOf(pr({ reviewDecision: "APPROVED", checks }))).toBe("ready");
+  });
+
+  test("a PR its merge gate still wants approvals for stays in Human review, even approved and without an agent review", () => {
+    const checks: Check[] = [{ name: "test", state: "passed" }, { name: GATE, state: "pending", title: "1 pending: 1 approval missing" }];
+    const card = buildBoard({ mine: [pr({ reviewDecision: "APPROVED", mergeState: "BLOCKED", checks })], reviewRequested: [], merged: [] }, [GATE]).lanes["human-review"][0];
+    expect(card?.mergeBlocker).toBe("1 approval missing");
+  });
+
+  test("a partly approved PR stays in Human review without an agent review", () => {
+    expect(laneOf(pr({ approvedBy: ["pat"] }))).toBe("human-review");
+  });
+
+  test("a fully approved PR GitHub won't merge is blocked: conflicts, branch rules", () => {
+    expect(laneOf(pr({ reviewDecision: "APPROVED", mergeState: "DIRTY" }))).toBe("approved-blocked");
+    expect(laneOf(pr({ reviewDecision: "APPROVED", mergeState: "BLOCKED" }))).toBe("approved-blocked");
   });
 
   test("an approved PR with CI still running is not ready yet", () => {

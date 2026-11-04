@@ -6,11 +6,19 @@ export type CheckState = "pending" | "passed" | "failed";
 export interface Check {
   name: string;
   state: CheckState;
+  /** The check's one-line status, e.g. a merge gate's "1 pending: 1 approval missing". */
+  title?: string;
 }
 
 export type ReviewDecision = "APPROVED" | "CHANGES_REQUESTED" | "REVIEW_REQUIRED" | null;
 
 export type PullRequestState = "OPEN" | "CLOSED" | "MERGED";
+
+/**
+ * GitHub's word on whether the PR can merge now. BLOCKED: a required review or check is
+ * missing; DIRTY: merge conflicts; BEHIND: the base branch must be merged in first.
+ */
+export type MergeState = "CLEAN" | "HAS_HOOKS" | "UNSTABLE" | "BLOCKED" | "DIRTY" | "BEHIND" | "DRAFT" | "UNKNOWN";
 
 export interface PullRequest {
   repo: string;
@@ -23,6 +31,12 @@ export interface PullRequest {
   /** GitHub's own word on the PR, read live: search can still list a PR as open for a while after it merged. */
   state: PullRequestState;
   reviewDecision: ReviewDecision;
+  /** Null when the query left it out or GitHub hasn't worked it out yet. */
+  mergeState: MergeState | null;
+  /** Who approved the PR, by their latest review. */
+  approvedBy: string[];
+  /** Reviewers (people or teams) still asked to review. */
+  waitingOn: string[];
   headSha: string;
   updatedAt: string;
   mergedAt: string | null;
@@ -43,16 +57,25 @@ const BASE_FIELDS = `
   author { __typename login }`;
 
 /**
- * Slow for GitHub to work out: asking for it alongside checks made the open-PR search about 0.6s
- * slower than asking for it in a second search run side by side. Merged PRs leave it out.
+ * Slow for GitHub to work out: asking for these alongside checks made the open-PR search about 0.6s
+ * slower than asking for them in a second search run side by side. Merged PRs leave them out.
  */
-const REVIEW_DECISION = "reviewDecision";
+const REVIEW_FIELDS = `
+  reviewDecision
+  latestOpinionatedReviews(first: 30) { nodes { state author { login } } }
+  reviewRequests(first: 30) { nodes { requestedReviewer { __typename ... on User { login } ... on Team { slug } } } }`;
+
+/**
+ * Slower still (about 2s across every open PR), and only an approved PR's lane depends on it, so a
+ * third search asks for it on approved PRs alone (about 1.2s).
+ */
+const MERGE_STATE = "mergeStateStatus";
 
 /** The head commit's checks: by far the heaviest part, so only lists that show CI ask for it. */
 const CHECK_FIELDS = `
   commits(last: 1) { nodes { commit { statusCheckRollup { contexts(first: 100) { nodes {
     __typename
-    ... on CheckRun { name status conclusion }
+    ... on CheckRun { name status conclusion title }
     ... on StatusContext { context state }
   } } } } } }`;
 
@@ -68,8 +91,9 @@ function searchQuery(fields: string, pageSize: number): string {
 /** Search pages read per list; a list longer than this is cut off. */
 const MAX_SEARCH_PAGES = 10;
 
+/** One PR's state and head commit: all that re-reading a lagging search result or recording a result needs. */
 const PR_QUERY = `query($owner: String!, $name: String!, $number: Int!) {
-  repository(owner: $owner, name: $name) { pullRequest(number: $number) { ${BASE_FIELDS} ${REVIEW_DECISION} } }
+  repository(owner: $owner, name: $name) { pullRequest(number: $number) { ${BASE_FIELDS} } }
 }`;
 
 const FAILED_CONCLUSIONS: Record<string, true> = {
@@ -85,11 +109,20 @@ interface RawContext {
   name?: string;
   status?: string;
   conclusion?: string | null;
+  title?: string | null;
   context?: string;
   state?: string;
 }
 
-interface RawPullRequest {
+/** The fields REVIEW_FIELDS reads, all absent when the query left them out. */
+interface RawReviewFields {
+  reviewDecision?: ReviewDecision;
+  mergeStateStatus?: MergeState;
+  latestOpinionatedReviews?: { nodes: { state: string; author: { login: string } | null }[] };
+  reviewRequests?: { nodes: { requestedReviewer: { __typename: string; login?: string; slug?: string } | null }[] };
+}
+
+interface RawPullRequest extends RawReviewFields {
   number: number;
   title: string;
   url: string;
@@ -100,15 +133,15 @@ interface RawPullRequest {
   headRefOid: string;
   repository: { nameWithOwner: string };
   author: { __typename: string; login: string } | null;
-  /** Absent when the query left it out. */
-  reviewDecision?: ReviewDecision;
   commits?: { nodes: { commit: { statusCheckRollup: { contexts: { nodes: RawContext[] } } | null } }[] };
 }
 
 function toCheck(context: RawContext): Check {
   if (context.__typename === "CheckRun") {
-    if (context.status !== "COMPLETED") return { name: context.name ?? "", state: "pending" };
-    return { name: context.name ?? "", state: FAILED_CONCLUSIONS[context.conclusion ?? ""] ? "failed" : "passed" };
+    const name = context.name ?? "";
+    const title = context.title ?? undefined;
+    if (context.status !== "COMPLETED") return { name, state: "pending", title };
+    return { name, state: FAILED_CONCLUSIONS[context.conclusion ?? ""] ? "failed" : "passed", title };
   }
   const state = context.state === "SUCCESS" ? "passed" : context.state === "PENDING" || context.state === "EXPECTED" ? "pending" : "failed";
   return { name: context.context ?? "", state };
@@ -126,6 +159,12 @@ function toPullRequest(raw: RawPullRequest): PullRequest {
     isDraft: raw.isDraft,
     state: raw.state,
     reviewDecision: raw.reviewDecision ?? null,
+    mergeState: raw.mergeStateStatus ?? null,
+    approvedBy: (raw.latestOpinionatedReviews?.nodes ?? []).filter((review) => review.state === "APPROVED").map((review) => review.author?.login ?? "ghost"),
+    waitingOn: (raw.reviewRequests?.nodes ?? []).flatMap(({ requestedReviewer: reviewer }) => {
+      const name = reviewer?.login ?? reviewer?.slug;
+      return name ? [name] : [];
+    }),
     headSha: raw.headRefOid,
     updatedAt: raw.updatedAt,
     mergedAt: raw.mergedAt,
@@ -183,14 +222,19 @@ async function search(source: BoardSource, filters: string, fields: string): Pro
   return (await searchNodes<RawPullRequest>(source, filters, fields, 100)).map(toPullRequest);
 }
 
-/** PRs with their CI, plus each one's review decision from a second search run alongside (see REVIEW_DECISION). */
+/**
+ * PRs with their CI, plus their reviews and (for approved ones) merge status from searches run
+ * alongside: see REVIEW_FIELDS and MERGE_STATE.
+ */
 async function searchWithChecks(source: BoardSource, filters: string): Promise<PullRequest[]> {
-  const [prs, decisions] = await Promise.all([
+  const [prs, reviews, mergeStates] = await Promise.all([
     searchNodes<RawPullRequest>(source, filters, BASE_FIELDS + CHECK_FIELDS, 30),
-    searchNodes<{ url: string; reviewDecision: ReviewDecision }>(source, filters, `url ${REVIEW_DECISION}`, 100),
+    searchNodes<RawReviewFields & { url: string }>(source, filters, `url ${REVIEW_FIELDS}`, 100),
+    searchNodes<{ url: string; mergeStateStatus: MergeState }>(source, `${filters} review:approved`, `url ${MERGE_STATE}`, 100),
   ]);
-  const decisionByUrl = new Map(decisions.map((pr) => [pr.url, pr.reviewDecision]));
-  return prs.map((raw) => toPullRequest({ ...raw, reviewDecision: decisionByUrl.get(raw.url) ?? null }));
+  const reviewsByUrl = new Map(reviews.map((pr) => [pr.url, pr]));
+  const mergeStateByUrl = new Map(mergeStates.map((pr) => [pr.url, pr.mergeStateStatus]));
+  return prs.map((raw) => toPullRequest({ ...raw, ...reviewsByUrl.get(raw.url), mergeStateStatus: mergeStateByUrl.get(raw.url) }));
 }
 
 function uniqueByUrl(prs: PullRequest[]): PullRequest[] {
@@ -226,7 +270,7 @@ export async function fetchBoardData(config: BoardConfig, options: FetchOptions 
       const [mine, merged, ...reviewRequested] = await Promise.all([
         searchWithChecks(source, "is:open author:@me").then((prs) => Promise.all(prs.map((pr) => reread(source, pr, recheck)))),
         search(source, `is:merged author:@me merged:>=${since}`, BASE_FIELDS),
-        ...reviewFilters.map((filter) => search(source, `is:open -author:@me ${filter}`, `${BASE_FIELDS} ${REVIEW_DECISION}`)),
+        ...reviewFilters.map((filter) => search(source, `is:open -author:@me ${filter}`, `${BASE_FIELDS} reviewDecision`)),
       ]);
       return { mine, reviewRequested: reviewRequested.flat(), merged };
     }),

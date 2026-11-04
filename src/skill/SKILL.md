@@ -9,17 +9,17 @@ description: Relay's PR board. Use when asked where pull requests stand, what's 
 
 | Lane | Meaning |
 |---|---|
-| Ready to merge | Approved, CI green, merge gate not blocking |
-| Approved · blocked | Approved, but CI is red or running, or a merge gate check failed |
-| Agent review | Ready for review, but no reviewer agent has passed its current commit |
-| Human review | A reviewer agent passed the current commit; waiting on a person |
+| Ready to merge | Every approval in, CI green, and GitHub would merge it now |
+| Approved · blocked | Every approval in, but CI is red or running, or GitHub still won't merge (a failed gate check, branch rules, conflicts) |
+| Agent review | Ready for review, but no reviewer agent has passed its current commit and no person has approved yet |
+| Human review | Waiting on people: a reviewer agent passed the current commit, or someone approved, but approvals are still missing (GitHub's review decision, or a merge gate asking for more) |
 | Draft | Still being shaped |
 
 After the lanes: PRs merged recently. PRs waiting on the user's review aren't on the board; `--json` lists them (`teammates`, and `bots` counted per bot).
 
 ## Reading the board
 
-- `relay board --json` for data. Each card has `pr`, `ci` (`passed`/`failed`/`running`/`none`), `gateBlocked`, `agentReview`, `ciFix` (the latest Fix CI result: `fixed`/`not-fixed`, with `stale` once newer commits landed), `approval` (the Slack message asking for approval: `not-asked`, or `asked`/`bumped` with `askedAt`, `bumpedAt`, and `slackUrl`), and `requests`: where each request the board sent the PR's session stands, per step (`review`, `merge`, `fix-ci`, `ask-approval`, `bump`: `none`, `running`, or `stalled` when the session stopped without finishing). `owners` maps "owner/repo#number" to the session in charge of it.
+- `relay board --json` for data. Each card has `pr` (including `mergeState`, `approvedBy`, and `waitingOn`: reviewers still asked), `ci` (`passed`/`failed`/`running`/`none`), `mergeBlocker` (what keeps it from merging besides CI, e.g. "1 approval missing", or null), `agentReview`, `ciFix` (the latest Fix CI result: `fixed`/`not-fixed`, with `stale` once newer commits landed), `approval` (the Slack message asking for approval: `not-asked`, or `asked`/`bumped` with `askedAt`, `bumpedAt`, and `slackUrl`), and `requests`: where each request the board sent the PR's session stands, per step (`review`, `merge`, `fix-ci`, `ask-approval`, `bump`: `none`, `running`, or `stalled` when the session stopped without finishing). `owners` maps "owner/repo#number" to the session in charge of it.
 - `relay board` opens the human view, the Relay Board macOS app (prefix `B` inside relay does the same). It is for the user; read `--json` yourself.
 
 ## The session in charge of a PR

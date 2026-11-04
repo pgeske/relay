@@ -68,6 +68,7 @@ extension Tag {
         case ("ci", _): "clock.fill"
         case ("ci-fix", _): "wrench.adjustable"
         case ("gate", _): "lock.fill"
+        case ("approvals", _): "person.fill.checkmark"
         case ("changes-requested", _): "exclamationmark.bubble.fill"
         case ("agent-review", _): "sparkles"
         case ("approval", _): "bubble.left.and.text.bubble.right.fill"
