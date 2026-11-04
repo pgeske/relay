@@ -1,6 +1,6 @@
 import { AGENT_COMMAND } from "../tmux.ts";
 import type { PullRequest } from "./github.ts";
-import type { AgentReviewState, ApprovalState, Board, BoardCard, CardOwner, CiFixState, Lane, RequestProgress } from "./lanes.ts";
+import { type AgentReviewState, type ApprovalState, type Board, type BoardCard, type CardOwner, type CiFixState, type CiState, type Lane, type RequestProgress, WAITING_ON_PEOPLE } from "./lanes.ts";
 import { AGENT_ACTIONS, type AgentAction } from "./store.ts";
 
 /**
@@ -33,7 +33,7 @@ const LANES: { id: Lane; title: string; hint: string; hot: boolean }[] = [
 /**
  * How a card words each step it can ask the PR's session to take. Steps with a `button` move the
  * PR to its next lane and get a button on the card; Fix CI has none, since CI can go red in any
- * lane: the red CI tag itself asks for it.
+ * lane: the red CI row itself asks for it.
  */
 const STEPS: Record<AgentAction, { button?: string; does: string; running: string; stalled: string }> = {
   review: { button: "Review", does: "review this PR", running: "Agent reviewing…", stalled: "Review stopped without a result" },
@@ -77,13 +77,17 @@ const CONFIRMS: Partial<Record<BoardAction, (ref: string) => Confirm>> = {
   }),
 };
 
-const CI_TAGS = { passed: ["ok", "CI green"], failed: ["bad", "CI red"], running: ["wait", "CI running"] } as const;
+/** CI as a card's CI row words it. */
+const CI_VALUES: Record<CiState, [Tone, string]> = { passed: ["ok", "Green"], failed: ["bad", "Red"], running: ["wait", "Running"], none: ["muted", "No checks"] };
 
-/** A ticket key at the start of a title, "[PROJ-123] Fix it" or "PROJ-123: Fix it", shown as a tag instead. */
+/** A ticket key at the start of a title, "[PROJ-123] Fix it" or "PROJ-123: Fix it", shown as a chip instead. */
 const TICKET_PREFIX = /^\[?([A-Z][A-Z0-9]+-\d+)\]?:?\s+/;
 
 /** omp starts session titles with a nerd-font icon, which no system font draws. */
 const PRIVATE_USE = /[\uE000-\uF8FF]|[\u{F0000}-\u{10FFFF}]/gu;
+
+/** How many approvals a merge gate still wants, from its reason ("1 approval missing"). */
+const APPROVALS_MISSING = /(\d+) approvals? missing/i;
 
 export type Tone = "ok" | "bad" | "wait" | "muted" | "warn" | "link" | "ghost";
 
@@ -107,7 +111,7 @@ export interface ActionView {
   confirm: Confirm | null;
 }
 
-/** What an agent concluded, as its tag shows it when clicked. */
+/** What an agent concluded, as its row or notice shows it when clicked. */
 export interface DetailView {
   title: string;
   verdict: string;
@@ -121,14 +125,23 @@ export interface DetailView {
   summary: string | null;
 }
 
-export interface TagView {
-  kind: "ci" | "ci-fix" | "gate" | "approvals" | "changes-requested" | "agent-review" | "approval" | "request" | "merged";
+/** What a status row is about; the app picks each kind's symbol. */
+export type RowKind = "ci" | "agent" | "approvals" | "slack";
+
+/**
+ * One line of a card's status: a short label, then a short value in its tone. A card has its rows
+ * in a fixed order (CI, Agent, Approvals, Slack), and only the ones that matter in its lane. A row
+ * acts on at most one of `action`, `detail`, `link`, in that order.
+ */
+export interface RowView {
+  kind: RowKind;
+  label: string;
+  value: string;
   tone: Tone;
-  text: string;
   hint: string | null;
-  /** A request its session is working on right now. */
+  /** The session is on what the value says right now, like fixing CI. */
   running: boolean;
-  /** Clicking asks the PR's session for this (the red CI tag asks it to fix CI). */
+  /** Clicking asks the PR's session for this (red CI asks it to fix CI). */
   action: ActionView | null;
   /** Clicking shows what an agent wrote. */
   detail: DetailView | null;
@@ -136,11 +149,30 @@ export interface TagView {
   link: string | null;
 }
 
+/**
+ * Something on the card that needs you: a request that stopped without a result, an agent that
+ * couldn't fix CI, what keeps GitHub from merging an approved PR.
+ */
+export interface NoticeView {
+  tone: Tone;
+  text: string;
+  hint: string | null;
+  /** Clicking shows what an agent wrote. */
+  detail: DetailView | null;
+}
+
+/** How long ago the PR last changed, or merged, as the card's header says it. */
+export interface AgeView {
+  text: string;
+  tone: Tone;
+  hint: string | null;
+}
+
 /** The omp session in charge of a PR. */
 export interface SessionView {
   title: string;
   state: "open" | "working" | "closed";
-  /** It's on one of the board's requests, whose tag says so. */
+  /** It's on one of the board's requests, which the card's row or `running` says. */
   busy: boolean;
   open: ActionView;
 }
@@ -161,10 +193,14 @@ export interface CardView {
   idleDays: number;
   stale: boolean;
   mergedAt: string | null;
-  tags: TagView[];
+  age: AgeView;
+  rows: RowView[];
+  notices: NoticeView[];
   session: SessionView | null;
   /** The buttons that move the PR to its next lane; none while its session is on a request. */
   steps: ActionView[];
+  /** The request the session is on, shown in place of the steps, when no row already says it ("Agent merging…"). */
+  running: string | null;
   /** Closes the PR on GitHub; null on merged cards. */
   close: ActionView | null;
 }
@@ -198,38 +234,22 @@ function timeAgo(iso: string, now: Date): string {
   return hours < 24 ? `${hours}h ago` : `${Math.round(hours / 24)}d ago`;
 }
 
-function tag(kind: TagView["kind"], tone: Tone, text: string, extra: Partial<Omit<TagView, "kind" | "tone" | "text">> = {}): TagView {
-  return { kind, tone, text, hint: null, running: false, action: null, detail: null, link: null, ...extra };
+const LABELS: Record<RowKind, string> = { ci: "CI", agent: "Agent", approvals: "Approvals", slack: "Slack" };
+
+function row(kind: RowKind, tone: Tone, value: string, extra: Partial<Omit<RowView, "kind" | "label" | "tone" | "value">> = {}): RowView {
+  return { kind, label: LABELS[kind], value, tone, hint: null, running: false, action: null, detail: null, link: null, ...extra };
+}
+
+function notice(tone: Tone, text: string, extra: Partial<Omit<NoticeView, "tone" | "text">> = {}): NoticeView {
+  return { tone, text, hint: null, detail: null, ...extra };
 }
 
 function plural(count: number, noun: string): string {
   return `${count} ${noun}${count === 1 ? "" : "s"}`;
 }
 
-/** A request's tag while it runs or after its session stopped without finishing it. */
-function requestTag(action: AgentAction, progress: RequestProgress): TagView | null {
-  if (progress === "running") return tag("request", "wait", STEPS[action].running, { running: true });
-  if (progress === "stalled") return tag("request", "warn", STEPS[action].stalled);
-  return null;
-}
-
-function agentReviewTag(review: AgentReviewState): TagView {
-  if (review.status === "not-run") return tag("agent-review", "ghost", "No agent review");
-  const [tone, text]: [Tone, string] = review.stale
-    ? ["wait", "Agent review out of date"]
-    : review.status === "passed"
-      ? ["ok", "Agent passed"]
-      : ["wait", `Agent: ${plural(review.findings, "finding")}`];
-  const detail: DetailView = {
-    title: "Agent review",
-    verdict: review.status === "passed" ? "Passed" : plural(review.findings, "finding"),
-    tone: review.status === "passed" ? "ok" : "wait",
-    commit: review.headSha.slice(0, 7),
-    at: review.reviewedAt,
-    note: review.stale ? "New commits landed after this review, so it doesn't cover the latest code." : null,
-    summary: review.summary,
-  };
-  return tag("agent-review", tone, text, { hint: "See what the review said", detail });
+function stepAction(action: AgentAction, ref: string, hint: string, label = STEPS[action].button ?? action): ActionView {
+  return { action, label, hint, running: STEPS[action].running, confirm: CONFIRMS[action]?.(ref) ?? null };
 }
 
 function ciFixDetail(fix: Extract<CiFixState, { status: "fixed" | "not-fixed" }>): DetailView {
@@ -244,31 +264,106 @@ function ciFixDetail(fix: Extract<CiFixState, { status: "fixed" | "not-fixed" }>
   };
 }
 
-/** Where the PR's approval ask is in Slack, saying how long ago it was asked or last bumped. */
-function approvalTag(approval: ApprovalState, now: Date): TagView | null {
-  if (approval.status === "not-asked") return null;
-  const text = approval.bumpedAt ? `Bumped ${timeAgo(approval.bumpedAt, now)}` : `Approval asked ${timeAgo(approval.askedAt, now)}`;
-  return tag("approval", "link", text, { hint: "Open the approval ask in Slack", link: approval.slackUrl });
+/**
+ * The CI row, in every lane, and what about CI needs you. CI can go red in any lane, so red CI
+ * itself asks the session to fix it, unless the session is already on a request; after a fix
+ * stopped, it asks again while a notice says so. The row says when a fix runs, and marks CI an
+ * agent fixed at this commit with an asterisk that opens what it did.
+ */
+function ciParts(card: BoardCard, ref: string, owner: CardOwner | undefined, busy: AgentAction | null): { row: RowView; notices: NoticeView[] } {
+  const { ci, requests, ciFix } = card;
+  const [tone, value] = CI_VALUES[ci];
+  const fixable = ci === "failed" && owner !== undefined && busy === null;
+  const fixHint = owner?.live ? "Ask the session to fix CI" : "Reopen the session in relay and ask it to fix CI";
+  // A CI-fix result speaks only for the commit it was recorded at, and a newer request outranks it.
+  const fix = requests["fix-ci"] === "none" && ciFix.status !== "not-run" && !ciFix.stale ? ciFix : null;
+  const fixDetail = fix ? ciFixDetail(fix) : null;
+  const fixedHint = "An agent fixed CI on this commit: see what it did";
+
+  if (requests["fix-ci"] === "running") return { row: row("ci", "wait", `${value} · agent fixing…`, { hint: "The session is fixing CI", running: true }), notices: [] };
+  if (requests["fix-ci"] === "stalled") {
+    // The stop needs you either way; while CI is still red, the row asks again.
+    const stalled = [notice("warn", STEPS["fix-ci"].stalled)];
+    if (!fixable) return { row: row("ci", tone, value), notices: stalled };
+    const hint = `${fixHint} again`;
+    return { row: row("ci", tone, value, { hint, action: stepAction("fix-ci", ref, hint, "Fix CI Again") }), notices: stalled };
+  }
+  const notices: NoticeView[] = [];
+  if (fix?.status === "not-fixed") notices.push(notice("bad", "Agent couldn't fix CI", { hint: "See why the agent couldn't fix CI", detail: fixDetail }));
+  if (fixable) {
+    if (fix?.status === "fixed") notices.push(notice("warn", "Red again after the agent's fix", { hint: fixedHint, detail: fixDetail }));
+    return { row: row("ci", tone, value, { hint: fixHint, action: stepAction("fix-ci", ref, fixHint, "Fix CI") }), notices };
+  }
+  if (fix?.status === "fixed") return { row: row("ci", tone, `${value}*`, { hint: fixedHint, detail: fixDetail }), notices };
+  return { row: row("ci", tone, value), notices };
 }
 
-function stepAction(action: AgentAction, ref: string, hint: string, label = STEPS[action].button ?? action): ActionView {
-  return { action, label, hint, running: STEPS[action].running, confirm: CONFIRMS[action]?.(ref) ?? null };
+/** The agent review row: what the reviewer agent said about the PR, which opens its write-up. */
+function agentRow(review: AgentReviewState, progress: RequestProgress): RowView {
+  if (progress === "running") return row("agent", "wait", "Reviewing…", { hint: "The session is reviewing this PR", running: true });
+  if (review.status === "not-run") return row("agent", "ghost", "Not run", { hint: "No agent has reviewed this PR" });
+  const detail: DetailView = {
+    title: "Agent review",
+    verdict: review.status === "passed" ? "Passed" : plural(review.findings, "finding"),
+    tone: review.status === "passed" ? "ok" : "wait",
+    commit: review.headSha.slice(0, 7),
+    at: review.reviewedAt,
+    note: review.stale ? "New commits landed after this review, so it doesn't cover the latest code." : null,
+    summary: review.summary,
+  };
+  const [tone, value]: [Tone, string] = review.stale ? ["wait", "Out of date"] : [detail.tone, detail.verdict];
+  return row("agent", tone, value, { hint: "See what the review said", detail });
+}
+
+/**
+ * Who approved and who the PR still waits on: "1 of 2 · needs cache-team" when a merge gate says
+ * how many approvals are missing, else the count. What else keeps GitHub from merging it (conflicts,
+ * a failed gate, branch rules) needs you, so it's a notice, urgent once every approval is in.
+ */
+function approvalsParts(card: BoardCard, lane: Lane): { row: RowView; notices: NoticeView[] } {
+  const { pr, mergeBlocker } = card;
+  const peopleBlocker = mergeBlocker !== null && WAITING_ON_PEOPLE.test(mergeBlocker) ? mergeBlocker : null;
+  const fullyApproved = pr.reviewDecision === "APPROVED" && peopleBlocker === null;
+  const approved = pr.approvedBy.length;
+  const missing = peopleBlocker ? APPROVALS_MISSING.exec(peopleBlocker) : null;
+  const count = missing ? `${approved} of ${approved + Number(missing[1])}` : approved ? plural(approved, "approval") : fullyApproved ? "Approved" : "None yet";
+  const changesRequested = pr.reviewDecision === "CHANGES_REQUESTED";
+  const waitingOn = pr.waitingOn.length > 2 ? [...pr.waitingOn.slice(0, 2), `+${pr.waitingOn.length - 2}`] : pr.waitingOn;
+  const parts = [
+    changesRequested ? "Changes requested" : count,
+    // A gate reason that isn't a count ("Needs owner approval") says itself.
+    peopleBlocker && !missing ? peopleBlocker.charAt(0).toLowerCase() + peopleBlocker.slice(1) : null,
+    waitingOn.length ? `needs ${waitingOn.join(", ")}` : null,
+  ].filter((part): part is string => part !== null);
+  const hint = [approved ? `Approved by ${pr.approvedBy.join(", ")}` : "No approvals yet", pr.waitingOn.length ? `still waiting on ${pr.waitingOn.join(", ")}` : null]
+    .filter((part): part is string => part !== null)
+    .join("; ");
+  const tone: Tone = changesRequested ? "bad" : fullyApproved ? "ok" : "wait";
+  const blocker = mergeBlocker && !peopleBlocker ? notice(lane === "approved-blocked" ? "bad" : "warn", mergeBlocker) : null;
+  return { row: row("approvals", tone, parts.join(" · "), { hint }), notices: blocker ? [blocker] : [] };
+}
+
+/** Where the PR's approval ask is in Slack, saying how long ago it was asked or last bumped. */
+function slackRow(approval: ApprovalState, now: Date): RowView | null {
+  if (approval.status === "not-asked") return null;
+  const value = approval.bumpedAt ? `Bumped ${timeAgo(approval.bumpedAt, now)}` : `Asked ${timeAgo(approval.askedAt, now)}`;
+  return row("slack", "link", value, { hint: "Open the approval ask in Slack", link: approval.slackUrl });
 }
 
 /**
  * The session a card names, and the steps in `offered` (Review, Ask for Approval or Bump, Merge) that
- * ask it to move the PR to its next lane. While the session runs one of the board's requests, that
- * request's tag says it all: no steps. A step whose request stalled offers itself again.
+ * ask it to move the PR to its next lane. While the session runs one of the board's requests, the
+ * card says so instead: no steps. A step whose request stalled offers itself again.
  */
 function sessionParts(
   ref: string,
   owner: CardOwner | undefined,
   offered: AgentAction[],
+  busy: AgentAction | null,
   requests: BoardCard["requests"] | undefined,
 ): { session: SessionView | null; steps: ActionView[] } {
   if (!owner) return { session: null, steps: [] };
   const state = !owner.live ? "closed" : owner.live.status === "working" ? "working" : "open";
-  const busy = AGENT_ACTIONS.some((action) => requests?.[action] === "running");
   const asks = state === "closed" ? "Reopens the session in relay, then asks it to" : "Asks the session to";
   const steps = busy
     ? []
@@ -285,12 +380,19 @@ function sessionParts(
     running: null,
     confirm: null,
   };
-  return { session: { title: owner.title.replace(PRIVATE_USE, "").trim() || "Untitled session", state, busy, open }, steps };
+  return { session: { title: owner.title.replace(PRIVATE_USE, "").trim() || "Untitled session", state, busy: busy !== null, open }, steps };
 }
 
-function cardBase(pr: PullRequest, now: Date): Omit<CardView, "tags" | "session" | "steps" | "close"> {
+function ageView(pr: PullRequest, idleDays: number, stale: boolean, now: Date): AgeView {
+  if (pr.mergedAt) return { text: `Merged ${timeAgo(pr.mergedAt, now)}`, tone: "muted", hint: null };
+  if (stale) return { text: `Stale ${idleDays}d`, tone: "warn", hint: `No activity for ${plural(idleDays, "day")}` };
+  return idleDays === 0 ? { text: "Today", tone: "muted", hint: "Active today" } : { text: `${idleDays}d`, tone: "muted", hint: `Last activity ${plural(idleDays, "day")} ago` };
+}
+
+function cardBase(pr: PullRequest, now: Date): Omit<CardView, "rows" | "notices" | "session" | "steps" | "running" | "close"> {
   const ticket = TICKET_PREFIX.exec(pr.title);
   const idleDays = Math.max(0, Math.floor((now.getTime() - new Date(pr.updatedAt).getTime()) / DAY_MS));
+  const stale = idleDays >= STALE_DAYS;
   return {
     ref: `${pr.repo}#${pr.number}`,
     repo: pr.repo,
@@ -301,76 +403,53 @@ function cardBase(pr: PullRequest, now: Date): Omit<CardView, "tags" | "session"
     ticket: ticket?.[1] ?? null,
     updatedAt: pr.updatedAt,
     idleDays,
-    stale: idleDays >= STALE_DAYS,
+    stale,
     mergedAt: pr.mergedAt,
+    age: ageView(pr, idleDays, stale, now),
   };
 }
 
+/** Lanes whose cards show the agent review, and the ones that show people's approvals. */
+const AGENT_LANES: Lane[] = ["agent-review", "human-review"];
+const APPROVAL_LANES: Lane[] = ["human-review", "approved-blocked", "ready"];
+
 function laneCard(boardCard: BoardCard, lane: Lane, owners: Board["owners"], now: Date): CardView {
-  const { pr, requests, ciFix } = boardCard;
-  const ref = `${pr.repo}#${pr.number}`;
+  const { requests } = boardCard;
+  const ref = `${boardCard.pr.repo}#${boardCard.pr.number}`;
   const owner = owners[ref];
   const offered: AgentAction[] = [];
   if (lane === "agent-review") offered.push("review");
   if (lane === "ready") offered.push("merge");
   // Human review moves on through Slack: ask for approval once, then bump the ask.
   if (lane === "human-review") offered.push(boardCard.approval.status === "not-asked" ? "ask-approval" : "bump");
+  // Only the newest request can run.
+  const busy = AGENT_ACTIONS.find((action) => requests[action] === "running") ?? null;
 
-  // CI can go red in any lane, so the red tag itself asks the session to fix it, unless the session is already on a request.
-  const fixable = boardCard.ci === "failed" && owner !== undefined && !AGENT_ACTIONS.some((action) => requests[action] === "running");
-  const fixHint = owner?.live ? "Ask the session to fix CI" : "Reopen the session in relay and ask it to fix CI";
-  // A CI-fix result speaks only for the commit it was recorded at, and a newer request outranks it.
-  const fix = requests["fix-ci"] === "none" && ciFix.status !== "not-run" && !ciFix.stale ? ciFix : null;
-  const fixDetail = fix ? ciFixDetail(fix) : null;
-  const fixedHint = "An agent fixed CI on this commit: see what it did";
+  const ci = ciParts(boardCard, ref, owner, busy);
+  const showsAgent = AGENT_LANES.includes(lane);
+  const approvals = APPROVAL_LANES.includes(lane) ? approvalsParts(boardCard, lane) : null;
+  const rows = [
+    ci.row,
+    showsAgent ? agentRow(boardCard.agentReview, requests.review) : null,
+    approvals?.row ?? null,
+    lane === "human-review" ? slackRow(boardCard.approval, now) : null,
+  ].filter((candidate): candidate is RowView => candidate !== null);
 
-  let ciTag: TagView | null = null;
-  if (fixable) {
-    ciTag = tag("ci", "bad", CI_TAGS.failed[1], { hint: fixHint, action: stepAction("fix-ci", ref, fixHint, "Fix CI") });
-  } else if (boardCard.ci !== "none") {
-    const [tone, text] = CI_TAGS[boardCard.ci];
-    // After an agent fixed CI on this commit, an asterisk marks the tag, and it opens what the agent did.
-    ciTag = fix?.status === "fixed" ? tag("ci", tone, `${text}*`, { hint: fixedHint, detail: fixDetail }) : tag("ci", tone, text);
-  }
-  // Next to the CI tag: the fix running, stalled (asking again while CI is still red), or how the last one went.
-  const fixTag =
-    requests["fix-ci"] === "stalled" && fixable
-      ? tag("ci-fix", "bad", STEPS["fix-ci"].stalled, { hint: `${fixHint} again`, action: stepAction("fix-ci", ref, `${fixHint} again`, "Fix CI Again") })
-      : (requestTag("fix-ci", requests["fix-ci"]) ??
-        (fix?.status === "not-fixed" ? tag("ci-fix", "bad", "Agent couldn't fix CI", { hint: "See why the agent couldn't fix CI", detail: fixDetail }) : null) ??
-        (fix?.status === "fixed" && fixable ? tag("ci-fix", "ok", "Agent fixed CI", { hint: fixedHint, detail: fixDetail }) : null));
+  // A stopped request needs you; its step offers it again. A stopped CI fix is the CI row's or its own notice.
+  const stalled = (["review", "ask-approval", "bump", "merge"] as const).filter((action) => requests[action] === "stalled").map((action) => notice("warn", STEPS[action].stalled));
+  const notices = [...ci.notices, ...stalled, ...(approvals?.notices ?? [])];
 
-  const reviewing = lane === "agent-review" || lane === "human-review" ? agentReviewTag(boardCard.agentReview) : null;
-  // Once people review, the card shows who approved and what GitHub still wants before it will merge.
-  const awaitingPeople = lane === "human-review" || lane === "approved-blocked";
-  const waitingOn = pr.waitingOn.length > 2 ? [...pr.waitingOn.slice(0, 2), `+${pr.waitingOn.length - 2}`] : pr.waitingOn;
-  const blocker = boardCard.mergeBlocker
-    ? tag("gate", lane === "approved-blocked" ? "bad" : "wait", [boardCard.mergeBlocker, ...(waitingOn.length ? [`needs ${waitingOn.join(", ")}`] : [])].join(" · "), {
-        hint: pr.waitingOn.length ? `Still waiting on ${pr.waitingOn.join(", ")}` : null,
-      })
-    : null;
-  const approvals = pr.approvedBy.length ? tag("approvals", "ok", plural(pr.approvedBy.length, "approval"), { hint: `Approved by ${pr.approvedBy.join(", ")}` }) : null;
-  const tags = [
-    ciTag,
-    fixTag,
-    awaitingPeople ? approvals : null,
-    awaitingPeople ? blocker : null,
-    pr.reviewDecision === "CHANGES_REQUESTED" ? tag("changes-requested", "bad", "Changes requested") : null,
-    requestTag("review", requests.review) ?? reviewing,
-    lane === "human-review" ? approvalTag(boardCard.approval, now) : null,
-    requestTag("ask-approval", requests["ask-approval"]),
-    requestTag("bump", requests.bump),
-    requestTag("merge", requests.merge),
-  ].filter((candidate): candidate is TagView => candidate !== null);
+  // Fixing CI shows in the CI row, and a review in the Agent row where the card has one; any other request in the footer.
+  const inRow = busy === "fix-ci" || (busy === "review" && showsAgent);
+  const running = busy && !inRow ? STEPS[busy].running : null;
 
   const close: ActionView = { action: "close", label: "Close PR…", hint: "Close this PR on GitHub", running: null, confirm: CONFIRMS.close!(ref) };
-  return { ...cardBase(pr, now), tags, ...sessionParts(ref, owner, offered, requests), close };
+  return { ...cardBase(boardCard.pr, now), rows, notices, ...sessionParts(ref, owner, offered, busy, requests), running, close };
 }
 
 function mergedCard(pr: PullRequest, owners: Board["owners"], now: Date): CardView {
   const ref = `${pr.repo}#${pr.number}`;
-  const tags = pr.mergedAt ? [tag("merged", "muted", `Merged ${timeAgo(pr.mergedAt, now)}`)] : [];
-  return { ...cardBase(pr, now), tags, ...sessionParts(ref, owners[ref], [], undefined), close: null };
+  return { ...cardBase(pr, now), rows: [], notices: [], ...sessionParts(ref, owners[ref], [], null, undefined), running: null, close: null };
 }
 
 export interface ViewOptions {

@@ -35,27 +35,50 @@ struct Card: Decodable, Sendable, Identifiable {
     var idleDays: Int
     var stale: Bool
     var mergedAt: Date?
-    var tags: [Tag]
+    var age: Age
+    var rows: [Row]
+    var notices: [Notice]
     var session: Session?
     var steps: [BoardAction]
+    /// The request the session is on, shown in place of the steps when no row already says it.
+    var running: String?
     var close: BoardAction?
 
     var id: String { ref }
 }
 
-struct Tag: Decodable, Sendable, Hashable {
-    var kind: String
-    var tone: Tone
+/// How long ago the PR last changed, or merged, as the card's header says it.
+struct Age: Decodable, Sendable, Hashable {
     var text: String
+    var tone: Tone
     var hint: String?
-    /// A request its session is working on right now.
+}
+
+/// One line of a card's status: a label, then a short value in its tone. A row acts on at most one
+/// of its action, detail, and link, in that order.
+struct Row: Decodable, Sendable, Hashable {
+    var kind: String
+    var label: String
+    var value: String
+    var tone: Tone
+    var hint: String?
+    /// The session is on what the value says right now, like fixing CI.
     var running: Bool
-    /// Clicking asks the PR's session for this (the red CI tag asks it to fix CI).
+    /// Clicking asks the PR's session for this (red CI asks it to fix CI).
     var action: BoardAction?
     /// Clicking shows what an agent wrote.
     var detail: Detail?
     /// Clicking opens this, like the approval ask in Slack.
     var link: URL?
+}
+
+/// Something on the card that needs you, like a request that stopped without a result.
+struct Notice: Decodable, Sendable, Hashable {
+    var tone: Tone
+    var text: String
+    var hint: String?
+    /// Clicking shows what an agent wrote.
+    var detail: Detail?
 }
 
 enum Tone: String, Decodable, Sendable {
@@ -107,27 +130,25 @@ struct Session: Decodable, Sendable, Hashable {
 
     var title: String
     var state: State
-    /// On one of the board's requests, whose tag says so.
+    /// On one of the board's requests, which the card says in a row or its footer.
     var busy: Bool
     var open: BoardAction
 }
 
 extension Card {
     /// The card once its session took `running` on, before the server's board shows it: the step
-    /// buttons and the controls that ask for a step give way to the request's running tag, and the
-    /// red CI tag stays, as a plain tag.
+    /// buttons and the rows' controls give way to the request running in the footer.
     func takingOn(_ running: String) -> Card {
         var card = self
         card.steps = []
-        card.tags = tags.compactMap { tag in
-            guard tag.action != nil else { return tag }
-            guard tag.kind == "ci" else { return nil }
-            var plain = tag
+        card.rows = rows.map { row in
+            guard row.action != nil else { return row }
+            var plain = row
             plain.action = nil
             plain.hint = nil
             return plain
         }
-        card.tags.append(Tag(kind: "request", tone: .wait, text: running, running: true))
+        card.running = running
         card.session?.busy = true
         return card
     }

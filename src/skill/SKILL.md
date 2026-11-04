@@ -54,7 +54,7 @@ EOF
 
 ## Recording a Fix CI result
 
-Clicking a card's red **CI red** tag on the board (it works in any lane) asks the session in charge to find out why CI failed on the PR's head commit, then retry flaky or infrastructure failures, or fix a real failure with a new signed commit (never force-push, amend shared history, or bypass or disable checks). When you finish one, **always** record how it went, fixed or not, so the card stops showing the request as running:
+Clicking **Fix CI** in a card's red CI row on the board (it works in any lane) asks the session in charge to find out why CI failed on the PR's head commit, then retry flaky or infrastructure failures, or fix a real failure with a new signed commit (never force-push, amend shared history, or bypass or disable checks). When you finish one, **always** record how it went, fixed or not, so the card stops showing the request as running:
 
 ```sh
 relay board ci-fix <pr-url> --fixed --summary - <<'EOF'
@@ -89,6 +89,6 @@ relay board approval <pr-url> --asked --slack https://app.slack.com/client/T0123
 relay board approval <pr-url> --bumped --slack https://acme.slack.com/archives/C0456/p1793643074057839
 ```
 
-- `--slack` must be a Slack link (https on slack.com). The card's tag (**Approval asked 2d ago**, **Bumped 1d ago**) opens it.
+- `--slack` must be a Slack link (https on slack.com). The card's Slack row (**Asked 2d ago**, **Bumped 1d ago**) opens it.
 - `--bumped` moves the recorded link to the permalink, so later bumps and the board go straight to the thread. It needs an ask recorded first.
 - Recording `--asked` again (say, re-drafting an ask that was never sent) starts over: it replaces the ask and forgets its bumps.

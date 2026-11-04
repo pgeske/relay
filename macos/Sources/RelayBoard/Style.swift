@@ -59,61 +59,22 @@ extension Lane {
     }
 }
 
-extension Tag {
-    /// The symbol leading the tag; running tags show a spinner instead.
-    var symbol: String? {
-        switch (kind, tone) {
-        case ("ci", .ok): "checkmark.circle.fill"
-        case ("ci", .bad): "xmark.circle.fill"
-        case ("ci", _): "clock.fill"
-        case ("ci-fix", _): "wrench.adjustable"
-        case ("gate", _): "lock.fill"
-        case ("approvals", _): "person.fill.checkmark"
-        case ("changes-requested", _): "exclamationmark.bubble.fill"
-        case ("agent-review", _): "sparkles"
-        case ("approval", _): "bubble.left.and.text.bubble.right.fill"
-        case ("merged", _): "arrow.triangle.merge"
-        case (_, .warn): "exclamationmark.triangle.fill"
-        default: nil
-        }
+extension Tone {
+    /// A value's text in its tone; neutral tones read as secondary text.
+    var textStyle: AnyShapeStyle {
+        self == .muted || self == .ghost ? AnyShapeStyle(.secondary) : AnyShapeStyle(color)
     }
 }
 
-/// Lays its views out in rows, wrapping to a new row when one is full.
-struct FlowLayout: Layout {
-    var spacing: CGFloat = 5
-    var rowSpacing: CGFloat = 5
-
-    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
-        arrange(subviews, width: proposal.width ?? .infinity).size
-    }
-
-    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
-        let frames = arrange(subviews, width: bounds.width).frames
-        for (subview, frame) in zip(subviews, frames) {
-            subview.place(at: CGPoint(x: bounds.minX + frame.minX, y: bounds.minY + frame.minY), proposal: ProposedViewSize(frame.size))
+extension Row {
+    /// The symbol beside the row's label.
+    var symbol: String {
+        switch kind {
+        case "ci": "checklist"
+        case "agent": "sparkles"
+        case "approvals": "person.2"
+        case "slack": "bubble.left"
+        default: "circle"
         }
-    }
-
-    private func arrange(_ subviews: Subviews, width: CGFloat) -> (frames: [CGRect], size: CGSize) {
-        var frames: [CGRect] = []
-        var x: CGFloat = 0
-        var y: CGFloat = 0
-        var rowHeight: CGFloat = 0
-        var widest: CGFloat = 0
-        for subview in subviews {
-            var size = subview.sizeThatFits(.unspecified)
-            if size.width > width { size = subview.sizeThatFits(ProposedViewSize(width: width, height: nil)) }
-            if x > 0, x + size.width > width {
-                x = 0
-                y += rowHeight + rowSpacing
-                rowHeight = 0
-            }
-            frames.append(CGRect(origin: CGPoint(x: x, y: y), size: size))
-            widest = max(widest, x + size.width)
-            x += size.width + spacing
-            rowHeight = max(rowHeight, size.height)
-        }
-        return (frames, CGSize(width: widest, height: y + rowHeight))
     }
 }

@@ -154,7 +154,7 @@ export function approvalState(ask: ApprovalAsk | undefined): ApprovalState {
 }
 
 /** A gate reason that means people still have to review, like "1 approval missing". */
-const WAITING_ON_PEOPLE = /approv|review/i;
+export const WAITING_ON_PEOPLE = /approv|review/i;
 
 /**
  * Why GitHub won't merge the PR yet, apart from CI, in a few words. A gate check that failed says
