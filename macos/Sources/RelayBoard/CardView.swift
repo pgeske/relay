@@ -2,44 +2,48 @@ import AppKit
 import SwiftUI
 
 /// One pull request: a header with the card's "…" menu, a few status rows in a fixed order, what
-/// needs you, then the session and the card's next step, each on a row of its own. Clicking the card
-/// opens the PR in the browser; its rows, session, step, and menu act on their own.
+/// needs you, then the session and the card's next step, each on a row of its own. It fills the height
+/// it's offered, the extra above the footer, so the footers of a row of cards line up. Clicking the
+/// card opens the PR in the browser; its rows, session, step, and menu act on their own.
 struct CardView: View {
     let card: Card
-    /// Merged cards recede: there's nothing left to do on them.
-    var muted = false
 
-    @Environment(BoardModel.self) private var model
     @Environment(\.openURL) private var openURL
     @State private var hovering = false
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            VStack(alignment: .leading, spacing: 5) {
-                header
-                Text(card.title)
-                    .font(.zoomed(.body).weight(.semibold))
-                    .foregroundStyle(muted ? .secondary : .primary)
-                    .lineLimit(3)
-                    .fixedSize(horizontal: false, vertical: true)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-            }
-            if !card.rows.isEmpty {
-                StatusRows(card: card)
-            }
-            if !card.notices.isEmpty {
-                VStack(alignment: .leading, spacing: 4) {
-                    ForEach(card.notices, id: \.self) { NoticeLine(notice: $0, card: card) }
+        VStack(alignment: .leading, spacing: 0) {
+            VStack(alignment: .leading, spacing: 10) {
+                VStack(alignment: .leading, spacing: 5) {
+                    header
+                    Text(card.title)
+                        .font(.zoomed(.body).weight(.semibold))
+                        .lineLimit(3)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+                if !card.rows.isEmpty {
+                    StatusRows(card: card)
+                }
+                if !card.notices.isEmpty {
+                    VStack(alignment: .leading, spacing: 4) {
+                        ForEach(card.notices, id: \.self) { NoticeLine(notice: $0, card: card) }
+                    }
                 }
             }
+            Spacer(minLength: 0)
             if card.session != nil || !card.steps.isEmpty || card.running != nil {
-                Divider()
-                VStack(alignment: .leading, spacing: 8) {
-                    if let session = card.session { SessionLine(card: card, session: session) }
-                    StepSlot(card: card)
+                VStack(alignment: .leading, spacing: 10) {
+                    Divider()
+                    VStack(alignment: .leading, spacing: 8) {
+                        if let session = card.session { SessionLine(card: card, session: session) }
+                        StepSlot(card: card)
+                    }
                 }
+                .padding(.top, 10)
             }
         }
+        .frame(maxHeight: .infinity, alignment: .top)
         .padding(12)
         .background {
             RoundedRectangle(cornerRadius: 12, style: .continuous)
@@ -84,8 +88,17 @@ struct CardView: View {
         .help(card.age.hint ?? "")
     }
 
-    /// The card's actions, in its "…" menu and its right-click menu alike.
-    @ViewBuilder private var menu: some View {
+    private var menu: some View { CardMenuItems(card: card) }
+}
+
+/// A card's actions, in its "…" menu and its right-click menu alike.
+struct CardMenuItems: View {
+    let card: Card
+
+    @Environment(BoardModel.self) private var model
+    @Environment(\.openURL) private var openURL
+
+    var body: some View {
         Button("Open in Browser", systemImage: "safari") { openURL(card.url) }
         Button("Copy Link", systemImage: "link") {
             NSPasteboard.general.clearContents()
@@ -106,7 +119,7 @@ struct CardView: View {
 }
 
 /// The ticket key a PR's title started with, as a small muted chip.
-private struct TicketChip: View {
+struct TicketChip: View {
     let ticket: String
 
     var body: some View {
@@ -417,7 +430,7 @@ private struct NoticeLine: View {
 }
 
 /// The "…" button in the card's corner: the card's menu, always there but quiet until the pointer's on it.
-private struct CardMenu<Items: View>: View {
+struct CardMenu<Items: View>: View {
     @ViewBuilder let items: Items
     @State private var hovering = false
 

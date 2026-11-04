@@ -30,7 +30,7 @@ private struct LaneSection: View {
     var body: some View {
         Section {
             if !folded && !lane.cards.isEmpty {
-                CardGrid(lane: lane)
+                LaneCards(lane: lane)
                     .padding(8)
                     .background {
                         RoundedRectangle(cornerRadius: 18, style: .continuous)
@@ -46,24 +46,29 @@ private struct LaneSection: View {
 }
 
 /// A lane's one-line header: chevron, symbol, title, count, and its hint. Pinned, so it hides the
-/// cards scrolling under it.
+/// cards scrolling under it. The chevron and symbol sit in fixed boxes, so every header's title starts
+/// at the same place, and the chevron lines up with the cards' left edge.
 private struct SectionHeader: View {
     let lane: Lane
     @Binding var folded: Bool
 
     var body: some View {
+        let scale = Zoom.shared.scale
         Button {
             withAnimation(.snappy(duration: 0.25)) { folded.toggle() }
         } label: {
             HStack(spacing: 7) {
+                // An empty lane can't fold: its chevron's box stays, empty.
                 Image(systemName: "chevron.right")
                     .font(.zoomed(size: 10, weight: .semibold))
                     .foregroundStyle(.tertiary)
                     .rotationEffect(.degrees(folded || empty ? 0 : 90))
                     .opacity(empty ? 0 : 1)
+                    .frame(width: 10 * scale)
                 Image(systemName: lane.symbol)
                     .font(.zoomed(.callout))
                     .foregroundStyle(lane.tint)
+                    .frame(width: 18 * scale)
                 Text(lane.title)
                     .font(.zoomedHeadline)
                     .foregroundStyle(empty ? .secondary : .primary)
@@ -78,7 +83,8 @@ private struct SectionHeader: View {
                 Spacer(minLength: 0)
             }
             .lineLimit(1)
-            .padding(.horizontal, 22)
+            // The lane's box is inset 16 and its cards 8 more.
+            .padding(.horizontal, 24)
             .padding(.vertical, 9)
             .contentShape(.rect)
         }
@@ -116,7 +122,7 @@ struct LaneGridView: View {
                     ContentUnavailableView("Nothing in \(lane.title)", systemImage: lane.symbol, description: Text(lane.hint))
                         .padding(.top, 60)
                 } else {
-                    CardGrid(lane: lane)
+                    LaneCards(lane: lane)
                 }
             }
             .padding(20)
@@ -124,15 +130,137 @@ struct LaneGridView: View {
     }
 }
 
-/// A lane's cards, as many across as fit and top-aligned, never wider than a card reads well.
-private struct CardGrid: View {
+/// A lane's cards: Merged as a list, newest first, since there's nothing left to do on them; every
+/// other lane as a grid.
+private struct LaneCards: View {
     let lane: Lane
 
     var body: some View {
-        let zoom = Zoom.shared.scale
-        LazyVGrid(columns: [GridItem(.adaptive(minimum: 260 * zoom, maximum: 380 * zoom), spacing: 10, alignment: .top)], alignment: .leading, spacing: 10) {
-            ForEach(lane.cards) { CardView(card: $0, muted: lane.id == "merged") }
+        if lane.id == "merged" {
+            MergedList(cards: lane.cards)
+        } else {
+            let zoom = Zoom.shared.scale
+            CardGrid(minimum: 260 * zoom, maximum: 380 * zoom, spacing: 10) {
+                ForEach(lane.cards) { CardView(card: $0) }
+            }
         }
+    }
+}
+
+/// Cards as many across as fit, never wider than a card reads well, left to right and then down.
+/// Each row is as tall as its tallest card, and every card in it is offered that height, so their
+/// footers line up.
+private struct CardGrid: Layout {
+    let minimum: CGFloat
+    let maximum: CGFloat
+    let spacing: CGFloat
+
+    struct Rows {
+        var width: CGFloat = -1
+        var columns = 1
+        var columnWidth: CGFloat = 0
+        var heights: [CGFloat] = []
+    }
+
+    func makeCache(subviews: Subviews) -> Rows { Rows() }
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout Rows) -> CGSize {
+        let width = proposal.width ?? maximum
+        measure(width: width, subviews: subviews, cache: &cache)
+        let height = cache.heights.reduce(0, +) + spacing * CGFloat(max(cache.heights.count - 1, 0))
+        return CGSize(width: width, height: height)
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout Rows) {
+        measure(width: bounds.width, subviews: subviews, cache: &cache)
+        var y = bounds.minY
+        for (row, height) in cache.heights.enumerated() {
+            for column in 0..<cache.columns {
+                let index = row * cache.columns + column
+                guard index < subviews.count else { break }
+                let x = bounds.minX + CGFloat(column) * (cache.columnWidth + spacing)
+                subviews[index].place(at: CGPoint(x: x, y: y), anchor: .topLeading, proposal: ProposedViewSize(width: cache.columnWidth, height: height))
+            }
+            y += height + spacing
+        }
+    }
+
+    /// The columns that fit `width` and each row's height, unless they're measured for it already.
+    /// SwiftUI starts the cache over whenever the cards change.
+    private func measure(width: CGFloat, subviews: Subviews, cache: inout Rows) {
+        guard width != cache.width else { return }
+        let columns = max(1, Int((width + spacing) / (minimum + spacing)))
+        let columnWidth = min(maximum, (width - spacing * CGFloat(columns - 1)) / CGFloat(columns))
+        let fit = ProposedViewSize(width: columnWidth, height: nil)
+        cache = Rows(
+            width: width, columns: columns, columnWidth: columnWidth,
+            heights: stride(from: 0, to: subviews.count, by: columns).map { start in
+                subviews[start..<min(start + columns, subviews.count)].map { $0.sizeThatFits(fit).height }.max() ?? 0
+            }
+        )
+    }
+}
+
+/// Merged PRs, one per line in the order given: repo and number, title, and when it merged.
+private struct MergedList: View {
+    let cards: [Card]
+
+    var body: some View {
+        VStack(spacing: 0) {
+            ForEach(Array(cards.enumerated()), id: \.element.id) { index, card in
+                if index > 0 { Divider().padding(.horizontal, 12) }
+                MergedRow(card: card)
+            }
+        }
+        .background(Color(nsColor: .controlBackgroundColor), in: .rect(cornerRadius: 12, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .strokeBorder(Color.primary.opacity(0.07), lineWidth: 1)
+        }
+        .clipShape(.rect(cornerRadius: 12, style: .continuous))
+    }
+}
+
+/// One merged PR on a line of its own. Clicking it opens the PR; its "…" menu and right-click menu
+/// are the card's.
+private struct MergedRow: View {
+    let card: Card
+
+    @Environment(\.openURL) private var openURL
+    @State private var hovering = false
+
+    var body: some View {
+        HStack(alignment: .firstTextBaseline, spacing: 8) {
+            HStack(spacing: 3) {
+                Text(card.repoName).fontWeight(.medium)
+                Text(verbatim: "#\(card.number)").monospacedDigit()
+            }
+            .font(.zoomed(.caption))
+            .foregroundStyle(.secondary)
+            .fixedSize()
+            .help(card.repo)
+            if let ticket = card.ticket { TicketChip(ticket: ticket) }
+            Text(card.title)
+                .font(.zoomed(.subheadline).weight(.medium))
+                .truncationMode(.tail)
+            Spacer(minLength: 8)
+            Text(card.age.text)
+                .font(.zoomed(.caption))
+                .foregroundStyle(.tertiary)
+                .fixedSize()
+                .help(card.age.hint ?? "")
+            CardMenu { CardMenuItems(card: card) }
+        }
+        .lineLimit(1)
+        .padding(.horizontal, 12)
+        .padding(.vertical, 8)
+        .background(Color.primary.opacity(hovering ? 0.05 : 0))
+        .contentShape(.rect)
+        .onTapGesture { openURL(card.url) }
+        .onHover { hovering = $0 }
+        .animation(.easeOut(duration: 0.15), value: hovering)
+        .help("Open \(card.ref) on GitHub")
+        .contextMenu { CardMenuItems(card: card) }
     }
 }
 
