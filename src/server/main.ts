@@ -14,6 +14,7 @@ import { findSessionPane, listSessions, toSession, type Session } from "./sessio
 import { THINKING_LEVELS, listModels, rememberChoice } from "./modelState.ts";
 import { resolveSessionFile } from "./sessionFile.ts";
 import {
+  adoptLoginShellEnv,
   createDetachedSession,
   killWindow,
   listPanes,
@@ -470,6 +471,8 @@ async function handleUpgrade(req: IncomingMessage, socket: Duplex, head: Buffer)
 export function runServer(): void {
   loadToken();
   writeConfig();
+  // Agents this server starts should see what a terminal tab would; every tmux call waits for this.
+  void adoptLoginShellEnv().catch((error: unknown) => console.error("could not pass the login-shell environment to tmux", error));
 
   const server = createServer((req, res) => {
     handle(req, res).catch((error: unknown) => {
