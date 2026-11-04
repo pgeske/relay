@@ -27,8 +27,8 @@ final class BoardModel {
     var confirming: PendingAction?
     /// Controls on their way to the server, as "<ref> <action>".
     private var sending: Set<String> = []
-    /// Requests the server took on that its board doesn't show yet: card ref → what the card says meanwhile.
-    private var started: [String: String] = [:]
+    /// Requests the server took on that its board doesn't show yet, by card ref.
+    private var started: [String: BoardAction] = [:]
     /// Cards closed since the last refresh.
     private var closed: Set<String> = []
 
@@ -130,7 +130,7 @@ final class BoardModel {
         do {
             let result = try await client.perform(action.action, on: card.ref)
             toast = Toast(message: result.message, failed: !result.ok)
-            if result.ok, let running = action.running { started[card.ref] = running }
+            if result.ok, action.running != nil { started[card.ref] = action }
             if result.ok, action.action == "close" { closed.insert(card.ref) }
             // The session took a step on, or the card was out of date (the PR merged, or its session is
             // already on a request): show what's true now.

@@ -1,9 +1,9 @@
 import AppKit
 import SwiftUI
 
-/// One pull request: a header, a few status rows in a fixed order, what needs you, and a footer with
-/// the session and the card's next step. Clicking the card opens the PR in the browser; its rows,
-/// session, and step buttons act on their own.
+/// One pull request: a header with the card's "…" menu, a few status rows in a fixed order, what
+/// needs you, then the session and the card's next step, each on a row of its own. Clicking the card
+/// opens the PR in the browser; its rows, session, step, and menu act on their own.
 struct CardView: View {
     let card: Card
     /// Merged cards recede: there's nothing left to do on them.
@@ -34,7 +34,10 @@ struct CardView: View {
             }
             if card.session != nil || !card.steps.isEmpty || card.running != nil {
                 Divider()
-                Footer(card: card)
+                VStack(alignment: .leading, spacing: 8) {
+                    if let session = card.session { SessionLine(card: card, session: session) }
+                    StepSlot(card: card)
+                }
             }
         }
         .padding(12)
@@ -46,9 +49,6 @@ struct CardView: View {
         .overlay {
             RoundedRectangle(cornerRadius: 12, style: .continuous)
                 .strokeBorder(Color.primary.opacity(hovering ? 0.14 : 0.07), lineWidth: 1)
-        }
-        .overlay(alignment: .topTrailing) {
-            if hovering, let close = card.close { closeButton(close) }
         }
         .contentShape(.rect(cornerRadius: 12))
         .onTapGesture { openURL(card.url) }
@@ -69,6 +69,7 @@ struct CardView: View {
             if let ticket = card.ticket { TicketChip(ticket: ticket) }
             Spacer(minLength: 4)
             age
+            CardMenu { menu }
         }
         .font(.zoomed(.caption))
         .lineLimit(1)
@@ -83,37 +84,23 @@ struct CardView: View {
         .help(card.age.hint ?? "")
     }
 
-    private func closeButton(_ close: BoardAction) -> some View {
-        Button { model.request(close, on: card) } label: {
-            Image(systemName: "xmark")
-                .font(.zoomed(size: 8, weight: .bold))
-                .foregroundStyle(.secondary)
-                .frame(width: 18, height: 18)
-                .background(.thinMaterial, in: .circle)
-                .overlay(Circle().strokeBorder(Color.primary.opacity(0.1)))
-        }
-        .buttonStyle(.plain)
-        .help(close.hint)
-        .offset(x: 6, y: -6)
-        .transition(.opacity.combined(with: .scale(scale: 0.8)))
-    }
-
+    /// The card's actions, in its "…" menu and its right-click menu alike.
     @ViewBuilder private var menu: some View {
-        Button("Open Pull Request") { openURL(card.url) }
-        Button("Copy Link") {
+        Button("Open in Browser", systemImage: "safari") { openURL(card.url) }
+        Button("Copy Link", systemImage: "link") {
             NSPasteboard.general.clearContents()
             NSPasteboard.general.setString(card.url.absoluteString, forType: .string)
         }
         if let session = card.session {
             Divider()
-            Button(session.open.label) { model.request(session.open, on: card) }
+            Button(session.open.label, systemImage: "terminal") { model.request(session.open, on: card) }
         }
         ForEach(card.steps, id: \.self) { step in
-            Button(step.confirm == nil ? step.label : "\(step.label)…") { model.request(step, on: card) }
+            Button(step.confirm == nil ? step.label : "\(step.label)…", systemImage: step.symbol) { model.request(step, on: card) }
         }
         if let close = card.close {
             Divider()
-            Button(close.label, role: .destructive) { model.request(close, on: card) }
+            Button(close.label, systemImage: "xmark.circle", role: .destructive) { model.request(close, on: card) }
         }
     }
 }
@@ -429,32 +416,51 @@ private struct NoticeLine: View {
     }
 }
 
-/// The omp session in charge of the PR, and the card's next step, or the request the session is on.
-private struct Footer: View {
+/// The "…" button in the card's corner: the card's menu, always there but quiet until the pointer's on it.
+private struct CardMenu<Items: View>: View {
+    @ViewBuilder let items: Items
+    @State private var hovering = false
+
+    var body: some View {
+        let scale = Zoom.shared.scale
+        Menu { items } label: {
+            Image(systemName: "ellipsis")
+                .font(.zoomed(size: 12, weight: .semibold))
+                .foregroundStyle(hovering ? AnyShapeStyle(.primary) : AnyShapeStyle(.secondary))
+                .frame(width: 26 * scale, height: 20 * scale)
+                .background(Color.primary.opacity(hovering ? 0.08 : 0), in: .rect(cornerRadius: 6 * scale))
+                .contentShape(.rect)
+        }
+        .menuStyle(.button)
+        .buttonStyle(.plain)
+        .menuIndicator(.hidden)
+        .fixedSize()
+        // As tall as the header's text, and flush with the card's edge.
+        .padding(.vertical, -5 * scale)
+        .padding(.trailing, -6 * scale)
+        .onHover { hovering = $0 }
+        .animation(.easeOut(duration: 0.12), value: hovering)
+        .help("More actions")
+    }
+}
+
+/// The omp session in charge of the PR, on a row of its own: clicking it opens the session.
+private struct SessionLine: View {
     let card: Card
+    let session: Session
 
     @Environment(BoardModel.self) private var model
     @State private var hovering = false
 
     var body: some View {
-        HStack(spacing: 8) {
-            if let session = card.session {
-                Button { model.request(session.open, on: card) } label: { label(session) }
-                    .buttonStyle(.plain)
-                    .onHover { hovering = $0 }
-                    .help(session.open.hint)
-                    .disabled(model.isSending(session.open, on: card))
-            }
-            Spacer(minLength: 0)
-            if let running = card.running {
-                RunningLabel(text: running)
-            } else {
-                ForEach(card.steps, id: \.self) { StepButton(step: $0, card: card) }
-            }
-        }
+        Button { model.request(session.open, on: card) } label: { label }
+            .buttonStyle(.plain)
+            .onHover { hovering = $0 }
+            .help(session.open.hint)
+            .disabled(model.isSending(session.open, on: card))
     }
 
-    private func label(_ session: Session) -> some View {
+    private var label: some View {
         HStack(spacing: 6) {
             if model.isSending(session.open, on: card) {
                 ProgressView().controlSize(.mini)
@@ -466,6 +472,7 @@ private struct Footer: View {
                 Text(session.state == .working ? "working" : "closed")
                     .foregroundStyle(session.state == .working ? Color.boardAmber : Color.secondary)
             }
+            Spacer(minLength: 0)
         }
         .font(.zoomed(.caption))
         .foregroundStyle(.primary.opacity(0.85))
@@ -477,67 +484,136 @@ private struct Footer: View {
     }
 }
 
-/// A request the session is on, where the step button was: a spinner on a breathing capsule.
+/// The card's next step, a full-width button, or in its place the request the session is on, so the
+/// card keeps its shape. Cards with neither have no slot.
+private struct StepSlot: View {
+    let card: Card
+
+    var body: some View {
+        Group {
+            if let running = card.running {
+                RunningLabel(text: running)
+                    .transition(.blurReplace)
+            } else {
+                ForEach(card.steps, id: \.self) { StepButton(step: $0, card: card) }
+            }
+        }
+        .animation(.smooth(duration: 0.3), value: card.running)
+    }
+}
+
+/// A step button's size, which the running request takes on too.
+@MainActor private enum StepMetrics {
+    static var height: CGFloat { 28 * Zoom.shared.scale }
+    static var radius: CGFloat { 8 * Zoom.shared.scale }
+    static var font: Font { .zoomed(.callout).weight(.semibold) }
+}
+
+/// A request the session is on, where the step button was: a spinner on a breathing fill.
 private struct RunningLabel: View {
     let text: String
 
     var body: some View {
-        HStack(spacing: 5) {
-            ProgressView().controlSize(.mini).scaleEffect(0.75).frame(width: 10, height: 10)
+        HStack(spacing: 6) {
+            Spinner()
             Text(text)
         }
-        .font(.zoomed(.caption).weight(.semibold))
+        .font(StepMetrics.font)
         .lineLimit(1)
         .foregroundStyle(Color.boardAmber)
-        .padding(.horizontal, 9)
-        .padding(.vertical, 4)
+        .frame(maxWidth: .infinity, minHeight: StepMetrics.height)
         .background {
-            Capsule().fill(Color.boardAmber).phaseAnimator([0.1, 0.24]) { fill, opacity in
-                fill.opacity(opacity)
-            } animation: { _ in
-                .easeInOut(duration: 0.9)
-            }
+            RoundedRectangle(cornerRadius: StepMetrics.radius, style: .continuous)
+                .fill(Color.boardAmber)
+                .phaseAnimator([0.1, 0.2]) { fill, opacity in
+                    fill.opacity(opacity)
+                } animation: { _ in
+                    .easeInOut(duration: 0.9)
+                }
         }
-        .fixedSize()
+        .overlay {
+            RoundedRectangle(cornerRadius: StepMetrics.radius, style: .continuous)
+                .strokeBorder(Color.boardAmber.opacity(0.3), lineWidth: 1)
+        }
+        .help("The session is on it")
     }
 }
 
+/// A spinner that takes its color from the text around it.
+private struct Spinner: View {
+    var body: some View {
+        Image(systemName: "progress.indicator")
+            .symbolEffect(.variableColor.iterative, options: .repeat(.continuous))
+    }
+}
+
+/// The card's one step forward, the width of the card.
 private struct StepButton: View {
     let step: BoardAction
     let card: Card
 
     @Environment(BoardModel.self) private var model
+    @State private var clicks = 0
 
     var body: some View {
         let sending = model.isSending(step, on: card)
-        Button { model.request(step, on: card) } label: {
-            HStack(spacing: 5) {
-                if sending { ProgressView().controlSize(.mini).tint(.white) }
+        Button {
+            clicks += 1
+            model.request(step, on: card)
+        } label: {
+            HStack(spacing: 6) {
+                Group {
+                    if sending { Spinner() } else { Image(systemName: step.symbol) }
+                }
+                .contentTransition(.symbolEffect(.replace))
                 Text(step.label)
             }
         }
-        .buttonStyle(StepButtonStyle(tint: step.action == "merge" ? .boardGreen : .accentColor))
-        // The step is the card's point; the session title next to it truncates instead.
-        .fixedSize()
+        .buttonStyle(StepButtonStyle(fill: step.fill))
         .disabled(sending)
+        .sensoryFeedback(.alignment, trigger: clicks)
         .help(step.hint)
     }
 }
 
-/// A card's one step forward: a small filled capsule in the step's color, legible in an inactive window too.
+/// A card's step: a filled bar in the step's color, legible in an inactive window too, that lights up
+/// under the pointer and gives a little when pressed.
 private struct StepButtonStyle: ButtonStyle {
-    let tint: Color
-    @Environment(\.isEnabled) private var isEnabled
+    let fill: Color
 
     func makeBody(configuration: Configuration) -> some View {
+        StepButtonBody(configuration: configuration, fill: fill)
+    }
+}
+
+private struct StepButtonBody: View {
+    let configuration: ButtonStyleConfiguration
+    let fill: Color
+
+    @Environment(\.isEnabled) private var isEnabled
+    @State private var hovering = false
+
+    var body: some View {
+        let shape = RoundedRectangle(cornerRadius: StepMetrics.radius, style: .continuous)
+        let pressed = configuration.isPressed
         configuration.label
-            .font(.zoomed(.caption).weight(.semibold))
+            .font(StepMetrics.font)
             .lineLimit(1)
             .foregroundStyle(.white)
-            .padding(.horizontal, 10)
-            .padding(.vertical, 4)
-            .background(tint.opacity(isEnabled ? 1 : 0.6), in: .capsule)
-            .overlay(Capsule().fill(.black.opacity(configuration.isPressed ? 0.18 : 0)))
-            .contentShape(.capsule)
+            .frame(maxWidth: .infinity, minHeight: StepMetrics.height)
+            .background {
+                shape
+                    .fill(fill.opacity(isEnabled ? 1 : 0.7))
+                    .overlay(shape.fill(.linearGradient(colors: [.white.opacity(0.14), .clear], startPoint: .top, endPoint: .bottom)))
+                    .shadow(color: fill.opacity(hovering && !pressed ? 0.35 : 0.15), radius: hovering && !pressed ? 4 : 1, y: 1)
+            }
+            .overlay(shape.fill(pressed ? Color.black.opacity(0.16) : Color.white.opacity(hovering && isEnabled ? 0.1 : 0)))
+            .overlay(shape.strokeBorder(.white.opacity(0.12), lineWidth: 1))
+            .contentShape(shape)
+            .scaleEffect(pressed ? 0.97 : 1)
+            .onHover { hovering = $0 }
+            .pointerStyle(isEnabled ? .link : nil)
+            .animation(.easeOut(duration: 0.12), value: hovering)
+            .animation(.spring(duration: 0.2, bounce: 0.4), value: pressed)
     }
 }

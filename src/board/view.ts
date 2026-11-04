@@ -144,6 +144,8 @@ export interface ActionView {
   running: string | null;
   /** Asked before the server is; null when the control acts right away. */
   confirm: Confirm | null;
+  /** Offers again a request that stopped without a result ("Merge Again"). */
+  stalled: boolean;
 }
 
 /** What an agent concluded, as its row or notice shows it when clicked. */
@@ -254,7 +256,7 @@ export interface CardView {
   session: SessionView | null;
   /** The buttons that move the PR to its next lane; none while its session is on a request. */
   steps: ActionView[];
-  /** The request the session is on, shown in place of the steps, when no row already says it ("Agent merging…"). */
+  /** The request the session is on, shown where the step was ("Agent merging…"); a CI fix shows in the CI row instead. */
   running: string | null;
   /** Closes the PR on GitHub; null on merged cards. */
   close: ActionView | null;
@@ -303,8 +305,9 @@ function plural(count: number, noun: string): string {
   return `${count} ${noun}${count === 1 ? "" : "s"}`;
 }
 
-function stepAction(action: AgentAction, target: StepTarget, hint: string, label = STEPS[action].button ?? action): ActionView {
-  return { action, label, hint, running: STEPS[action].running, confirm: CONFIRMS[action]?.(target) ?? null };
+function stepAction(action: AgentAction, target: StepTarget, hint: string, stalled = false, button = STEPS[action].button ?? action): ActionView {
+  const label = stalled ? `${button} Again` : button;
+  return { action, label, hint, running: STEPS[action].running, confirm: CONFIRMS[action]?.(target) ?? null, stalled };
 }
 
 function ciFixDetail(fix: Extract<CiFixState, { status: "fixed" | "not-fixed" }>): DetailView {
@@ -341,13 +344,13 @@ function ciParts(card: BoardCard, target: StepTarget, owner: CardOwner | undefin
     const stalled = [notice("warn", STEPS["fix-ci"].stalled)];
     if (!fixable) return { row: row("ci", tone, value), notices: stalled };
     const hint = `${fixHint} again`;
-    return { row: row("ci", tone, value, { hint, action: stepAction("fix-ci", target, hint, "Fix CI Again") }), notices: stalled };
+    return { row: row("ci", tone, value, { hint, action: stepAction("fix-ci", target, hint, true, "Fix CI") }), notices: stalled };
   }
   const notices: NoticeView[] = [];
   if (fix?.status === "not-fixed") notices.push(notice("bad", "Agent couldn't fix CI", { hint: "See why the agent couldn't fix CI", detail: fixDetail }));
   if (fixable) {
     if (fix?.status === "fixed") notices.push(notice("warn", "Red again after the agent's fix", { hint: fixedHint, detail: fixDetail }));
-    return { row: row("ci", tone, value, { hint: fixHint, action: stepAction("fix-ci", target, fixHint, "Fix CI") }), notices };
+    return { row: row("ci", tone, value, { hint: fixHint, action: stepAction("fix-ci", target, fixHint, false, "Fix CI") }), notices };
   }
   if (fix?.status === "fixed") return { row: row("ci", tone, `${value}*`, { hint: fixedHint, detail: fixDetail }), notices };
   return { row: row("ci", tone, value), notices };
@@ -449,16 +452,14 @@ function sessionParts(
     ? []
     : offered
         .filter((action) => STEPS[action].button)
-        .map((action) => {
-          const again = requests?.[action] === "stalled" ? " Again" : "";
-          return stepAction(action, target, `${asks} ${STEPS[action].does}`, `${STEPS[action].button}${again}`);
-        });
+        .map((action) => stepAction(action, target, `${asks} ${STEPS[action].does}`, requests?.[action] === "stalled"));
   const open: ActionView = {
     action: "open",
     label: "Open Session",
     hint: `Show this ${AGENT_COMMAND} session in your terminal${state === "closed" ? ", reopening it in a new relay tab" : ""}`,
     running: null,
     confirm: null,
+    stalled: false,
   };
   return { session: { title: owner.title.replace(PRIVATE_USE, "").trim() || "Untitled session", state, busy: busy !== null, open }, steps };
 }
@@ -520,11 +521,10 @@ function laneCard(boardCard: BoardCard, lane: Lane, owners: Board["owners"], now
   const stalled = (["review", "ask-approval", "bump", "merge"] as const).filter((action) => requests[action] === "stalled").map((action) => notice("warn", STEPS[action].stalled));
   const notices = [...ci.notices, ...stalled, ...(approvals?.notices ?? [])];
 
-  // Fixing CI shows in the CI row, and a review in the Agent row where the card has one; any other request in the footer.
-  const inRow = busy === "fix-ci" || (busy === "review" && showsAgent);
-  const running = busy && !inRow ? STEPS[busy].running : null;
+  // A step's request shows where its button was, so the card keeps its shape; a CI fix, in the CI row it was asked from.
+  const running = busy && busy !== "fix-ci" ? STEPS[busy].running : null;
 
-  const close: ActionView = { action: "close", label: "Close PR…", hint: "Close this PR on GitHub", running: null, confirm: CONFIRMS.close!(target) };
+  const close: ActionView = { action: "close", label: "Close Pull Request…", hint: "Close this PR on GitHub", running: null, confirm: CONFIRMS.close!(target), stalled: false };
   return { ...cardBase(boardCard.pr, now), rows, notices, ...sessionParts(target, owner, offered, busy, requests), running, close };
 }
 

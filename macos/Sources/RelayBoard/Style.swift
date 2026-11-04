@@ -18,6 +18,12 @@ extension Color {
     static let boardOrange = adaptive(light: 0xBC4C00, dark: 0xFF9F43)
     static let boardBlue = adaptive(light: 0x0969DA, dark: 0x58A6FF)
     static let boardPurple = adaptive(light: 0x8250DF, dark: 0xBC8CFF)
+
+    // Fills that carry white text, a shade deeper than the text colors in dark mode.
+    static let boardGreenFill = adaptive(light: 0x1F883D, dark: 0x238636)
+    static let boardBlueFill = adaptive(light: 0x0969DA, dark: 0x1F6FEB)
+    static let boardPurpleFill = adaptive(light: 0x8250DF, dark: 0x8957E5)
+    static let boardOrangeFill = adaptive(light: 0xBC4C00, dark: 0xBD561D)
 }
 
 extension Tone {
@@ -75,6 +81,30 @@ extension Row {
         case "approvals": "person.2"
         case "slack": "bubble.left"
         default: "circle"
+        }
+    }
+}
+
+extension BoardAction {
+    /// The symbol on a step's button.
+    var symbol: String {
+        switch action {
+        case "review": "sparkle.magnifyingglass"
+        case "ask-approval": "person.badge.plus"
+        case "bump": "bell"
+        case "merge": "arrow.triangle.merge"
+        case "fix-ci": "wrench.and.screwdriver"
+        default: "arrow.right"
+        }
+    }
+
+    /// A step's button color: its lane's, or a warning once its request stopped without a result.
+    var fill: Color {
+        if stalled == true { return .boardOrangeFill }
+        return switch action {
+        case "review": .boardPurpleFill
+        case "merge": .boardGreenFill
+        default: .boardBlueFill
         }
     }
 }

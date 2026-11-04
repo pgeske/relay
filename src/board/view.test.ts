@@ -102,6 +102,7 @@ test("the session drops omp's nerd-font icon from its title", () => {
 });
 
 test("only open cards can be closed, and closing asks first, as a destructive step", () => {
+  expect(card(pr()).close).toMatchObject({ label: "Close Pull Request…", stalled: false });
   expect(card(pr()).close?.confirm).toMatchObject({ title: "Close acme/api#1?", button: "Close PR", destructive: true });
 });
 
@@ -177,7 +178,7 @@ describe("Fix CI", () => {
     expect(rowOf(unowned, "ci")).toMatchObject({ tone: "bad", value: "Red", action: null });
   });
 
-  test("in progress: the CI row says the agent is on it, and nothing else runs in the footer", () => {
+  test("in progress: the CI row says the agent is on it, and nothing runs in the step's place", () => {
     const view = card(pr(), { requests: { "fix-ci": minutesAgo(1) } });
     expect(rowOf(view, "ci")).toMatchObject({ value: "Red · agent fixing…", running: true, action: null });
     expect(view).toMatchObject({ running: null, steps: [], notices: [] });
@@ -236,10 +237,10 @@ describe("Merge", () => {
   test("is offered in Ready to merge, and asks first", () => {
     const view = card(ready);
     expect(view.lane).toBe("ready");
-    expect(view.steps).toMatchObject([{ action: "merge", label: "Merge", running: "Agent merging…", confirm: { title: "Merge acme/api#1?" } }]);
+    expect(view.steps).toMatchObject([{ action: "merge", label: "Merge", running: "Agent merging…", confirm: { title: "Merge acme/api#1?" }, stalled: false }]);
   });
 
-  test("in progress: the footer says the agent is merging instead of offering it", () => {
+  test("in progress: the step's place says the agent is merging instead of offering it", () => {
     const view = card(ready, { requests: { merge: minutesAgo(1) } });
     expect(view).toMatchObject({ running: "Agent merging…", steps: [], session: { busy: true } });
   });
@@ -314,10 +315,10 @@ describe("Agent review", () => {
     expect(outdated).toMatchObject({ tone: "wait", value: "Out of date", detail: { verdict: "Passed", note: expect.stringContaining("New commits landed") } });
   });
 
-  test("in progress: the row says so, and the card offers no other step", () => {
+  test("in progress: the row says so, the step's place shows it running, and the card offers no other step", () => {
     const view = card(pr(), { requests: { review: minutesAgo(1) } });
     expect(rowOf(view, "agent")).toMatchObject({ value: "Reviewing…", running: true });
-    expect(view).toMatchObject({ running: null, steps: [] });
+    expect(view).toMatchObject({ running: "Agent reviewing…", steps: [] });
     expect(fixCiControls(view)).toEqual([]);
     expect(rowOf(view, "ci")).toMatchObject({ value: "Red", action: null });
   });
@@ -326,6 +327,7 @@ describe("Agent review", () => {
     const view = card(pr(), { requests: { review: minutesAgo(10) } });
     expect(notices(view)).toEqual(["Review stopped without a result"]);
     expect(steps(view)).toEqual(["Review Again"]);
+    expect(view.steps).toMatchObject([{ action: "review", stalled: true }]);
   });
 });
 
@@ -452,7 +454,7 @@ describe("Ask for Approval, then Bump", () => {
   test.each([
     ["ask-approval", "Agent drafting approval ask…"],
     ["bump", "Agent drafting bump…"],
-  ] as const)("%s in progress: the footer runs it instead of offering a step", (action, running) => {
+  ] as const)("%s in progress: the step's place runs it instead of offering a step", (action, running) => {
     const view = card(waiting, { review: passed, approvals: action === "bump" ? [asked()] : undefined, requests: { [action]: minutesAgo(1) } });
     expect(view).toMatchObject({ running, steps: [] });
   });

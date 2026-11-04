@@ -115,6 +115,8 @@ struct BoardAction: Decodable, Sendable, Hashable {
     var running: String?
     /// Asked before the server is.
     var confirm: Confirm?
+    /// Offers again a request that stopped without a result ("Merge Again"); nil from a relay too old to say.
+    var stalled: Bool?
 }
 
 struct Confirm: Decodable, Sendable, Hashable {
@@ -147,25 +149,27 @@ struct Session: Decodable, Sendable, Hashable {
 
     var title: String
     var state: State
-    /// On one of the board's requests, which the card says in a row or its footer.
+    /// On one of the board's requests, which the card says in a row or in its step's place.
     var busy: Bool
     var open: BoardAction
 }
 
 extension Card {
-    /// The card once its session took `running` on, before the server's board shows it: the step
-    /// buttons and the rows' controls give way to the request running in the footer.
-    func takingOn(_ running: String) -> Card {
+    /// The card once its session took `request` on, before the server's board shows it: the step
+    /// buttons and the rows' controls give way to the request running where it was asked, in the
+    /// step's place or in its row.
+    func takingOn(_ request: BoardAction) -> Card {
         var card = self
+        if steps.contains(request) { card.running = request.running }
         card.steps = []
         card.rows = rows.map { row in
-            guard row.action != nil else { return row }
+            guard let action = row.action else { return row }
             var plain = row
+            plain.running = action == request
             plain.action = nil
             plain.hint = nil
             return plain
         }
-        card.running = running
         card.session?.busy = true
         return card
     }
