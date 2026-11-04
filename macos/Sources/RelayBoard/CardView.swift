@@ -16,7 +16,7 @@ struct CardView: View {
         VStack(alignment: .leading, spacing: 8) {
             header
             Text(card.title)
-                .font(.system(size: 13, weight: .semibold))
+                .font(.zoomed(.body).weight(.semibold))
                 .foregroundStyle(muted ? .secondary : .primary)
                 .lineLimit(3)
                 .fixedSize(horizontal: false, vertical: true)
@@ -64,7 +64,7 @@ struct CardView: View {
             Spacer(minLength: 4)
             if card.mergedAt == nil { age }
         }
-        .font(.caption)
+        .font(.zoomed(.caption))
         .lineLimit(1)
     }
 
@@ -84,7 +84,7 @@ struct CardView: View {
     private func closeButton(_ close: BoardAction) -> some View {
         Button { model.request(close, on: card) } label: {
             Image(systemName: "xmark")
-                .font(.system(size: 8, weight: .bold))
+                .font(.zoomed(size: 8, weight: .bold))
                 .foregroundStyle(.secondary)
                 .frame(width: 18, height: 18)
                 .background(.thinMaterial, in: .circle)
@@ -150,7 +150,7 @@ private struct SessionRow: View {
                     .foregroundStyle(session.state == .working ? Color.boardAmber : Color.secondary)
             }
         }
-        .font(.caption)
+        .font(.zoomed(.caption))
         .foregroundStyle(.primary.opacity(0.85))
         .padding(.horizontal, 6)
         .padding(.vertical, 4)
@@ -189,7 +189,7 @@ private struct StepButtonStyle: ButtonStyle {
 
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
-            .font(.caption.weight(.semibold))
+            .font(.zoomed(.caption).weight(.semibold))
             .lineLimit(1)
             .foregroundStyle(.white)
             .padding(.horizontal, 10)

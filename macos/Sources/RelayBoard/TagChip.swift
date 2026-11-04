@@ -52,12 +52,12 @@ struct TagChip: View {
             if tag.action != nil {
                 Image(systemName: "wrench.adjustable.fill").imageScale(.small)
             } else if tag.detail != nil {
-                Image(systemName: "chevron.down").font(.system(size: 7, weight: .bold))
+                Image(systemName: "chevron.down").font(.zoomed(size: 7, weight: .bold))
             } else if tag.link != nil {
-                Image(systemName: "arrow.up.right").font(.system(size: 8, weight: .bold))
+                Image(systemName: "arrow.up.right").font(.zoomed(size: 8, weight: .bold))
             }
         }
-        .font(.caption.weight(.medium))
+        .font(.zoomed(.caption).weight(.medium))
         .lineLimit(1)
         .foregroundStyle(tag.tone.color)
         .padding(.horizontal, 7)
@@ -83,7 +83,7 @@ struct TicketChip: View {
 
     var body: some View {
         Text(ticket)
-            .font(.caption.weight(.semibold))
+            .font(.zoomed(.caption).weight(.semibold))
             .monospacedDigit()
             .lineLimit(1)
             .foregroundStyle(Color.boardBlue)
@@ -119,7 +119,7 @@ struct DetailPopover: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             HStack(alignment: .firstTextBaseline, spacing: 6) {
-                Text(detail.title).font(.headline)
+                Text(detail.title).font(.zoomedHeadline)
                 Text(verbatim: "\(card.repoName) #\(card.number)").foregroundStyle(.secondary)
             }
             HStack(spacing: 6) {
@@ -129,10 +129,10 @@ struct DetailPopover: View {
                 Text("·").foregroundStyle(.tertiary)
                 Text(detail.at, format: .relative(presentation: .named)).foregroundStyle(.secondary)
             }
-            .font(.subheadline)
+            .font(.zoomed(.subheadline))
             if let note = detail.note {
                 Label(note, systemImage: "exclamationmark.triangle.fill")
-                    .font(.callout)
+                    .font(.zoomed(.callout))
                     .foregroundStyle(Color.boardOrange)
                     .fixedSize(horizontal: false, vertical: true)
             }
@@ -151,7 +151,7 @@ struct DetailPopover: View {
             }
         }
         .padding(16)
-        .frame(width: 460)
+        .frame(width: 460 * Zoom.shared.scale)
     }
 
     /// Agents write a little Markdown (code spans, bold, links); line breaks are theirs too.

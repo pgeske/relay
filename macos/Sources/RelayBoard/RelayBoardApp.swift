@@ -7,6 +7,7 @@ import SwiftUI
 struct RelayBoardApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
     @State private var model = BoardModel()
+    private let zoom = Zoom.shared
 
     var body: some Scene {
         Window("Relay Board", id: "board") {
@@ -20,6 +21,15 @@ struct RelayBoardApp: App {
             CommandGroup(before: .toolbar) {
                 Button("Refresh") { model.refreshNow() }
                     .keyboardShortcut("r")
+                Divider()
+                Button("Actual Size") { zoom.reset() }
+                    .keyboardShortcut("0")
+                Button("Zoom In") { zoom.zoomIn() }
+                    .keyboardShortcut("+")
+                    .disabled(!zoom.canZoomIn)
+                Button("Zoom Out") { zoom.zoomOut() }
+                    .keyboardShortcut("-")
+                    .disabled(!zoom.canZoomOut)
                 Divider()
             }
         }

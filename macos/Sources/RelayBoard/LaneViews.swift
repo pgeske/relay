@@ -7,7 +7,7 @@ struct KanbanView: View {
 
     private let spacing: CGFloat = 10
     private let padding: CGFloat = 14
-    private let minimumWidth: CGFloat = 232
+    private var minimumWidth: CGFloat { 232 * Zoom.shared.scale }
 
     var body: some View {
         GeometryReader { geometry in
@@ -41,7 +41,7 @@ private struct LaneColumn: View {
                     ForEach(lane.cards) { CardView(card: $0, muted: lane.id == "merged") }
                     if lane.cards.isEmpty {
                         Text("Nothing here")
-                            .font(.callout)
+                            .font(.zoomed(.callout))
                             .foregroundStyle(.tertiary)
                             .frame(maxWidth: .infinity)
                             .padding(.vertical, 28)
@@ -69,16 +69,16 @@ struct LaneHeader: View {
             HStack(spacing: 7) {
                 Image(systemName: lane.symbol)
                     .foregroundStyle(lane.tint)
-                    .font(large ? .title3 : .callout)
+                    .font(.zoomed(large ? .title3 : .callout))
                 Text(lane.title)
-                    .font(large ? .title2.weight(.semibold) : .headline)
+                    .font(large ? .zoomed(.title2).weight(.semibold) : .zoomedHeadline)
                     .lineLimit(1)
                 Spacer(minLength: 4)
                 count
             }
             // One line, so every lane's cards start at the same height.
             Text(lane.hint)
-                .font(large ? .callout : .caption)
+                .font(.zoomed(large ? .callout : .caption))
                 .foregroundStyle(.secondary)
                 .lineLimit(1)
                 .help(lane.hint)
@@ -89,7 +89,7 @@ struct LaneHeader: View {
     private var count: some View {
         let lit = lane.hot && !lane.cards.isEmpty
         return Text("\(lane.cards.count)")
-            .font(.caption.weight(.semibold))
+            .font(.zoomed(.caption).weight(.semibold))
             .monospacedDigit()
             .foregroundStyle(lit ? AnyShapeStyle(.white) : AnyShapeStyle(.secondary))
             .padding(.horizontal, 7)

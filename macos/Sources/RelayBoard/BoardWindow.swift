@@ -14,10 +14,12 @@ struct BoardWindow: View {
         @Bindable var model = model
         NavigationSplitView {
             Sidebar(selection: $selection)
-                .navigationSplitViewColumnWidth(min: 190, ideal: 215, max: 280)
+                .navigationSplitViewColumnWidth(min: 190 * zoom, ideal: 215 * zoom, max: 280 * zoom)
         } detail: {
             BoardContent(selection: selection ?? .all)
         }
+        // Text without a font of its own, like sidebar rows, follows the zoom too.
+        .font(.zoomed(.body))
         .navigationTitle("Relay Board")
         .navigationSubtitle(status)
         .toolbar {
@@ -43,6 +45,8 @@ struct BoardWindow: View {
         }
         .task { model.start() }
     }
+
+    private var zoom: CGFloat { Zoom.shared.scale }
 
     private var confirmingBinding: Binding<Bool> {
         Binding(get: { model.confirming != nil }, set: { if !$0 { model.confirming = nil } })
@@ -83,7 +87,7 @@ private struct Sidebar: View {
         .safeAreaInset(edge: .bottom) {
             if model.waitingOnYou > 0 {
                 Label("\(model.waitingOnYou) waiting on you", systemImage: "bell.badge.fill")
-                    .font(.callout.weight(.medium))
+                    .font(.zoomed(.callout).weight(.medium))
                     .foregroundStyle(.secondary)
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .padding(.horizontal, 18)
@@ -153,7 +157,7 @@ private struct Banner: View {
 
     var body: some View {
         Label(text, systemImage: "exclamationmark.triangle.fill")
-            .font(.callout)
+            .font(.zoomed(.callout))
             .foregroundStyle(Color.boardOrange)
             .lineLimit(3)
             .textSelection(.enabled)
@@ -236,7 +240,7 @@ private struct CommandLine: View {
 
     var body: some View {
         HStack(spacing: 10) {
-            Text(command).font(.body.monospaced()).textSelection(.enabled)
+            Text(command).font(.zoomed(.body).monospaced()).textSelection(.enabled)
             Button {
                 NSPasteboard.general.clearContents()
                 NSPasteboard.general.setString(command, forType: .string)
@@ -266,7 +270,7 @@ private struct ToastView: View {
                     Image(systemName: toast.failed ? "exclamationmark.triangle.fill" : "checkmark.circle.fill")
                         .foregroundStyle(toast.failed ? Color.boardRed : Color.boardGreen)
                 }
-                .font(.callout.weight(.medium))
+                .font(.zoomed(.callout).weight(.medium))
                 .padding(.horizontal, 16)
                 .padding(.vertical, 10)
                 .frame(maxWidth: 560)
