@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { DATA_DIR } from "../paths.ts";
 import { createTaskTables } from "./taskStore.ts";
 
-/** State GitHub doesn't know about lives here: agent reviews and CI fixes, approval asks in Slack, which session owns each PR, what the board asked of it, and your tasks. */
+/** State GitHub doesn't know about lives here: agent reviews and CI fixes, approval asks in Slack, which session owns each PR, what the board asked of it, which PRs skip their agent review, and your tasks. */
 export const BOARD_DB_PATH = join(DATA_DIR, "board.db");
 
 export type AgentVerdict = "passed" | "findings";
@@ -164,6 +164,13 @@ export function openBoardStore(path = BOARD_DB_PATH): Database {
     requested_at TEXT NOT NULL,
     PRIMARY KEY (repo, number, action)
   )`);
+  // PRs the user said need no reviewer agent: they go straight to people, whatever commit they're at.
+  db.run(`CREATE TABLE IF NOT EXISTS agent_review_skips (
+    repo TEXT NOT NULL,
+    number INTEGER NOT NULL,
+    skipped_at TEXT NOT NULL,
+    PRIMARY KEY (repo, number)
+  )`);
   // Asks were one per PR before each reviewer got its own; those stay, as asks that named no reviewer.
   const askColumns = db.query<{ name: string }, []>("SELECT name FROM pragma_table_info('approval_asks')").all();
   if (askColumns.length > 0 && !askColumns.some((column) => column.name === "reviewer")) {
@@ -293,6 +300,22 @@ export function agentRequests(db: Database): Map<string, AgentRequests> {
     requests.set(key, { ...requests.get(key), [row.action as AgentAction]: row.requested_at });
   }
   return requests;
+}
+
+/** Marks a PR as needing no agent review; skipping it again keeps the first time. */
+export function skipAgentReview(db: Database, repo: string, number: number, skippedAt: string): void {
+  db.query("INSERT OR IGNORE INTO agent_review_skips (repo, number, skipped_at) VALUES (?, ?, ?)").run(repo, number, skippedAt);
+}
+
+/** Puts a skipped PR back to waiting on an agent review. */
+export function requireAgentReview(db: Database, repo: string, number: number): void {
+  db.query("DELETE FROM agent_review_skips WHERE repo = ? AND number = ?").run(repo, number);
+}
+
+/** When each PR that skips its agent review was skipped, keyed by "owner/repo#number". */
+export function agentReviewSkips(db: Database): Map<string, string> {
+  const rows = db.query<{ repo: string; number: number; skipped_at: string }, []>("SELECT * FROM agent_review_skips").all();
+  return new Map(rows.map((row) => [`${row.repo}#${row.number}`, row.skipped_at]));
 }
 
 /** Records a fresh ask of `reviewer`; one recorded earlier for the same reviewer of the PR, and its bumps, give way to it. */

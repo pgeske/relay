@@ -58,8 +58,8 @@ A plan recorded again (revised) needs approving again. On a task that skips appr
 |---|---|
 | Ready to merge | Every approval in, CI green, and GitHub would merge it now |
 | Approved · blocked | Every approval in, but CI is red or running, or GitHub still won't merge (a failed gate check, branch rules, conflicts) |
-| Agent review | Ready for review, but no reviewer agent has passed its current commit and no person has approved yet |
-| Human review | Waiting on people: a reviewer agent passed the current commit, or someone approved, but approvals are still missing (GitHub's review decision, or a merge gate asking for more) |
+| Agent review | Ready for review, but no reviewer agent has passed its current commit, the user didn't skip its agent review, and no person has approved yet |
+| Human review | Waiting on people: a reviewer agent passed the current commit, the user skipped the agent review, or someone approved, but approvals are still missing (GitHub's review decision, or a merge gate asking for more) |
 | Draft | Still being shaped |
 
 After the lanes: PRs merged recently. PRs waiting on the user's review aren't on the board; `--json` lists them (`teammates`, and `bots` counted per bot).

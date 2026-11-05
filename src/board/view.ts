@@ -32,7 +32,7 @@ export const REFRESH_SECONDS = 60;
 export const ACTIVE_REFRESH_SECONDS = 10;
 
 /** What a card's controls can ask relay's server to do: `POST /api/board/actions/<action>` with the card's `ref`. */
-export const BOARD_ACTIONS = ["open", "close", ...AGENT_ACTIONS] as const;
+export const BOARD_ACTIONS = ["open", "close", "skip-review", "require-review", ...AGENT_ACTIONS] as const;
 export type BoardAction = (typeof BOARD_ACTIONS)[number];
 
 /** Lanes left to right in the order work moves; `hot` lanes are the ones waiting on you to act. */
@@ -257,6 +257,8 @@ export interface CardView {
   session: SessionView | null;
   /** The buttons that move the PR to its next lane; none while its session is on a request. */
   steps: ActionView[];
+  /** Controls only the card's "…" menu offers, like skipping its agent review. */
+  menu: ActionView[];
   /** The request the session is on, shown where the step was ("Agent merging…"); a CI fix shows in the CI row instead. */
   running: string | null;
   /** Closes the PR on GitHub; null on merged cards. */
@@ -362,8 +364,10 @@ function ciParts(card: BoardCard, target: StepTarget, owner: CardOwner | undefin
 }
 
 /** The agent review row: what the reviewer agent said about the PR, which opens its write-up. */
-function agentRow(review: AgentReviewState, progress: RequestProgress): RowView {
+function agentRow(review: AgentReviewState, progress: RequestProgress, skipped: boolean): RowView {
   if (progress === "running") return row("agent", "wait", "Reviewing…", { hint: "The session is reviewing this PR", running: true });
+  // A review of the current commit still says what it found; only a missing or outdated one gives way to the skip.
+  if (skipped && (review.status === "not-run" || review.stale)) return row("agent", "muted", "Skipped", { hint: "You skipped the agent review for this PR" });
   if (review.status === "not-run") return row("agent", "ghost", "Not run", { hint: "No agent has reviewed this PR" });
   const detail: DetailView = {
     title: "Agent review",
@@ -475,7 +479,7 @@ function ageView(pr: PullRequest, idleDays: number, stale: boolean, now: Date): 
   return idleDays === 0 ? { text: "Today", tone: "muted", hint: "Active today" } : { text: `${idleDays}d`, tone: "muted", hint: `Last activity ${plural(idleDays, "day")} ago` };
 }
 
-function cardBase(pr: PullRequest, now: Date, chips: Map<string, TaskChipView>): Omit<CardView, "rows" | "notices" | "session" | "steps" | "running" | "close"> {
+function cardBase(pr: PullRequest, now: Date, chips: Map<string, TaskChipView>): Omit<CardView, "rows" | "notices" | "session" | "steps" | "menu" | "running" | "close"> {
   const ticket = TICKET_PREFIX.exec(pr.title);
   const idleDays = Math.max(0, Math.floor((now.getTime() - new Date(pr.updatedAt).getTime()) / DAY_MS));
   const stale = idleDays >= STALE_DAYS;
@@ -500,6 +504,11 @@ function cardBase(pr: PullRequest, now: Date, chips: Map<string, TaskChipView>):
 const AGENT_LANES: Lane[] = ["agent-review", "human-review"];
 const APPROVAL_LANES: Lane[] = ["human-review", "approved-blocked", "ready"];
 
+/** A menu control that acts right away, without a session. */
+function menuAction(action: "skip-review" | "require-review", label: string, hint: string): ActionView {
+  return { action, label, hint, running: null, confirm: null, stalled: false };
+}
+
 function laneCard(boardCard: BoardCard, lane: Lane, owners: Board["owners"], chips: Map<string, TaskChipView>, now: Date): CardView {
   const { requests } = boardCard;
   const ref = `${boardCard.pr.repo}#${boardCard.pr.number}`;
@@ -518,7 +527,7 @@ function laneCard(boardCard: BoardCard, lane: Lane, owners: Board["owners"], chi
   const approvals = APPROVAL_LANES.includes(lane) ? approvalsParts(boardCard, lane) : null;
   const rows = [
     ci.row,
-    showsAgent ? agentRow(boardCard.agentReview, requests.review) : null,
+    showsAgent ? agentRow(boardCard.agentReview, requests.review, boardCard.agentReviewSkippedAt !== null) : null,
     approvals?.row ?? null,
     lane === "human-review" ? slackRow(boardCard.approval, now) : null,
   ].filter((candidate): candidate is RowView => candidate !== null);
@@ -530,14 +539,20 @@ function laneCard(boardCard: BoardCard, lane: Lane, owners: Board["owners"], chi
 
   // A step's request shows where its button was, so the card keeps its shape; a CI fix, in the CI row it was asked from.
   const running = busy && busy !== "fix-ci" ? STEPS[busy].running : null;
+  // Not every PR needs a reviewer agent: one waiting on it can skip straight to people, and a skipped one can wait on it again.
+  const menu: ActionView[] = [];
+  if (lane === "agent-review") menu.push(menuAction("skip-review", "Skip Agent Review", "Send this PR to Human review without a reviewer agent"));
+  if (lane === "human-review" && boardCard.agentReviewSkippedAt !== null) {
+    menu.push(menuAction("require-review", "Require Agent Review", "Stop skipping the agent review: wait on a reviewer agent again"));
+  }
 
   const close: ActionView = { action: "close", label: "Close Pull Request…", hint: "Close this PR on GitHub", running: null, confirm: CONFIRMS.close!(target), stalled: false };
-  return { ...cardBase(boardCard.pr, now, chips), rows, notices, ...sessionParts(target, owner, offered, busy, requests), running, close };
+  return { ...cardBase(boardCard.pr, now, chips), rows, notices, ...sessionParts(target, owner, offered, busy, requests), menu, running, close };
 }
 
 function mergedCard(pr: PullRequest, owners: Board["owners"], chips: Map<string, TaskChipView>, now: Date): CardView {
   const ref = `${pr.repo}#${pr.number}`;
-  return { ...cardBase(pr, now, chips), rows: [], notices: [], ...sessionParts({ ref, approval: null }, owners[ref], [], null, undefined), running: null, close: null };
+  return { ...cardBase(pr, now, chips), rows: [], notices: [], ...sessionParts({ ref, approval: null }, owners[ref], [], null, undefined), menu: [], running: null, close: null };
 }
 
 export interface ViewOptions {

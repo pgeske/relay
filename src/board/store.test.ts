@@ -5,15 +5,18 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   agentRequests,
+  agentReviewSkips,
   approvalAsks,
   latestAgentReviews,
   latestCiFixes,
   openBoardStore,
   recordAgentRequest,
+  requireAgentReview,
   recordAgentReview,
   recordApprovalAsk,
   recordApprovalBump,
   recordCiFix,
+  skipAgentReview,
   type AgentReview,
   type CiFix,
 } from "./store.ts";
@@ -41,6 +44,16 @@ test("the board remembers when it last sent each kind of request", () => {
   recordAgentRequest(db, "acme/api", 2, "merge", "2026-10-30T04:00:00Z");
   expect(agentRequests(db).get("acme/api#1")).toEqual({ review: "2026-10-30T03:00:00Z", "fix-ci": "2026-10-30T02:00:00Z" });
   expect(agentRequests(db).get("acme/api#2")).toEqual({ merge: "2026-10-30T04:00:00Z" });
+});
+
+test("a skipped agent review keeps when it was first skipped, until the PR requires one again", () => {
+  const db = openBoardStore(":memory:");
+  skipAgentReview(db, "acme/api", 1, "2026-10-30T01:00:00Z");
+  skipAgentReview(db, "acme/api", 1, "2026-10-30T02:00:00Z");
+  skipAgentReview(db, "acme/api", 2, "2026-10-30T03:00:00Z");
+  expect(agentReviewSkips(db)).toEqual(new Map([["acme/api#1", "2026-10-30T01:00:00Z"], ["acme/api#2", "2026-10-30T03:00:00Z"]]));
+  requireAgentReview(db, "acme/api", 1);
+  expect([...agentReviewSkips(db).keys()]).toEqual(["acme/api#2"]);
 });
 
 test("the newest CI-fix result of each PR wins", () => {

@@ -42,6 +42,8 @@ struct Card: Decodable, Sendable, Identifiable {
     var notices: [Notice]
     var session: Session?
     var steps: [BoardAction]
+    /// Controls only the card's "…" menu offers, like skipping its agent review. Absent from an older relay's cards.
+    var menu: [BoardAction]?
     /// The request the session is on, shown in place of the steps when no row already says it.
     var running: String?
     var close: BoardAction?

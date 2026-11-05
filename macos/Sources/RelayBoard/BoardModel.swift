@@ -195,11 +195,12 @@ final class BoardModel {
                 }
             }
             if result.ok, ["close", "delete", "dismiss", "close-session"].contains(action.action) { removed.insert(target.key) }
-            // The session took a step on, or the card was out of date (the PR merged, or its session is
-            // already on a request): show what's true now. Task controls change the task's section, so
-            // they show soon too.
+            // The session took a step on, a menu control moved the card (skipping its agent review), or the
+            // card was out of date (the PR merged, or its session is already on a request): show what's true now.
+            // Task controls change the task's section, so they show soon too.
             let isTask = if case .pr = target { false } else { true }
-            if (result.ok && (action.running != nil || isTask)) || result.status == 409 { schedule(after: .milliseconds(1200)) }
+            let movedCard = result.ok && ["skip-review", "require-review"].contains(action.action)
+            if (result.ok && (action.running != nil || isTask)) || movedCard || result.status == 409 { schedule(after: .milliseconds(1200)) }
         } catch {
             report(error)
         }

@@ -10,7 +10,18 @@ import { closePullRequest, fetchBoardData, fetchPullRequest, type BoardData } fr
 import { REQUEST_MAX_AGE_MS, approvalState, requestProgress, waitingAsks, type ApprovalState, type CardOwner } from "./lanes.ts";
 import { prOwner, readSessionHeader } from "./owners.ts";
 import { BOARD_ACTIONS, boardView, type BoardAction, type BoardView } from "./view.ts";
-import { AGENT_ACTIONS, agentRequests, approvalAsks, latestAgentReviews, latestCiFixes, openBoardStore, recordAgentRequest, type AgentAction } from "./store.ts";
+import {
+  AGENT_ACTIONS,
+  agentRequests,
+  approvalAsks,
+  latestAgentReviews,
+  latestCiFixes,
+  openBoardStore,
+  recordAgentRequest,
+  requireAgentReview,
+  skipAgentReview,
+  type AgentAction,
+} from "./store.ts";
 import { assembleTasks } from "./taskCommand.ts";
 import { bringRelayTerminalToFront } from "./terminalApp.ts";
 
@@ -245,7 +256,8 @@ export async function showSession(sessionFile: string, live: { windowId: string 
 /**
  * `open` shows the PR's session in relay. `review`, `merge`, `fix-ci`, `ask-approval`, and `bump` ask
  * that session to take the PR's next step, reopening it in a background tab first if it's closed, and
- * note the request so the card can follow it until it's done. `close` closes the PR on GitHub, and needs no session.
+ * note the request so the card can follow it until it's done. `close` closes the PR on GitHub, and
+ * `skip-review` and `require-review` change whether it waits on an agent review; those need no session.
  */
 export async function runBoardAction(action: string, prRef: string): Promise<BoardActionResult> {
   if (!isBoardAction(action)) return { status: 404, message: `no such action: ${action}` };
@@ -257,6 +269,16 @@ export async function runBoardAction(action: string, prRef: string): Promise<Boa
       return { status: 502, message: `Couldn't close ${repo}#${number}: ${error instanceof Error ? error.message : String(error)}` };
     }
     return { status: 200, message: `Closed ${repo}#${number}` };
+  }
+  if (action === "skip-review" || action === "require-review") {
+    const db = openBoardStore();
+    try {
+      if (action === "skip-review") skipAgentReview(db, repo, number, new Date().toISOString());
+      else requireAgentReview(db, repo, number);
+    } finally {
+      db.close();
+    }
+    return { status: 200, message: action === "skip-review" ? `Skipped the agent review of ${repo}#${number}` : `${repo}#${number} needs an agent review again` };
   }
   const db = openBoardStore();
   let owner;

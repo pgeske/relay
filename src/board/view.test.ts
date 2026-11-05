@@ -45,6 +45,8 @@ interface Local {
   ciFix?: CiFix;
   review?: AgentReview;
   approvals?: ApprovalAsk[];
+  /** When the PR's agent review was skipped. */
+  skippedAt?: string;
 }
 
 function view(pullRequests: PullRequest[], local: Local = {}, merged: PullRequest[] = []) {
@@ -54,6 +56,7 @@ function view(pullRequests: PullRequest[], local: Local = {}, merged: PullReques
     ciFixes: new Map(local.ciFix ? [[KEY, local.ciFix]] : []),
     reviews: new Map(local.review ? [[KEY, local.review]] : []),
     approvals: new Map(local.approvals ? [[KEY, local.approvals]] : []),
+    reviewSkips: new Map(local.skippedAt ? [[KEY, local.skippedAt]] : []),
     now,
   };
   return boardView(buildBoard({ mine: pullRequests, reviewRequested: [], merged }, [], state), { now, updatedAt: now });
@@ -335,6 +338,29 @@ describe("Agent review", () => {
     expect(notices(view)).toEqual(["Review stopped without a result"]);
     expect(steps(view)).toEqual(["Review Again"]);
     expect(view.steps).toMatchObject([{ action: "review", stalled: true }]);
+  });
+
+  test("can be skipped from the card's menu, which sends the PR to Human review", () => {
+    expect(card(pr()).menu).toMatchObject([{ action: "skip-review", label: "Skip Agent Review", confirm: null }]);
+    const skipped = card(pr(), { skippedAt: minutesAgo(5) });
+    expect(skipped.lane).toBe("human-review");
+    expect(rowOf(skipped, "agent")).toMatchObject({ value: "Skipped", tone: "muted" });
+  });
+
+  test("a skip holds through new commits, and the menu can take it back", () => {
+    const skipped = card(pr({ headSha: "bbb" }), { skippedAt: minutesAgo(5), review: passed });
+    expect(skipped.lane).toBe("human-review");
+    expect(rowOf(skipped, "agent")).toMatchObject({ value: "Skipped" });
+    expect(skipped.menu).toMatchObject([{ action: "require-review", label: "Require Agent Review" }]);
+  });
+
+  test("a skipped PR's review of its current commit still shows what it found", () => {
+    const findings: AgentReview = { ...passed, verdict: "findings", findings: 1 };
+    expect(rowOf(card(pr(), { skippedAt: minutesAgo(5), review: findings }), "agent")).toMatchObject({ value: "1 finding" });
+  });
+
+  test("a PR reviewed without a skip offers nothing to take back", () => {
+    expect(card(pr({ checks: green }), { review: passed }).menu).toEqual([]);
   });
 });
 

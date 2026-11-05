@@ -86,7 +86,7 @@ extension Row {
 }
 
 extension BoardAction {
-    /// The symbol on a step's button.
+    /// The symbol on a step's button, or beside a control in the card's menu.
     var symbol: String {
         switch action {
         case "review": "sparkle.magnifyingglass"
@@ -103,6 +103,8 @@ extension BoardAction {
         case "done": "checkmark.circle"
         case "reopen": "arrow.uturn.backward"
         case "delete": "trash"
+        case "skip-review": "forward"
+        case "require-review": "arrow.uturn.backward"
         default: "arrow.right"
         }
     }

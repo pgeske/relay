@@ -116,6 +116,9 @@ struct CardMenuItems: View {
         ForEach(card.steps, id: \.self) { step in
             Button(step.confirm == nil ? step.label : "\(step.label)…", systemImage: step.symbol) { model.request(step, on: card) }
         }
+        ForEach(card.menu ?? [], id: \.self) { item in
+            Button(item.label, systemImage: item.symbol) { model.request(item, on: card) }
+        }
         if let close = card.close {
             Divider()
             Button(close.label, systemImage: "xmark.circle", role: .destructive) { model.request(close, on: card) }

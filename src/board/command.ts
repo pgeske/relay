@@ -10,6 +10,7 @@ import { buildBoard, type Board, type CardOwner } from "./lanes.ts";
 import { claimPr, prOwners, readSessionHeader, scanSessions, type PrOwner } from "./owners.ts";
 import {
   agentRequests,
+  agentReviewSkips,
   approvalAsks,
   latestAgentReviews,
   latestCiFixes,
@@ -96,6 +97,7 @@ export async function assembleBoard(data: BoardData, config: BoardConfig, live?:
       ciFixes: latestCiFixes(db),
       requests: agentRequests(db),
       approvals: approvalAsks(db),
+      reviewSkips: agentReviewSkips(db),
       owners,
       now: new Date(),
     });

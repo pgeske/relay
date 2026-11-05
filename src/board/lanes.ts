@@ -56,6 +56,8 @@ export interface BoardCard {
    */
   mergeBlocker: string | null;
   agentReview: AgentReviewState;
+  /** When the user skipped the PR's agent review; null unless they did. A skipped PR needs none. */
+  agentReviewSkippedAt: string | null;
   /** The latest result an agent recorded after the board asked it to fix CI. */
   ciFix: CiFixState;
   /** The Slack messages the PR's session drafted asking its reviewers for approval, and who still has none. */
@@ -242,16 +244,17 @@ export function mergeBlocker(pr: PullRequest, gateChecks: string[]): string | nu
 /**
  * A PR stays with people until it has every approval it needs: GitHub's own review decision, and
  * a merge gate that can ask for more. Before anyone approved, it waits on its agent review until a
- * review of its current commit passed. Fully approved, it is ready once nothing else (CI, a gate,
- * conflicts) stops GitHub from merging it.
+ * review of its current commit passed, or the user skipped it. Fully approved, it is ready once
+ * nothing else (CI, a gate, conflicts) stops GitHub from merging it.
  */
 export function laneFor(card: BoardCard): Lane {
-  const { pr, ci, mergeBlocker, agentReview } = card;
+  const { pr, ci, mergeBlocker, agentReview, agentReviewSkippedAt } = card;
   if (pr.isDraft) return "draft";
   const fullyApproved = pr.reviewDecision === "APPROVED" && !WAITING_ON_PEOPLE.test(mergeBlocker ?? "");
   if (!fullyApproved) {
     const peopleStarted = pr.approvedBy.length > 0 || pr.reviewDecision === "APPROVED";
-    return peopleStarted || (agentReview.status === "passed" && !agentReview.stale) ? "human-review" : "agent-review";
+    const agentDone = agentReviewSkippedAt !== null || (agentReview.status === "passed" && !agentReview.stale);
+    return peopleStarted || agentDone ? "human-review" : "agent-review";
   }
   return mergeBlocker || ci === "failed" || ci === "running" ? "approved-blocked" : "ready";
 }
@@ -268,6 +271,8 @@ export interface LocalState {
   /** Each PR's approval asks, oldest first. */
   approvals?: Map<string, ApprovalAsk[]>;
   requests?: Map<string, AgentRequests>;
+  /** When each PR whose agent review the user skipped was skipped. */
+  reviewSkips?: Map<string, string>;
   /** The omp session in charge of each PR that has one. */
   owners?: Record<string, CardOwner>;
   now?: Date;
@@ -279,7 +284,7 @@ export interface LocalState {
  * also what finishes a merge request on it.
  */
 export function buildBoard(data: BoardData, gateChecks: string[], local: LocalState = {}): Board {
-  const { reviews = new Map(), ciFixes = new Map(), approvals = new Map(), requests = new Map(), owners = {}, now = new Date() } = local;
+  const { reviews = new Map(), ciFixes = new Map(), approvals = new Map(), requests = new Map(), reviewSkips = new Map(), owners = {}, now = new Date() } = local;
   const lanes: Record<Lane, BoardCard[]> = { draft: [], "agent-review": [], "human-review": [], "approved-blocked": [], ready: [] };
   const merged = new Map(data.merged.map((pr) => [pr.url, pr]));
   for (const pr of data.mine) {
@@ -294,6 +299,7 @@ export function buildBoard(data: BoardData, gateChecks: string[], local: LocalSt
       ci: ciState(pr.checks, gateChecks),
       mergeBlocker: mergeBlocker(pr, gateChecks),
       agentReview: agentReviewState(pr, review),
+      agentReviewSkippedAt: reviewSkips.get(key) ?? null,
       ciFix: ciFixState(pr, ciFix),
       approval,
       requests: requestProgress(requests.get(key), { mergedAt: pr.mergedAt, review, ciFix, approval }, owners[key]?.live ?? null, now),
