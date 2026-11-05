@@ -94,11 +94,13 @@ struct TaskCardView: View {
             VStack(alignment: .leading, spacing: 9) {
                 VStack(alignment: .leading, spacing: 5) {
                     header
+                    // One line, so every card's stage bar sits at the same height; hover shows the rest.
                     Text(card.title)
                         .font(.zoomed(.body).weight(.semibold))
-                        .lineLimit(3)
-                        .fixedSize(horizontal: false, vertical: true)
+                        .lineLimit(1)
+                        .truncationMode(.tail)
                         .frame(maxWidth: .infinity, alignment: .leading)
+                        .help(card.title)
                 }
                 StageBar(card: card)
                 ReasonLine(reason: card.reason)
