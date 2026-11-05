@@ -17,7 +17,10 @@ struct RelayBoardApp: App {
         }
         .defaultSize(width: 1720, height: 980)
         .commands {
-            CommandGroup(replacing: .newItem) {}
+            CommandGroup(replacing: .newItem) {
+                Button("New Task…") { model.composing = true }
+                    .keyboardShortcut("n")
+            }
             CommandGroup(before: .toolbar) {
                 Button("Refresh") { model.refreshNow() }
                     .keyboardShortcut("r")

@@ -15,6 +15,7 @@ import {
   waitingAsks,
 } from "./lanes.ts";
 import { AGENT_ACTIONS, type AgentAction } from "./store.ts";
+import type { TaskBoardView, TaskChipView } from "./taskBoard.ts";
 
 /**
  * The board as the Relay Board app draws it. Everything a card offers and how it words it is decided
@@ -260,6 +261,8 @@ export interface CardView {
   running: string | null;
   /** Closes the PR on GitHub; null on merged cards. */
   close: ActionView | null;
+  /** The task the PR is part of; null when it's part of none. */
+  task: TaskChipView | null;
 }
 
 export interface LaneView {
@@ -281,9 +284,11 @@ export interface BoardView {
   agentWorking: boolean;
   /** When to refresh next: sooner while an agent works, so a finished step shows soon. */
   refreshSeconds: number;
+  /** Your tasks, which don't need GitHub: they show even while the PRs can't load. */
+  tasks: TaskBoardView | null;
 }
 
-function timeAgo(iso: string, now: Date): string {
+export function timeAgo(iso: string, now: Date): string {
   const minutes = Math.round((now.getTime() - new Date(iso).getTime()) / 60_000);
   if (minutes < 1) return "just now";
   if (minutes < 60) return `${minutes}m ago`;
@@ -470,7 +475,7 @@ function ageView(pr: PullRequest, idleDays: number, stale: boolean, now: Date): 
   return idleDays === 0 ? { text: "Today", tone: "muted", hint: "Active today" } : { text: `${idleDays}d`, tone: "muted", hint: `Last activity ${plural(idleDays, "day")} ago` };
 }
 
-function cardBase(pr: PullRequest, now: Date): Omit<CardView, "rows" | "notices" | "session" | "steps" | "running" | "close"> {
+function cardBase(pr: PullRequest, now: Date, chips: Map<string, TaskChipView>): Omit<CardView, "rows" | "notices" | "session" | "steps" | "running" | "close"> {
   const ticket = TICKET_PREFIX.exec(pr.title);
   const idleDays = Math.max(0, Math.floor((now.getTime() - new Date(pr.updatedAt).getTime()) / DAY_MS));
   const stale = idleDays >= STALE_DAYS;
@@ -487,6 +492,7 @@ function cardBase(pr: PullRequest, now: Date): Omit<CardView, "rows" | "notices"
     stale,
     mergedAt: pr.mergedAt,
     age: ageView(pr, idleDays, stale, now),
+    task: chips.get(`${pr.repo}#${pr.number}`) ?? null,
   };
 }
 
@@ -494,7 +500,7 @@ function cardBase(pr: PullRequest, now: Date): Omit<CardView, "rows" | "notices"
 const AGENT_LANES: Lane[] = ["agent-review", "human-review"];
 const APPROVAL_LANES: Lane[] = ["human-review", "approved-blocked", "ready"];
 
-function laneCard(boardCard: BoardCard, lane: Lane, owners: Board["owners"], now: Date): CardView {
+function laneCard(boardCard: BoardCard, lane: Lane, owners: Board["owners"], chips: Map<string, TaskChipView>, now: Date): CardView {
   const { requests } = boardCard;
   const ref = `${boardCard.pr.repo}#${boardCard.pr.number}`;
   const target: StepTarget = { ref, approval: boardCard.approval };
@@ -526,12 +532,12 @@ function laneCard(boardCard: BoardCard, lane: Lane, owners: Board["owners"], now
   const running = busy && busy !== "fix-ci" ? STEPS[busy].running : null;
 
   const close: ActionView = { action: "close", label: "Close Pull Request…", hint: "Close this PR on GitHub", running: null, confirm: CONFIRMS.close!(target), stalled: false };
-  return { ...cardBase(boardCard.pr, now), rows, notices, ...sessionParts(target, owner, offered, busy, requests), running, close };
+  return { ...cardBase(boardCard.pr, now, chips), rows, notices, ...sessionParts(target, owner, offered, busy, requests), running, close };
 }
 
-function mergedCard(pr: PullRequest, owners: Board["owners"], now: Date): CardView {
+function mergedCard(pr: PullRequest, owners: Board["owners"], chips: Map<string, TaskChipView>, now: Date): CardView {
   const ref = `${pr.repo}#${pr.number}`;
-  return { ...cardBase(pr, now), rows: [], notices: [], ...sessionParts({ ref, approval: null }, owners[ref], [], null, undefined), running: null, close: null };
+  return { ...cardBase(pr, now, chips), rows: [], notices: [], ...sessionParts({ ref, approval: null }, owners[ref], [], null, undefined), running: null, close: null };
 }
 
 export interface ViewOptions {
@@ -540,10 +546,13 @@ export interface ViewOptions {
   updatedAt: Date | null;
   /** Set when the latest refresh failed; the view then shows the last board it had. */
   error?: string;
+  tasks?: TaskBoardView;
+  /** The task each PR is part of, keyed by "owner/repo#number". */
+  taskChips?: Map<string, TaskChipView>;
 }
 
 export function boardView(board: Board | null, options: ViewOptions): BoardView {
-  const { now } = options;
+  const { now, taskChips: chips = new Map() } = options;
   const lanes: LaneView[] = board
     ? [
         ...LANES.map(({ id, title, hint, hot }) => ({
@@ -551,9 +560,9 @@ export function boardView(board: Board | null, options: ViewOptions): BoardView 
           title,
           hint,
           hot,
-          cards: board.lanes[id].map((boardCard) => laneCard(boardCard, id, board.owners, now)),
+          cards: board.lanes[id].map((boardCard) => laneCard(boardCard, id, board.owners, chips, now)),
         })),
-        { id: "merged", title: "Merged", hint: "Deploys aren't tracked yet", hot: false, cards: board.merged.map((pr) => mergedCard(pr, board.owners, now)) },
+        { id: "merged", title: "Merged", hint: "Deploys aren't tracked yet", hot: false, cards: board.merged.map((pr) => mergedCard(pr, board.owners, chips, now)) },
       ]
     : [];
   // While a session runs one of the board's requests, refresh often, so a finished merge or review shows soon.
@@ -564,5 +573,6 @@ export function boardView(board: Board | null, options: ViewOptions): BoardView 
     error: options.error ?? null,
     agentWorking,
     refreshSeconds: agentWorking ? ACTIVE_REFRESH_SECONDS : REFRESH_SECONDS,
+    tasks: options.tasks ?? null,
   };
 }

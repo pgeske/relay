@@ -59,6 +59,16 @@ brew install --cask blackhole-2ch blackhole-16ch   # then: sudo killall coreaudi
 
 The first call makes macOS ask whether relay may use the microphone; click Allow on the Mac. macOS asks again after relay updates. Your omp needs a ChatGPT (Codex) login, as `/live` does on the Mac.
 
+## Tasks
+
+Relay Board opens on **Tasks**: everything you're getting done, a level above pull requests. A task can be code or not (a rollout, an investigation, getting a team to do something), and can take several sessions and PRs. Agents keep each one current as they work, so a glance tells you which tasks need you while you're busy with another.
+
+Tasks sit in sections by what they need: **Needs you** (a plan to approve, a question, a PR ready to merge, or an agent that stopped and is waiting for your reply, with how long it has waited), **Agent working**, **Waiting on others** (a team, a review, a deploy), **Paused** (in progress, but no session is open), **Not tracked** (open relay sessions no task knows about, each with a **Track** button that asks it to register its task, or **Not a Task** to stop offering), **Ideas**, and **Done**. Each card shows how far along it is (Research, Plan, Doing, Rollout, Done), why it's in its section, its agent's latest status, its plan, its PRs and where each is on the PR board, and its session, with one step forward: **Approve Plan**, **Start**, **Resume**, or **Go to Session**. Click a card for its details and history. A task has a color of its own, and its PRs wear that color on the PR board.
+
+**New Task** (⌘N) jots one down: what you want done, optional details, a project, the folder its session starts in, and whether you approve its plan before the agent starts. **Start** opens a new relay tab with an agent on it; **Save as Idea** keeps it for later. Projects group tasks in the sidebar.
+
+Agents report through `relay task`, which the relay skill teaches them: they register a task when they start on one (`relay task new <title>`), report its stage, status, and what it's blocked on (`relay task update`), record their plan and wait for your approval (`relay task plan`), and finish it (`relay task done`). PRs a task's session opens join the task on their own. `relay task` lists your tasks, and `relay task --json` gives agents the whole board. Tasks live in `~/.local/share/relay/board.db` with the rest of the board.
+
 ## PR board
 
 ```sh
@@ -83,7 +93,7 @@ A Fix CI result is kept the same way, tied to the head commit when it was record
 
 Cards in **Human review** move on through Slack. **Ask for Approval** asks the session to draft a Slack message asking each reviewer the PR still waits on (the people and teams GitHub still has review requests out to) for a review: the PR's link and a sentence on what it does and why, written like your earlier review requests, in the channel where that team or person takes review requests (it asks you when that's unclear). Before drafting, it searches Slack (private channels too) for an ask already sent, say one you wrote yourself, by the PR's URL and `<repo>#<number>`. One that asks a reviewer in their channel, or clearly asks their team elsewhere, is linked instead of drafted again, counting as asked when it was sent; when it can't tell whether a message counts, it asks you. It tells you which asks it found and which it drafted. Reviewers who share a channel share one message. When GitHub lists nobody but approvals are still missing, the session works out who from the PR's required reviewers or CODEOWNERS. Each ask is recorded for its reviewer, so pressing the button again only asks reviewers no ask went to yet. Once every reviewer has an ask, the button becomes **Bump**: for each ask whose reviewer hasn't approved, the session finds the message you sent (or tells you if you never sent the draft) and drafts a short bump in its thread; a found ask is already that message. Both only ever create drafts; you send them. The card's Slack row has a line per ask (**#payments-eng · asked 20m ago**, **#infra · bumped 1d ago**), each opening it in Slack; a found ask reads the same, its tooltip saying it was found. An ask whose reviewer approved is checked off and dimmed. With three or more, two show and the rest fold into **+N more**, which lists them all. Both confirm first, and follow a request like the other steps (**Agent drafting approval ask…**, **Agent drafting bump…**, or **Ask for Approval Again** / **Bump Again** if the session stopped before recording every draft).
 
-The board's buttons type into your sessions, so its endpoints (`GET /api/board` and `POST /api/board/actions/<action>`) answer only this computer: a request must come over loopback and name `localhost`, and it must carry the bearer token in `~/.config/relay/token`, a mode-600 file the app reads and a web page can't. A page that rebinds its domain to 127.0.0.1 fails the first check, and no page can read the token.
+The board's buttons type into your sessions, so its endpoints (`GET /api/board`, `POST /api/board/actions/<action>`, and the tasks' `POST /api/board/tasks` and `POST /api/board/tasks/actions/<action>`) answer only this computer: a request must come over loopback and name `localhost`, and it must carry the bearer token in `~/.config/relay/token`, a mode-600 file the app reads and a web page can't. A page that rebinds its domain to 127.0.0.1 fails the first check, and no page can read the token.
 
 ```sh
 relay board review <pr-url> --passed --summary "Found nothing to change."
@@ -128,7 +138,8 @@ It downloads the new binary (and on a Mac the Relay Board app), checks its SHA-2
 
 ```
 relay                    Open relay (creates the session on first run)
-relay board              Open the PR board app (relay board --help)
+relay board              Open the board app: your tasks and PRs (relay board --help)
+relay task               Your tasks, which agents keep current (relay task --help)
 relay pair [address]     Show a QR code that adds this computer to the Relay iPhone app
 relay server             Run the phone server in the foreground
 relay server install     Run the phone server in the background, starting at login

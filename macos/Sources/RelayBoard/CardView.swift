@@ -54,6 +54,10 @@ struct CardView: View {
             RoundedRectangle(cornerRadius: 12, style: .continuous)
                 .strokeBorder(Color.primary.opacity(hovering ? 0.14 : 0.07), lineWidth: 1)
         }
+        // A PR that's part of a task wears the task's color down its edge, like the task's own card.
+        .overlay(alignment: .leading) {
+            if let task = card.task { TaskEdge(hue: task.hue) }
+        }
         .contentShape(.rect(cornerRadius: 12))
         .onTapGesture { openURL(card.url) }
         .onHover { hovering = $0 }
@@ -71,6 +75,7 @@ struct CardView: View {
             .foregroundStyle(.secondary)
             .help(card.repo)
             if let ticket = card.ticket { TicketChip(ticket: ticket) }
+            if let task = card.task { TaskChipView(chip: task) }
             Spacer(minLength: 4)
             age
             CardMenu { menu }
@@ -371,7 +376,7 @@ private struct ItemsPopover: View {
 }
 
 /// A row's state at a glance: a dot in its tone, dashed when nothing ran yet, a spinner while the session works on it.
-private struct ToneDot: View {
+struct ToneDot: View {
     let tone: Tone
     let running: Bool
 
@@ -508,7 +513,7 @@ private struct StepSlot: View {
                 RunningLabel(text: running)
                     .transition(.blurReplace)
             } else {
-                ForEach(card.steps, id: \.self) { StepButton(step: $0, card: card) }
+                ForEach(card.steps, id: \.self) { StepButton(step: $0, target: .pr(card.ref)) }
             }
         }
         .animation(.smooth(duration: 0.3), value: card.running)
@@ -516,14 +521,14 @@ private struct StepSlot: View {
 }
 
 /// A step button's size, which the running request takes on too.
-@MainActor private enum StepMetrics {
+@MainActor enum StepMetrics {
     static var height: CGFloat { 28 * Zoom.shared.scale }
     static var radius: CGFloat { 8 * Zoom.shared.scale }
     static var font: Font { .zoomed(.callout).weight(.semibold) }
 }
 
 /// A request the session is on, where the step button was: a spinner on a breathing fill.
-private struct RunningLabel: View {
+struct RunningLabel: View {
     let text: String
 
     var body: some View {
@@ -553,7 +558,7 @@ private struct RunningLabel: View {
 }
 
 /// A spinner that takes its color from the text around it.
-private struct Spinner: View {
+struct Spinner: View {
     var body: some View {
         Image(systemName: "progress.indicator")
             .symbolEffect(.variableColor.iterative, options: .repeat(.continuous))
@@ -561,18 +566,18 @@ private struct Spinner: View {
 }
 
 /// The card's one step forward, the width of the card.
-private struct StepButton: View {
+struct StepButton: View {
     let step: BoardAction
-    let card: Card
+    let target: ActionTarget
 
     @Environment(BoardModel.self) private var model
     @State private var clicks = 0
 
     var body: some View {
-        let sending = model.isSending(step, on: card)
+        let sending = model.isSending(step, on: target)
         Button {
             clicks += 1
-            model.request(step, on: card)
+            model.request(step, on: target)
         } label: {
             HStack(spacing: 6) {
                 Group {

@@ -94,6 +94,14 @@ extension BoardAction {
         case "bump": "bell"
         case "merge": "arrow.triangle.merge"
         case "fix-ci": "wrench.and.screwdriver"
+        case "start": "play.fill"
+        case "approve-plan": "checkmark.circle.fill"
+        case "open", "open-session": "terminal"
+        case "track": "plus.circle"
+        case "dismiss": "eye.slash"
+        case "done": "checkmark.circle"
+        case "reopen": "arrow.uturn.backward"
+        case "delete": "trash"
         default: "arrow.right"
         }
     }
@@ -103,8 +111,40 @@ extension BoardAction {
         if stalled == true { return .boardOrangeFill }
         return switch action {
         case "review": .boardPurpleFill
-        case "merge": .boardGreenFill
+        case "merge", "approve-plan": .boardGreenFill
         default: .boardBlueFill
         }
     }
+}
+
+extension TaskLane {
+    var symbol: String {
+        switch id {
+        case "needs-you": "bell.badge.fill"
+        case "working": "sparkles"
+        case "waiting": "hourglass"
+        case "paused": "pause.circle.fill"
+        case "untracked": "questionmark.circle"
+        case "ideas": "lightbulb.fill"
+        case "done": "checkmark.circle.fill"
+        default: "circle.fill"
+        }
+    }
+
+    var tint: Color {
+        switch id {
+        case "needs-you": .boardOrange
+        case "working": .boardPurple
+        case "waiting": .boardBlue
+        case "ideas": .boardAmber
+        case "done": .boardGreen
+        default: .gray
+        }
+    }
+}
+
+/// A task's color, by the hue the server gave it, so its card and its PRs' chips match.
+func taskColor(_ hue: Int) -> Color {
+    let palette: [Color] = [.blue, .purple, .pink, .orange, .teal, .green, .indigo, .brown]
+    return palette[((hue % palette.count) + palette.count) % palette.count]
 }

@@ -1,9 +1,56 @@
 ---
 name: relay
-description: Relay's PR board. Use when asked where pull requests stand, what's ready to merge, or what's waiting on review; right after a reviewer agent finishes reviewing a pull request, after finishing a Fix CI request from the board, or after drafting a Slack approval ask or bump for a pull request, to record it; and when taking over a pull request another session opened.
+description: Relay's board of the user's tasks and PRs. Use at the start of any multi-step task in a relay session (anything taking more than a few minutes, code or not, like a change, a rollout, an investigation, or asking a team for something) to register it, and while working on it to keep its stage and status current; when asked to track this in relay; when asked where tasks or pull requests stand, what's ready to merge, or what's waiting on review; right after a reviewer agent finishes reviewing a pull request, after finishing a Fix CI request from the board, or after drafting a Slack approval ask or bump for a pull request, to record it; and when taking over a pull request another session opened.
 ---
 
 # relay board
+
+The Relay Board app has two views: **Tasks**, what the user is getting done, and **Pull Requests**. The user juggles several tasks at once, and attention is the bottleneck: the Tasks view exists so a task never gets forgotten while they look at another. It only works if you keep your task current.
+
+## Tasks
+
+A task is one thing the user wants done: a fix, a rollout, an investigation, getting another team to do something. It can take several sessions and PRs, or none. Tasks can belong to a project (a named group of tasks).
+
+**Register the task when you start one** in a relay session, unless this session is already on a task (the user started it from the board, or you registered it earlier). Skip it for quick questions and one-off answers.
+
+```sh
+relay task new "Roll out the new cache to staging" --project "Faster search" --status "Reading the rollout runbook"
+# prints T-12; this session is on it now
+```
+
+- The title says the outcome in a few plain words. `--details -` takes a longer description on stdin.
+- By default the user approves your plan before you carry it out (below). Add `--skip-plan` when there's nothing to plan, or the user already told you exactly what to do.
+- `--project` names a project, creating it if needed. Reuse an existing name (`relay task --json` lists projects) rather than inventing a near-duplicate.
+
+**Keep it current.** Every time the task moves, report it; commands without a task id act on this session's task:
+
+```sh
+relay task update --stage doing --status "Opened the PR; waiting for CI"
+relay task update --blocked-on me --reason "Which datacenter should go first?"
+relay task update --blocked-on others --reason "Waiting on the storage team to approve the config change"
+relay task update --pr https://github.com/acme/api/pull/12   # a PR this session didn't open
+relay task done --status "Rolled out to every staging datacenter"
+```
+
+- Stages, in order: `research`, `plan`, `doing`, `rollout` (rolling out or verifying), `done`. Move it on when the work does; skipping a stage is fine.
+- `--status` is one short line the user reads at a glance: where it stands now, not what you did ten steps ago.
+- **Before ending your turn**, make sure the board says what the task waits on. Waiting for the user's answer or decision: `--blocked-on me`. Waiting for anyone else (a team, a reviewer, a deploy, a long job): `--blocked-on others`. Any update without `--blocked-on` clears the block, so repeat it while it holds. An agent that stops without saying shows as waiting on the user.
+- PRs this session opens join the task on their own.
+
+**Plans.** Unless the task skips plan approval, record your plan and then stop until the user approves it on the board (they press **Approve Plan**, which tells you to go ahead):
+
+```sh
+relay task plan --summary - <<'EOF'
+1. Turn the cache on in the staging config.
+2. Apply one datacenter, check search latency, then the rest.
+EOF
+```
+
+A plan recorded again (revised) needs approving again. On a task that skips approval, recording a plan is optional and just informs.
+
+**When the board hands you a task** ("I started T-12 from the relay board"), this session is already on it: don't register it again. When the board asks you to track a session, register what it's working on with `relay task new`, or say it isn't a task. `relay task link <task>` puts this session on an existing task (say, a second session on the same work). `relay task show` prints this session's task; `relay task --json` lists them all, by section: `needs-you`, `working`, `waiting`, `paused`, `untracked`, `ideas`, `done`.
+
+## Pull requests
 
 `relay board` shows each of the user's open pull requests in a lane, closest to shipping first:
 

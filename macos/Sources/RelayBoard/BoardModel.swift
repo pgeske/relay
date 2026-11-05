@@ -11,7 +11,7 @@ struct Toast: Identifiable, Equatable {
 struct PendingAction: Identifiable {
     let id = UUID()
     var action: BoardAction
-    var card: Card
+    var target: ActionTarget
     var confirm: Confirm
 }
 
@@ -25,12 +25,16 @@ final class BoardModel {
     private(set) var isRefreshing = false
     var toast: Toast?
     var confirming: PendingAction?
-    /// Controls on their way to the server, as "<ref> <action>".
+    /// The New Task sheet is up.
+    var composing = false
+    /// Controls on their way to the server, as "<target> <action>".
     private var sending: Set<String> = []
-    /// Requests the server took on that its board doesn't show yet, by card ref.
+    /// Requests the server took on that its board doesn't show yet, by PR card ref.
     private var started: [String: BoardAction] = [:]
-    /// Cards closed since the last refresh.
-    private var closed: Set<String> = []
+    /// Task controls the server took on that its board doesn't show yet, by task id: their `running` text.
+    private var startedTasks: [Int: String] = [:]
+    /// Cards closed or deleted since the last refresh, by target key.
+    private var removed: Set<String> = []
 
     let client = BoardClient(server: .fromEnvironment())
     private var loop: Task<Void, Never>?
@@ -40,13 +44,32 @@ final class BoardModel {
     var lanes: [Lane] {
         (board?.lanes ?? []).map { lane in
             var lane = lane
-            lane.cards = lane.cards.filter { !closed.contains($0.ref) }.map { card in started[card.ref].map(card.takingOn) ?? card }
+            lane.cards = lane.cards.filter { !removed.contains(ActionTarget.pr($0.ref).key) }.map { card in started[card.ref].map(card.takingOn) ?? card }
             return lane
         }
     }
 
-    /// Cards waiting on you, in the lanes that are.
-    var waitingOnYou: Int { lanes.filter(\.hot).reduce(0) { $0 + $1.cards.count } }
+    /// The task sections as the window shows them, with what the server hasn't caught up with.
+    var taskLanes: [TaskLane] {
+        (board?.tasks?.lanes ?? []).map { lane in
+            var lane = lane
+            lane.cards = lane.cards.filter { !removed.contains(ActionTarget.task($0.id).key) }.map { card in
+                guard let running = startedTasks[card.id] else { return card }
+                var card = card
+                card.running = running
+                card.steps = []
+                return card
+            }
+            lane.sessions = lane.sessions.filter { !removed.contains(ActionTarget.session($0.sessionFile).key) }
+            return lane
+        }
+    }
+
+    /// PR cards waiting on you, in the lanes that are.
+    var prsWaitingOnYou: Int { lanes.filter(\.hot).reduce(0) { $0 + $1.cards.count } }
+
+    /// Tasks waiting on you.
+    var tasksWaitingOnYou: Int { taskLanes.filter(\.hot).reduce(0) { $0 + $1.cards.count } }
 
     func start() {
         if loop == nil { schedule(after: .zero) }
@@ -56,23 +79,50 @@ final class BoardModel {
         schedule(after: .zero)
     }
 
+    func isSending(_ action: BoardAction, on target: ActionTarget) -> Bool {
+        sending.contains("\(target.key) \(action.action)")
+    }
+
     func isSending(_ action: BoardAction, on card: Card) -> Bool {
-        sending.contains("\(card.ref) \(action.action)")
+        isSending(action, on: .pr(card.ref))
     }
 
     /// Runs a control, asking first when it changes something.
-    func request(_ action: BoardAction, on card: Card) {
+    func request(_ action: BoardAction, on target: ActionTarget) {
         if let confirm = action.confirm {
-            confirming = PendingAction(action: action, card: card, confirm: confirm)
+            confirming = PendingAction(action: action, target: target, confirm: confirm)
         } else {
-            Task { await run(action, on: card) }
+            Task { await run(action, on: target) }
         }
+    }
+
+    func request(_ action: BoardAction, on card: Card) {
+        request(action, on: .pr(card.ref))
     }
 
     func confirm(_ pending: PendingAction) {
         confirming = nil
-        Task { await run(pending.action, on: pending.card) }
+        Task { await run(pending.action, on: pending.target) }
     }
+
+    /// Sends the New Task sheet's task; true once the server took it.
+    func create(_ task: NewTask) async -> Bool {
+        let key = "new-task"
+        guard !sending.contains(key) else { return false }
+        sending.insert(key)
+        defer { sending.remove(key) }
+        do {
+            let result = try await client.create(task)
+            toast = Toast(message: result.message, failed: !result.ok)
+            if result.ok { schedule(after: .milliseconds(300)) }
+            return result.ok
+        } catch {
+            report(error)
+            return false
+        }
+    }
+
+    var isCreating: Bool { sending.contains("new-task") }
 
     /// Refreshes every `refreshSeconds` the server asks for, holding off while a control is being
     /// confirmed or sent, so the card it's on stays put.
@@ -111,7 +161,8 @@ final class BoardModel {
             board = try await client.board()
             failure = nil
             started = [:]
-            closed = []
+            startedTasks = [:]
+            removed = []
         } catch let error as BoardError {
             failure = error
         } catch {
@@ -119,28 +170,46 @@ final class BoardModel {
             if Task.isCancelled || (error as? URLError)?.code == .cancelled { return }
             failure = .server(status: 0, message: error.localizedDescription)
         }
-        NSApp.dockTile.badgeLabel = waitingOnYou > 0 ? "\(waitingOnYou)" : nil
+        let waiting = prsWaitingOnYou + tasksWaitingOnYou
+        NSApp.dockTile.badgeLabel = waiting > 0 ? "\(waiting)" : nil
     }
 
-    private func run(_ action: BoardAction, on card: Card) async {
-        let key = "\(card.ref) \(action.action)"
+    private func run(_ action: BoardAction, on target: ActionTarget) async {
+        let key = "\(target.key) \(action.action)"
         guard !sending.contains(key) else { return }
         sending.insert(key)
         defer { sending.remove(key) }
         do {
-            let result = try await client.perform(action.action, on: card.ref)
+            // Approving names the plan on screen; refreshes hold off while a control is confirmed or sent, so it's the one you read.
+            var plan: String?
+            if action.action == "approve-plan", case .task(let id) = target {
+                plan = taskLanes.lazy.flatMap(\.cards).first { $0.id == id }?.plan?.revision
+            }
+            let result = try await client.perform(action.action, on: target, plan: plan)
             toast = Toast(message: result.message, failed: !result.ok)
-            if result.ok, action.running != nil { started[card.ref] = action }
-            if result.ok, action.action == "close" { closed.insert(card.ref) }
+            if result.ok, let running = action.running {
+                switch target {
+                case .pr(let ref): started[ref] = action
+                case .task(let id): startedTasks[id] = running
+                case .session: break
+                }
+            }
+            if result.ok, ["close", "delete", "dismiss"].contains(action.action) { removed.insert(target.key) }
             // The session took a step on, or the card was out of date (the PR merged, or its session is
-            // already on a request): show what's true now.
-            if (result.ok && action.running != nil) || result.status == 409 { schedule(after: .milliseconds(1200)) }
-        } catch BoardError.serverNotRunning {
-            toast = Toast(message: "Couldn't reach relay's server", failed: true)
-        } catch BoardError.noToken(let path) {
-            toast = Toast(message: "Couldn't read relay's token at \(path)", failed: true)
+            // already on a request): show what's true now. Task controls change the task's section, so
+            // they show soon too.
+            let isTask = if case .pr = target { false } else { true }
+            if (result.ok && (action.running != nil || isTask)) || result.status == 409 { schedule(after: .milliseconds(1200)) }
         } catch {
-            toast = Toast(message: error.localizedDescription, failed: true)
+            report(error)
+        }
+    }
+
+    private func report(_ error: any Error) {
+        switch error {
+        case BoardError.serverNotRunning: toast = Toast(message: "Couldn't reach relay's server", failed: true)
+        case BoardError.noToken(let path): toast = Toast(message: "Couldn't read relay's token at \(path)", failed: true)
+        default: toast = Toast(message: error.localizedDescription, failed: true)
         }
     }
 }

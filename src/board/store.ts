@@ -2,8 +2,9 @@ import { Database } from "bun:sqlite";
 import { mkdirSync } from "node:fs";
 import { join } from "node:path";
 import { DATA_DIR } from "../paths.ts";
+import { createTaskTables } from "./taskStore.ts";
 
-/** State GitHub doesn't know about lives here: agent reviews and CI fixes, approval asks in Slack, which session owns each PR, and what the board asked of it. */
+/** State GitHub doesn't know about lives here: agent reviews and CI fixes, approval asks in Slack, which session owns each PR, what the board asked of it, and your tasks. */
 export const BOARD_DB_PATH = join(DATA_DIR, "board.db");
 
 export type AgentVerdict = "passed" | "findings";
@@ -189,6 +190,7 @@ export function openBoardStore(path = BOARD_DB_PATH): Database {
       db.run("DROP TABLE review_requests");
     })();
   }
+  createTaskTables(db);
   return db;
 }
 

@@ -79,8 +79,8 @@ export function describeOwner(owner: PrOwner, live: Map<string, Pane>): CardOwne
  * each PR, whether it is open, the agent reviews, CI fixes, and approval asks recorded so far,
  * and the requests the board sent. The local part is fast (an incremental session scan and a few SQLite reads).
  */
-export async function assembleBoard(data: BoardData, config: BoardConfig): Promise<Board> {
-  const live = await liveSessions();
+export async function assembleBoard(data: BoardData, config: BoardConfig, live?: Map<string, Pane>): Promise<Board> {
+  live ??= await liveSessions();
   const db = openBoardStore();
   try {
     scanSessions(db);
@@ -121,7 +121,7 @@ export function sourceFor(config: BoardConfig, repo: string): BoardSource {
   return config.sources.find((source) => source.org?.toLowerCase() === owner) ?? config.sources.find((source) => !source.org) ?? {};
 }
 
-function flagValue(args: string[], flag: string): string | undefined {
+export function flagValue(args: string[], flag: string): string | undefined {
   const index = args.indexOf(flag);
   if (index === -1) return undefined;
   const value = args[index + 1];
@@ -182,7 +182,7 @@ async function recordCiFixResult(args: string[]): Promise<void> {
 }
 
 /** `--summary -` reads stdin, so an agent can pass a long multi-line write-up through a heredoc. */
-async function readSummary(value: string | undefined): Promise<string | null> {
+export async function readSummary(value: string | undefined): Promise<string | null> {
   if (value === undefined) return null;
   const text = value === "-" ? await Bun.stdin.text() : value;
   return text.trim() || null;
@@ -274,16 +274,21 @@ function recordApproval(args: string[]): void {
 }
 
 /**
- * Hands a PR to the omp session the command runs in. omp's tools inherit the pane's $TMUX_PANE,
- * which leads to the pane, and the pane to its session file.
+ * The omp session this command runs in. omp's tools inherit the pane's $TMUX_PANE, which leads to
+ * the pane, and the pane to its session file. Null outside relay.
  */
+export async function currentSessionFile(): Promise<string | null> {
+  const paneId = process.env.TMUX_PANE;
+  const pane = paneId ? (await listPanes()).find((candidate) => candidate.paneId === paneId) : undefined;
+  return pane ? await resolveSessionFile(pane) : null;
+}
+
+/** Hands a PR to the omp session the command runs in. */
 async function claim(args: string[]): Promise<void> {
   const [rawRef] = args;
   if (!rawRef) throw new Error(`missing <pr>\n\n${BOARD_HELP}`);
   const { repo, number } = parsePrRef(rawRef);
-  const paneId = process.env.TMUX_PANE;
-  const pane = paneId ? (await listPanes()).find((candidate) => candidate.paneId === paneId) : undefined;
-  const sessionFile = pane ? await resolveSessionFile(pane) : null;
+  const sessionFile = await currentSessionFile();
   if (!sessionFile) throw new Error("run this from an omp session inside relay: it puts that session in charge of the PR");
   const db = openBoardStore();
   try {

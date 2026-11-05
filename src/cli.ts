@@ -1,6 +1,7 @@
 #!/usr/bin/env bun
 import { spawn, spawnSync } from "node:child_process";
 import { boardCommand } from "./board/command.ts";
+import { taskCommand } from "./board/taskCommand.ts";
 import { printPairing } from "./pair.ts";
 import { BOARD_APP_NAME } from "./paths.ts";
 import { runServer } from "./server/main.ts";
@@ -25,7 +26,8 @@ const HELP = `relay ${VERSION}: an agent multiplexer for omp, with an iPhone com
 
 Usage:
   relay                    Open relay (creates the session on first run)
-  relay board              Open the PR board app (relay board --help)
+  relay board              Open the board app: your tasks and PRs (relay board --help)
+  relay task               Your tasks, which agents keep current (relay task --help)
   relay pair [address]     Show a QR code that adds this computer to the Relay iPhone app
   relay server             Run the phone server in the foreground
   relay server install     Run the phone server in the background, starting at login
@@ -132,6 +134,9 @@ async function main(args: string[]): Promise<number | null> {
       return 0;
     case "board":
       await boardCommand(rest);
+      return 0;
+    case "task":
+      await taskCommand(rest);
       return 0;
     case "server":
       if (rest[0] === undefined) {

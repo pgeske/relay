@@ -2,13 +2,15 @@ import AppKit
 import SwiftUI
 
 enum SidebarItem: Hashable {
+    case tasks
+    case project(Int)
     case all
     case lane(String)
 }
 
 struct BoardWindow: View {
     @Environment(BoardModel.self) private var model
-    @State private var selection: SidebarItem? = .all
+    @State private var selection: SidebarItem? = .tasks
 
     var body: some View {
         @Bindable var model = model
@@ -16,13 +18,20 @@ struct BoardWindow: View {
             Sidebar(selection: $selection)
                 .navigationSplitViewColumnWidth(min: 190 * zoom, ideal: 215 * zoom, max: 280 * zoom)
         } detail: {
-            BoardContent(selection: selection ?? .all)
+            BoardContent(selection: selection ?? .tasks)
         }
         // Text without a font of its own, like sidebar rows, follows the zoom too.
         .font(.zoomed(.body))
         .navigationTitle("Relay Board")
         .navigationSubtitle(status)
         .toolbar {
+            ToolbarItem(placement: .primaryAction) {
+                Button { model.composing = true } label: {
+                    Label("New Task", systemImage: "plus")
+                }
+                .help("New task (⌘N)")
+                .disabled(model.board?.tasks == nil)
+            }
             ToolbarItem(placement: .primaryAction) {
                 Button { model.refreshNow() } label: {
                     Label("Refresh", systemImage: "arrow.clockwise")
@@ -31,6 +40,7 @@ struct BoardWindow: View {
                 .help("Refresh the board (⌘R)")
             }
         }
+        .sheet(isPresented: $model.composing) { NewTaskSheet(project: selectedProject) }
         .overlay(alignment: .bottom) { ToastView() }
         .alert(model.confirming?.confirm.title ?? "", isPresented: confirmingBinding, presenting: model.confirming) { pending in
             if pending.confirm.destructive {
@@ -47,6 +57,12 @@ struct BoardWindow: View {
     }
 
     private var zoom: CGFloat { Zoom.shared.scale }
+
+    /// The project the sidebar shows, which a new task starts in.
+    private var selectedProject: Project? {
+        guard case .project(let id) = selection else { return nil }
+        return model.board?.tasks?.projects.first { $0.id == id }
+    }
 
     private var confirmingBinding: Binding<Bool> {
         Binding(get: { model.confirming != nil }, set: { if !$0 { model.confirming = nil } })
@@ -67,32 +83,45 @@ private struct Sidebar: View {
 
     var body: some View {
         List(selection: $selection) {
-            Label("All Lanes", systemImage: "rectangle.grid.1x2")
-                .badge(model.lanes.filter { $0.id != "merged" }.reduce(0) { $0 + $1.cards.count })
-                .tag(SidebarItem.all)
-            if !model.lanes.isEmpty {
-                Section("Lanes") {
-                    ForEach(model.lanes) { lane in
-                        Label {
-                            Text(lane.title)
-                        } icon: {
-                            Image(systemName: lane.symbol).foregroundStyle(lane.tint)
-                        }
-                        .badge(lane.cards.count)
-                        .tag(SidebarItem.lane(lane.id))
+            Section("Tasks") {
+                Label("All Tasks", systemImage: "checklist")
+                    .badge(model.tasksWaitingOnYou)
+                    .tag(SidebarItem.tasks)
+                ForEach(model.board?.tasks?.projects ?? []) { project in
+                    Label(project.name, systemImage: "folder")
+                        .badge(project.needsYou > 0 ? project.needsYou : project.open)
+                        .tag(SidebarItem.project(project.id))
+                }
+            }
+            Section("Pull Requests") {
+                Label("All Lanes", systemImage: "rectangle.grid.1x2")
+                    .badge(model.lanes.filter { $0.id != "merged" }.reduce(0) { $0 + $1.cards.count })
+                    .tag(SidebarItem.all)
+                ForEach(model.lanes) { lane in
+                    Label {
+                        Text(lane.title)
+                    } icon: {
+                        Image(systemName: lane.symbol).foregroundStyle(lane.tint)
                     }
+                    .badge(lane.cards.count)
+                    .tag(SidebarItem.lane(lane.id))
                 }
             }
         }
         .safeAreaInset(edge: .bottom) {
-            if model.waitingOnYou > 0 {
-                Label("\(model.waitingOnYou) waiting on you", systemImage: "bell.badge.fill")
-                    .font(.zoomed(.callout).weight(.medium))
-                    .foregroundStyle(.secondary)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(.horizontal, 18)
-                    .padding(.bottom, 14)
+            VStack(alignment: .leading, spacing: 6) {
+                if model.tasksWaitingOnYou > 0 {
+                    Label("\(model.tasksWaitingOnYou) task\(model.tasksWaitingOnYou == 1 ? "" : "s") need\(model.tasksWaitingOnYou == 1 ? "s" : "") you", systemImage: "bell.badge.fill")
+                }
+                if model.prsWaitingOnYou > 0 {
+                    Label("\(model.prsWaitingOnYou) PR\(model.prsWaitingOnYou == 1 ? "" : "s") waiting on you", systemImage: "arrow.triangle.pull")
+                }
             }
+            .font(.zoomed(.callout).weight(.medium))
+            .foregroundStyle(.secondary)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.horizontal, 18)
+            .padding(.bottom, 14)
         }
     }
 }
@@ -103,6 +132,44 @@ private struct BoardContent: View {
     @Environment(BoardModel.self) private var model
 
     var body: some View {
+        switch selection {
+        case .tasks, .project:
+            tasksContent
+        case .all, .lane:
+            pullRequestsContent
+        }
+    }
+
+    /// Tasks don't need GitHub: they show whenever relay's server answers.
+    @ViewBuilder private var tasksContent: some View {
+        if model.board?.tasks != nil {
+            VStack(spacing: 0) {
+                if let failure = model.failure {
+                    Banner(text: "\(failure.headline). Showing your tasks as they were.").padding([.horizontal, .top], 16)
+                }
+                TasksView(project: project)
+            }
+        } else if let failure = model.failure {
+            FailureView(failure: failure)
+        } else if model.board != nil {
+            ContentUnavailableView {
+                Label("relay's server is older than this app", systemImage: "arrow.down.app")
+            } description: {
+                Text("Tasks need a newer relay. Update it with relay update.")
+            }
+        } else {
+            ProgressView("Loading your tasks…")
+                .controlSize(.large)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+        }
+    }
+
+    private var project: Project? {
+        guard case .project(let id) = selection else { return nil }
+        return model.board?.tasks?.projects.first { $0.id == id }
+    }
+
+    @ViewBuilder private var pullRequestsContent: some View {
         if let board = model.board, !board.lanes.isEmpty {
             VStack(spacing: 0) {
                 if let problem = staleBoardProblem(board) {

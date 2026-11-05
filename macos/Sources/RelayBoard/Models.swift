@@ -11,6 +11,8 @@ struct Board: Decodable, Sendable {
     var error: String?
     var agentWorking: Bool
     var refreshSeconds: Int
+    /// Your tasks; nil from a relay too old to have them.
+    var tasks: TaskBoard?
 }
 
 struct Lane: Decodable, Sendable, Identifiable {
@@ -43,8 +45,18 @@ struct Card: Decodable, Sendable, Identifiable {
     /// The request the session is on, shown in place of the steps when no row already says it.
     var running: String?
     var close: BoardAction?
+    /// The task the PR is part of; absent from an older relay's cards.
+    var task: TaskChip?
 
     var id: String { ref }
+}
+
+/// How a PR card names the task it's part of, in the task's color.
+struct TaskChip: Decodable, Sendable, Hashable {
+    var id: Int
+    var ref: String
+    var title: String
+    var hue: Int
 }
 
 /// How long ago the PR last changed, or merged, as the card's header says it.

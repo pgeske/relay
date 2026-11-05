@@ -62,10 +62,33 @@ struct BoardClient: Sendable {
     }
 
     /// Runs one of a card's controls. The server answers every outcome with a sentence to show,
-    /// so only failing to reach it throws.
-    func perform(_ action: String, on ref: String) async throws -> ActionResult {
-        let body = try JSONEncoder().encode(["pr": ref])
-        let (data, response) = try await send("api/board/actions/\(action)", method: "POST", body: body)
+    /// so only failing to reach it throws. `plan` names the plan an Approve Plan is for.
+    func perform(_ action: String, on target: ActionTarget, plan: String? = nil) async throws -> ActionResult {
+        let path: String
+        let body: Data
+        switch target {
+        case .pr(let ref):
+            path = "api/board/actions/\(action)"
+            body = try JSONSerialization.data(withJSONObject: ["pr": ref])
+        case .task(let id):
+            path = "api/board/tasks/actions/\(action)"
+            var fields: [String: Any] = ["task": id]
+            if let plan { fields["plan"] = plan }
+            body = try JSONSerialization.data(withJSONObject: fields)
+        case .session(let file):
+            path = "api/board/tasks/actions/\(action)"
+            body = try JSONSerialization.data(withJSONObject: ["session": file])
+        }
+        return try await post(path, body: body)
+    }
+
+    /// Creates a task, starting a session on it when the sheet asked to.
+    func create(_ task: NewTask) async throws -> ActionResult {
+        try await post("api/board/tasks", body: try JSONEncoder().encode(task))
+    }
+
+    private func post(_ path: String, body: Data) async throws -> ActionResult {
+        let (data, response) = try await send(path, method: "POST", body: body)
         let ok = (200..<300).contains(response.statusCode)
         let fallback = ok ? "Done" : "Something went wrong (HTTP \(response.statusCode))"
         return ActionResult(ok: ok, status: response.statusCode, message: Self.message(in: data) ?? fallback)

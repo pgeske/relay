@@ -6,6 +6,7 @@ import { dirname, join } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import { WebSocketServer } from "ws";
 import { fetchBoardView, isLocalRequest, readActionBody, runBoardAction } from "../board/serve.ts";
+import { createTaskFromBoard, parseNewTask, readJsonBody, runTaskAction, type NewTaskRequest } from "../board/taskServe.ts";
 import { endLiveCall, recoverInterruptedCall, startLiveCall } from "./live.ts";
 import { askAnswerSteps, findPendingAsk, validateAskAnswers, type AskAnswer } from "./ask.ts";
 import { startSessionEvents } from "./events.ts";
@@ -335,11 +336,17 @@ async function handleImage(
 /**
  * The Relay Board app's endpoints: `GET /api/board` is the board as the app shows it, and
  * `POST /api/board/actions/<action>` with `{ "pr": "owner/repo#12" }` runs one of a card's controls.
+ * `POST /api/board/tasks` creates a task, and `POST /api/board/tasks/actions/<action>` with
+ * `{ "task": 12 }` (or `{ "session": "<file>" }`) runs one of a task card's controls.
  */
 async function routeBoard(req: IncomingMessage, res: ServerResponse, rest: string[]): Promise<void> {
   if (rest.length === 0) {
     if (req.method !== "GET") throw new HttpError(405, "method not allowed");
     sendJson(res, 200, await fetchBoardView());
+    return;
+  }
+  if (rest[0] === "tasks") {
+    await routeTasks(req, res, rest.slice(1));
     return;
   }
   if (rest.length !== 2 || rest[0] !== "actions") {
@@ -354,6 +361,31 @@ async function routeBoard(req: IncomingMessage, res: ServerResponse, rest: strin
     throw new HttpError(400, error instanceof Error ? error.message : "bad request");
   }
   const result = await runBoardAction(rest[1], pr);
+  sendJson(res, result.status, result.status < 300 ? { message: result.message } : { error: result.message });
+}
+
+async function routeTasks(req: IncomingMessage, res: ServerResponse, rest: string[]): Promise<void> {
+  const isCreate = rest.length === 0;
+  if (!isCreate && (rest.length !== 2 || rest[0] !== "actions")) {
+    sendJson(res, 404, { error: "not found" });
+    return;
+  }
+  if (req.method !== "POST") throw new HttpError(405, "method not allowed");
+  let body: Record<string, unknown>;
+  let request: NewTaskRequest | null = null;
+  try {
+    body = await readJsonBody(req);
+    if (isCreate) request = parseNewTask(body);
+  } catch (error) {
+    throw new HttpError(400, error instanceof Error ? error.message : "bad request");
+  }
+  const result = request
+    ? await createTaskFromBoard(request)
+    : await runTaskAction(rest[1], {
+        task: typeof body.task === "number" ? body.task : undefined,
+        session: typeof body.session === "string" ? body.session : undefined,
+        plan: typeof body.plan === "string" ? body.plan : undefined,
+      });
   sendJson(res, result.status, result.status < 300 ? { message: result.message } : { error: result.message });
 }
 

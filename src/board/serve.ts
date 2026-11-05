@@ -11,6 +11,7 @@ import { REQUEST_MAX_AGE_MS, approvalState, requestProgress, waitingAsks, type A
 import { prOwner, readSessionHeader } from "./owners.ts";
 import { BOARD_ACTIONS, boardView, type BoardAction, type BoardView } from "./view.ts";
 import { AGENT_ACTIONS, agentRequests, approvalAsks, latestAgentReviews, latestCiFixes, openBoardStore, recordAgentRequest, type AgentAction } from "./store.ts";
+import { assembleTasks } from "./taskCommand.ts";
 import { bringRelayTerminalToFront } from "./terminalApp.ts";
 
 const MAX_ACTION_BODY_BYTES = 4096;
@@ -23,8 +24,9 @@ let lastGood: { data: BoardData; at: Date } | null = null;
 
 /**
  * The board, as the Relay Board app shows it. Every view fetches from GitHub, so a refresh always
- * shows what GitHub has right now. Sessions, agent results, and the requests the board sent are read
- * fresh too. The app shows only your own PRs, so it skips the searches for PRs waiting on your review.
+ * shows what GitHub has right now. Sessions, agent results, the requests the board sent, and your
+ * tasks are read fresh too; tasks show even when GitHub can't be read. The app shows only your own
+ * PRs, so it skips the searches for PRs waiting on your review.
  */
 export async function fetchBoardView(): Promise<BoardView> {
   const config = loadBoardConfig();
@@ -34,8 +36,11 @@ export async function fetchBoardView(): Promise<BoardView> {
   } catch (failure) {
     error = failure instanceof Error ? failure.message : String(failure);
   }
-  const board = lastGood ? await assembleBoard(lastGood.data, config) : null;
-  return boardView(board, { now: new Date(), updatedAt: lastGood?.at ?? null, error });
+  const live = await liveSessions();
+  const board = lastGood ? await assembleBoard(lastGood.data, config, live) : null;
+  const now = new Date();
+  const tasks = assembleTasks(board, live, now);
+  return boardView(board, { now, updatedAt: lastGood?.at ?? null, error, tasks: tasks.view, taskChips: tasks.chips });
 }
 
 /**
@@ -178,7 +183,7 @@ function isBoardAction(action: string): action is BoardAction {
 }
 
 /** Reopens a closed session in a new relay tab, returning its pane; `focus` switches relay to it. */
-async function reopen(sessionFile: string, focus: boolean): Promise<string> {
+export async function reopen(sessionFile: string, focus: boolean): Promise<string> {
   const tmuxSession = await mainSessionName();
   if (!tmuxSession) throw new ActionError(409, "relay isn't running; open it with `relay` first");
   const paneId = await newWindow(tmuxSession, readSessionHeader(sessionFile).cwd ?? homedir(), ["--resume", sessionFile]);
@@ -190,7 +195,7 @@ async function reopen(sessionFile: string, focus: boolean): Promise<string> {
  * Waits for a freshly reopened omp to load its session and sit idle. Its pane title only takes
  * omp's "π > title" form once the TUI is up; before that the title is the shell's.
  */
-async function waitUntilReady(paneId: string): Promise<void> {
+export async function waitUntilReady(paneId: string): Promise<void> {
   const deadline = Date.now() + REOPEN_TIMEOUT_MS;
   while (Date.now() < deadline) {
     const pane = (await listOmpPanes()).find((candidate) => candidate.paneId === paneId);
@@ -204,7 +209,7 @@ async function waitUntilReady(paneId: string): Promise<void> {
   throw new ActionError(504, "the session took too long to reopen; it's open in relay now, so press the button again");
 }
 
-class ActionError extends Error {
+export class ActionError extends Error {
   constructor(
     readonly status: number,
     message: string,
@@ -214,10 +219,10 @@ class ActionError extends Error {
 }
 
 /**
- * Pastes `prompt` into a PR's session, reopening a closed one in a background tab first so the
- * prompt lands where the PR's history is. Refuses a session that's mid-task. Returns whether it reopened.
+ * Pastes `prompt` into a session, reopening a closed one in a background tab first so the prompt
+ * lands where its history is. Refuses a session that's mid-task. Returns whether it reopened.
  */
-async function promptSession(sessionFile: string, live: { paneId: string; status: string } | null, name: string, prompt: string): Promise<boolean> {
+export async function promptSession(sessionFile: string, live: { paneId: string; status: string } | null, name: string, prompt: string): Promise<boolean> {
   if (live?.status === "working") throw new ActionError(409, `"${name}" is busy. Try again once it's idle.`);
   let paneId = live?.paneId;
   if (!paneId) {
@@ -226,6 +231,15 @@ async function promptSession(sessionFile: string, live: { paneId: string; status
   }
   await pasteText(paneId, prompt);
   return !live;
+}
+
+/** Shows a session in your terminal: switches relay to its tab, or reopens it in a new one. Returns what it did, in words. */
+export async function showSession(sessionFile: string, live: { windowId: string } | null, name: string): Promise<string> {
+  if (live) await selectWindow(live.windowId);
+  else await reopen(sessionFile, true);
+  // The tab already switched, so a terminal we can't raise only costs you an app switch.
+  await bringRelayTerminalToFront().catch((error) => console.error(`relay board: couldn't bring the terminal forward: ${error}`));
+  return live ? `Switched relay to "${name}"` : `Reopened "${name}" in a new relay tab`;
 }
 
 /**
@@ -259,13 +273,7 @@ export async function runBoardAction(action: string, prRef: string): Promise<Boa
   if (!card.live && !existsSync(owner.sessionFile)) return { status: 410, message: `"${name}" no longer exists` };
 
   try {
-    if (action === "open") {
-      if (card.live) await selectWindow(card.live.windowId);
-      else await reopen(owner.sessionFile, true);
-      // The tab already switched, so a terminal we can't raise only costs you an app switch.
-      await bringRelayTerminalToFront().catch((error) => console.error(`relay board: couldn't bring the terminal forward: ${error}`));
-      return { status: 200, message: card.live ? `Switched relay to "${name}"` : `Reopened "${name}" in a new relay tab` };
-    }
+    if (action === "open") return { status: 200, message: await showSession(owner.sessionFile, card.live, name) };
 
     // The card may be older than the PR: a step on one that already merged or closed would only confuse its session.
     // If GitHub doesn't answer, the session checks the PR itself before acting, and works out who to ask for approval.
