@@ -27,6 +27,15 @@ struct Screenshot: Identifiable {
         return asPNG(image).map { [$0] } ?? []
     }
 
+    /// Whether `all(on:)` would find an image, without reading any: checked on every drag movement.
+    static func isOn(_ pasteboard: NSPasteboard) -> Bool {
+        if pasteboard.canReadObject(forClasses: [NSURL.self], options: [.urlReadingFileURLsOnly: true]) {
+            return pasteboard.canReadObject(forClasses: [NSURL.self], options: [.urlReadingFileURLsOnly: true, .urlReadingContentsConformToTypes: [UTType.image.identifier]])
+        }
+        if pasteboard.availableType(from: sentAsIs.map { NSPasteboard.PasteboardType($0.0.identifier) }) != nil { return true }
+        return pasteboard.string(forType: .string) == nil && NSImage.canInit(with: pasteboard)
+    }
+
     private static func fromFile(_ url: URL) -> Screenshot? {
         guard let type = UTType(filenameExtension: url.pathExtension), type.conforms(to: .image),
               let data = try? Data(contentsOf: url), let image = NSImage(data: data) else { return nil }
@@ -62,6 +71,8 @@ struct DetailsEditor: NSViewRepresentable {
         textView.isAutomaticDashSubstitutionEnabled = false
         textView.textContainerInset = NSSize(width: 0, height: 4)
         textView.textContainer?.lineFragmentPadding = 0
+        // A plain-text view only takes dropped text; add image files and image data.
+        textView.registerForDraggedTypes(textView.registeredDraggedTypes + [.fileURL] + NSImage.imageTypes.map { NSPasteboard.PasteboardType($0) })
         return scrollView
     }
 
@@ -97,9 +108,23 @@ final class ScreenshotTextView: NSTextView {
     var onScreenshots: ([Screenshot]) -> Void = { _ in }
     var placeholder = "" { didSet { needsDisplay = true } }
 
+    /// A plain-text view turns Paste off when the clipboard holds only an image, so ⌘V would never reach `paste`.
+    override func validateUserInterfaceItem(_ item: any NSValidatedUserInterfaceItem) -> Bool {
+        if item.action == #selector(paste(_:)), Screenshot.isOn(.general) { return true }
+        return super.validateUserInterfaceItem(item)
+    }
+
     override func paste(_ sender: Any?) {
         let screenshots = Screenshot.all(on: .general)
         if screenshots.isEmpty { super.paste(sender) } else { onScreenshots(screenshots) }
+    }
+
+    override func draggingEntered(_ sender: any NSDraggingInfo) -> NSDragOperation {
+        Screenshot.isOn(sender.draggingPasteboard) ? .copy : super.draggingEntered(sender)
+    }
+
+    override func draggingUpdated(_ sender: any NSDraggingInfo) -> NSDragOperation {
+        Screenshot.isOn(sender.draggingPasteboard) ? .copy : super.draggingUpdated(sender)
     }
 
     override func performDragOperation(_ sender: any NSDraggingInfo) -> Bool {
