@@ -16,6 +16,7 @@ import {
   currentTask,
   dismissedSessions,
   ensureProject,
+  finishTask,
   getTask,
   linkPr,
   linkSession,
@@ -52,7 +53,9 @@ Usage:
   relay task plan [<task>] --summary <text|->
                                       Record the plan; unless the task skips plan approval,
                                       it waits for you to approve it on the board
-  relay task done [<task>] [--status <text>]
+  relay task done [<task>] --summary <text|-> [--status <text>]
+                                      Say it's finished: what you did and how you checked.
+                                      It waits for you to check it on the board before it's done
   relay task show [<task>] [--json]   A task, its sessions, PRs, and history
 
 <task> is its id (T-12 or 12); left out, it's the task this session is on.
@@ -205,6 +208,7 @@ async function link(args: string[]): Promise<void> {
 async function update(args: string[]): Promise<void> {
   const at = new Date().toISOString();
   const stage = parseStage(flagValue(args, "--stage"));
+  if (stage === "done") throw new Error("finish a task with `relay task done --summary -`: the user checks it on the board before it's done");
   const blocked = parseBlocker(args);
   const status = flagValue(args, "--status");
   const prRef = flagValue(args, "--pr");
@@ -245,12 +249,14 @@ async function plan(args: string[]): Promise<void> {
 }
 
 async function done(args: string[]): Promise<void> {
+  const note = await readSummary(flagValue(args, "--summary"));
+  if (!note) throw new Error("say what you did and how you checked it with --summary <text>, or --summary - to read it from stdin");
   const at = new Date().toISOString();
   const db = openBoardStore();
   try {
     const task = await resolveTask(db, leadingRef(args));
-    reportTask(db, task.id, { stage: "done", status: flagValue(args, "--status"), blocked: null, at });
-    console.log(`${taskRef(task.id)} is done: ${task.title}`);
+    finishTask(db, task.id, { note, status: flagValue(args, "--status"), at });
+    console.log(`${taskRef(task.id)} waits for the user to check it on the board; it moves to Done once they approve it: ${task.title}`);
   } finally {
     db.close();
   }
@@ -291,6 +297,7 @@ async function show(args: string[]): Promise<void> {
   ];
   if (card.status) lines.push(`Status: ${card.status.text} (${card.status.ago})`);
   if (card.plan) lines.push(`Plan: ${card.plan.awaiting ? "waiting for approval" : card.plan.approved ? "approved" : "recorded"}`);
+  if (card.finish) lines.push(`Done note${card.finish.awaiting ? " (waiting for the user to check it)" : ""}: ${card.finish.text ?? "none"}`);
   for (const pr of card.prs) lines.push(`PR ${pr.ref}: ${pr.state}`);
   if (card.session) lines.push(`Session: ${card.session.title} (${card.session.state})${card.session.others ? ` and ${card.session.others} more` : ""}`);
   console.log(lines.join("\n"));

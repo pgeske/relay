@@ -95,7 +95,8 @@ extension BoardAction {
         case "merge": "arrow.triangle.merge"
         case "fix-ci": "wrench.and.screwdriver"
         case "start": "play.fill"
-        case "approve-plan": "checkmark.circle.fill"
+        case "approve-plan", "approve-done": "checkmark.circle.fill"
+        case "send-back": "arrow.uturn.backward.circle"
         case "open", "open-session": "terminal"
         case "track": "plus.circle"
         case "dismiss": "eye.slash"
@@ -114,7 +115,7 @@ extension BoardAction {
         if stalled == true { return .boardOrangeFill }
         return switch action {
         case "review": .boardPurpleFill
-        case "merge", "approve-plan": .boardGreenFill
+        case "merge", "approve-plan", "approve-done": .boardGreenFill
         default: .boardBlueFill
         }
     }
@@ -124,6 +125,7 @@ extension TaskLane {
     var symbol: String {
         switch id {
         case "needs-you": "bell.badge.fill"
+        case "check": "checkmark.seal.fill"
         case "working": "sparkles"
         case "waiting": "hourglass"
         case "paused": "pause.circle.fill"
@@ -137,6 +139,7 @@ extension TaskLane {
     var tint: Color {
         switch id {
         case "needs-you": .boardOrange
+        case "check": .boardGreen
         case "working": .boardPurple
         case "waiting": .boardBlue
         case "ideas": .boardAmber

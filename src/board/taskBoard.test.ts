@@ -24,6 +24,8 @@ function task(overrides: Partial<Task> = {}): Task {
     cwd: null,
     createdAt: minutesAgo(120),
     updatedAt: minutesAgo(60),
+    finishedAt: null,
+    finishNote: null,
     doneAt: null,
     ...overrides,
   };
@@ -86,6 +88,25 @@ describe("where a task goes", () => {
     expect(placeTask(task({ stage: "idea" }), [], [], now).lane).toBe("ideas");
     // Started and moved on, but its session is gone: paused, not an idea.
     expect(placeTask(task({ stage: "research" }), [], [], now).lane).toBe("paused");
+  });
+
+  test("a task its agent says is finished waits for you to check it, ahead of everything but a working agent", () => {
+    const finished = task({ finishedAt: minutesAgo(3), finishNote: "Shipped it", blockedOn: "me", blockedAt: minutesAgo(30) });
+    expect(placeTask(finished, [session("idle")], [{ ref: "acme/api#1", lane: "ready" }], now)).toMatchObject({ lane: "check", reason: { text: "Agent says it's done", since: "3m" } });
+    // Still writing its last reply: it's working until it stops.
+    expect(placeTask(finished, [session("working")], [], now).lane).toBe("working");
+  });
+
+  test("a finished task counts as needing you, and offers approving it or sending it back instead of Mark Done", () => {
+    const view = taskBoardView(
+      { tasks: [task({ finishedAt: minutesAgo(3), finishNote: "Shipped it" })], projects: [], events: new Map(), sessions: [], sessionInfo: new Map(), prs: new Map(), board: null, dismissed: new Set(), now },
+      "/home",
+    );
+    const card = view.lanes.find((lane) => lane.id === "check")!.cards[0];
+    expect(view.needsYou).toBe(1);
+    expect(card.steps.map((step) => step.action)).toEqual(["approve-done", "send-back"]);
+    expect(card.menu.map((item) => item.action)).not.toContain("done");
+    expect(card.finish).toMatchObject({ text: "Shipped it", awaiting: true });
   });
 });
 

@@ -9,7 +9,7 @@ import { liveSessions } from "./command.ts";
 import { readSessionHeader } from "./owners.ts";
 import { ActionError, promptSession, showSession, waitUntilReady, type BoardActionResult } from "./serve.ts";
 import { openBoardStore } from "./store.ts";
-import { SESSION_ACTIONS, TASK_ACTIONS, primarySession, sessionsByTask, type SessionAction, type TaskAction } from "./taskBoard.ts";
+import { SESSION_ACTIONS, TASK_ACTIONS, primarySession, sessionsByTask, type SessionAction, type TaskAction, type TaskSessionLink } from "./taskBoard.ts";
 import { readSessionInfo } from "./taskCommand.ts";
 import {
   approvePlan,
@@ -21,6 +21,7 @@ import {
   linkSession,
   markStarted,
   reportTask,
+  sendBack,
   taskRef,
   taskSessions,
   type Task,
@@ -29,6 +30,10 @@ import {
 
 /** A new task's details can run long, and its screenshots longer; anything past this isn't a task. */
 const MAX_TASK_BODY_BYTES = 30 * 1024 * 1024;
+
+/** How a session hands its task back: you check it before it counts as done. */
+const FINISH_ASK =
+  "When it's finished, run `relay task done --summary -` with what you did and how you checked it (on stdin, through a heredoc): I check it on the board before it counts as done.";
 
 function startPrompt(task: Task): string {
   const plan = task.approvePlan
@@ -39,15 +44,12 @@ function startPrompt(task: Task): string {
     (task.details ? `${task.details}\n\n` : "") +
     `This session is on it already. Keep it current on the board as you go, following the Tasks section of the relay skill: ` +
     `report with \`relay task update\` as it moves through research, plan, doing, and rollout, and say whenever it's blocked on me or on others. ` +
-    `${plan} When it's finished, run \`relay task done\`.`
+    `${plan} ${FINISH_ASK}`
   );
 }
 
 function approvePrompt(task: Task): string {
-  return (
-    `I approved your plan for ${taskRef(task.id)} on the relay board. Go ahead and carry it out, ` +
-    "reporting progress with `relay task update`, and run `relay task done` when it's finished."
-  );
+  return `I approved your plan for ${taskRef(task.id)} on the relay board. Go ahead and carry it out, reporting progress with \`relay task update\`. ${FINISH_ASK}`;
 }
 
 const TRACK_PROMPT =
@@ -77,10 +79,10 @@ function describe(sessionFile: string, live: Map<string, Pane>): SessionPlace {
 }
 
 /**
- * The session a task's controls act on: the one its card shows. `onTaskOnly` leaves out sessions
- * that moved on to another task, for what only the task's own session should hear.
+ * Every session a task has that's still around: open in relay, or saved to resume. A session that
+ * moved on to another task stays among them, marked off the task.
  */
-function taskSession(taskId: number, live: Map<string, Pane>, onTaskOnly: boolean): SessionPlace | null {
+function sessionsOfTask(taskId: number, live: Map<string, Pane>): TaskSessionLink[] {
   const db = openBoardStore();
   let links: TaskSession[];
   try {
@@ -88,11 +90,37 @@ function taskSession(taskId: number, live: Map<string, Pane>, onTaskOnly: boolea
   } finally {
     db.close();
   }
-  const sessions = (sessionsByTask(links, readSessionInfo(links.map((link) => link.sessionFile), live)).get(taskId) ?? []).filter(
-    (session) => (session.live || existsSync(session.sessionFile)) && (session.onTask || !onTaskOnly),
-  );
-  const primary = primarySession(sessions);
+  return (sessionsByTask(links, readSessionInfo(links.map((link) => link.sessionFile), live)).get(taskId) ?? []).filter((session) => session.live || existsSync(session.sessionFile));
+}
+
+/**
+ * The session a task's controls act on: the one its card shows. `onTaskOnly` leaves out sessions
+ * that moved on to another task, for what only the task's own session should hear.
+ */
+function taskSession(taskId: number, live: Map<string, Pane>, onTaskOnly: boolean): SessionPlace | null {
+  const primary = primarySession(sessionsOfTask(taskId, live).filter((session) => session.onTask || !onTaskOnly));
   return primary ? { sessionFile: primary.sessionFile, name: sessionName(primary.title), live: primary.live } : null;
+}
+
+/**
+ * Moves a task to Done and closes the relay tabs of its sessions, so finished work doesn't leave
+ * windows behind. omp keeps their conversations to resume. A session still working, or one that
+ * moved on to another task, stays open.
+ */
+async function completeTask(id: number): Promise<string> {
+  const db = openBoardStore();
+  try {
+    reportTask(db, id, { stage: "done", blocked: null, at: new Date().toISOString() });
+  } finally {
+    db.close();
+  }
+  const open = sessionsOfTask(id, await liveSessions()).filter((session) => session.onTask && session.live);
+  const idle = open.filter((session) => session.live!.status === "idle");
+  for (const session of idle) await killWindow(session.live!.windowId);
+  const closed = idle.length ? `; closed ${idle.length === 1 ? "its session" : `${idle.length} sessions`}` : "";
+  const working = open.length - idle.length;
+  const kept = working ? `; left ${working === 1 ? "a working session" : `${working} working sessions`} open` : "";
+  return `${taskRef(id)} is done${closed}${kept}`;
 }
 
 /**
@@ -144,8 +172,10 @@ export interface TaskActionTarget {
 
 /**
  * Runs one of a task card's controls, or an untracked session's. `start` opens a session on the
- * task, `approve-plan` tells its session to carry out its plan, `open` shows its session; `track`
- * asks an untracked session to register its task, `close-session` closes its relay tab.
+ * task, `approve-plan` tells its session to carry out its plan, `open` shows its session;
+ * `approve-done` and `done` finish it, closing its idle sessions, and `send-back` returns a task
+ * its agent called finished and shows you its session. `track` asks an untracked session to
+ * register its task, `close-session` closes its relay tab.
  */
 export async function runTaskAction(action: string, target: TaskActionTarget): Promise<BoardActionResult> {
   try {
@@ -160,9 +190,13 @@ export async function runTaskAction(action: string, target: TaskActionTarget): P
       if (!task) return { status: 404, message: `no task ${taskRef(id)}` };
       const at = new Date().toISOString();
       switch (action) {
-        case "done":
-          reportTask(db, id, { stage: "done", blocked: null, at });
-          return { status: 200, message: `${taskRef(id)} is done` };
+        case "approve-done":
+          if (!task.finishedAt) return { status: 409, message: `${taskRef(id)} isn't waiting for you to check it` };
+          break;
+        case "send-back":
+          if (!task.finishedAt) return { status: 409, message: `${taskRef(id)} isn't waiting for you to check it` };
+          sendBack(db, id, at);
+          break;
         case "reopen":
           reportTask(db, id, { stage: "doing", blocked: null, at });
           return { status: 200, message: `Reopened ${taskRef(id)}` };
@@ -175,9 +209,13 @@ export async function runTaskAction(action: string, target: TaskActionTarget): P
     }
 
     if (action === "start") return { status: 200, message: await startTask(task) };
+    if (action === "approve-done" || action === "done") return { status: 200, message: await completeTask(id) };
     const session = taskSession(id, await liveSessions(), action === "approve-plan");
-    if (!session) return { status: 409, message: action === "approve-plan" ? `${taskRef(id)} has no session to carry out its plan` : `${taskRef(id)} has no session yet` };
-    if (action === "open") return { status: 200, message: await showSession(session.sessionFile, session.live, session.name) };
+    if (!session) {
+      if (action === "send-back") return { status: 200, message: `Sent ${taskRef(id)} back; it has no session to open` };
+      return { status: 409, message: action === "approve-plan" ? `${taskRef(id)} has no session to carry out its plan` : `${taskRef(id)} has no session yet` };
+    }
+    if (action === "open" || action === "send-back") return { status: 200, message: await showSession(session.sessionFile, session.live, session.name) };
 
     // approve-plan: only the plan you read. One revised since waits for you to read it.
     if (!task.plan || task.planApprovedAt) return { status: 409, message: `${taskRef(id)} has no plan waiting for approval` };

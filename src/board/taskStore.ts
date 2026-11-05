@@ -43,11 +43,27 @@ export interface Task {
   cwd: string | null;
   createdAt: string;
   updatedAt: string;
+  /** When its agent said it's finished; null until then, and once it moves on (you approve it, send it back, or it reports more work). */
+  finishedAt: string | null;
+  /** Why its agent says it's done: what it did and how it checked. Kept after you approve it. */
+  finishNote: string | null;
   doneAt: string | null;
 }
 
 /** One step in a task's history, as its card's details list it. */
-export type TaskEventKind = "created" | "started" | "stage" | "status" | "blocked" | "unblocked" | "plan" | "plan-approved" | "done" | "reopened";
+export type TaskEventKind =
+  | "created"
+  | "started"
+  | "stage"
+  | "status"
+  | "blocked"
+  | "unblocked"
+  | "plan"
+  | "plan-approved"
+  | "finished"
+  | "sent-back"
+  | "done"
+  | "reopened";
 
 export interface TaskEvent {
   taskId: number;
@@ -91,6 +107,8 @@ interface TaskRow {
   cwd: string | null;
   created_at: string;
   updated_at: string;
+  finished_at: string | null;
+  finish_note: string | null;
   done_at: string | null;
 }
 
@@ -120,8 +138,16 @@ export function createTaskTables(db: Database): void {
     cwd TEXT,
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL,
+    finished_at TEXT,
+    finish_note TEXT,
     done_at TEXT
   )`);
+  // Tasks went straight to done before you checked them.
+  const taskColumns = db.query<{ name: string }, []>("SELECT name FROM pragma_table_info('tasks')").all();
+  if (!taskColumns.some((column) => column.name === "finished_at")) {
+    db.run("ALTER TABLE tasks ADD COLUMN finished_at TEXT");
+    db.run("ALTER TABLE tasks ADD COLUMN finish_note TEXT");
+  }
   db.run(`CREATE TABLE IF NOT EXISTS task_events (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     task_id INTEGER NOT NULL,
@@ -170,6 +196,8 @@ function toTask(row: TaskRow): Task {
     cwd: row.cwd,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
+    finishedAt: row.finished_at,
+    finishNote: row.finish_note,
     doneAt: row.done_at,
   };
 }
@@ -225,6 +253,7 @@ export function listTasks(db: Database): Task[] {
 /**
  * What an agent reports as it works. Every report says whether the task is blocked, so a report
  * that names no blocker clears one: a block nobody repeats doesn't linger after it's resolved.
+ * A report also means the task moved on from finished: more work, or done for good.
  */
 export interface TaskReport {
   stage?: TaskStage;
@@ -244,7 +273,7 @@ export function reportTask(db: Database, id: number, report: TaskReport): Task {
     const blockedAt = blocked ? (task.blockedOn === blocked.on ? task.blockedAt : report.at) : null;
     db.query(
       `UPDATE tasks SET stage = $stage, status = $status, status_at = $statusAt, blocked_on = $blockedOn, blocked_reason = $blockedReason,
-         blocked_at = $blockedAt, project_id = $projectId, updated_at = $at, done_at = $doneAt WHERE id = $id`,
+         blocked_at = $blockedAt, project_id = $projectId, updated_at = $at, finished_at = NULL, done_at = $doneAt WHERE id = $id`,
     ).run({
       $id: id,
       $stage: stage,
@@ -262,6 +291,39 @@ export function reportTask(db: Database, id: number, report: TaskReport): Task {
     if (blocked && (task.blockedOn !== blocked.on || task.blockedReason !== blocked.reason)) addEvent(db, id, report.at, "blocked", stage, blocked.reason);
     if (!blocked && task.blockedOn) addEvent(db, id, report.at, "unblocked", stage, null);
     return getTask(db, id)!;
+  })();
+}
+
+/**
+ * Notes that the agent says the task is finished, and why. It isn't done until you check it:
+ * the board shows it to you to approve or send back.
+ */
+export function finishTask(db: Database, id: number, finish: { note: string | null; status?: string; at: string }): Task {
+  return db.transaction(() => {
+    const task = getTask(db, id);
+    if (!task) throw new Error(`no task T-${id}`);
+    db.query(
+      `UPDATE tasks SET finished_at = $at, finish_note = $note, status = $status, status_at = $statusAt,
+         blocked_on = NULL, blocked_reason = NULL, blocked_at = NULL, updated_at = $at WHERE id = $id`,
+    ).run({
+      $id: id,
+      $at: finish.at,
+      $note: finish.note,
+      $status: finish.status ?? task.status,
+      $statusAt: finish.status !== undefined ? finish.at : task.statusAt,
+    });
+    addEvent(db, id, finish.at, "finished", task.stage, finish.status ?? null);
+    return getTask(db, id)!;
+  })();
+}
+
+/** You checked a finished task and it isn't done yet: it goes back to its agent. */
+export function sendBack(db: Database, id: number, at: string): void {
+  db.transaction(() => {
+    const task = getTask(db, id);
+    if (!task) throw new Error(`no task T-${id}`);
+    db.query("UPDATE tasks SET finished_at = NULL, updated_at = ? WHERE id = ?").run(at, id);
+    addEvent(db, id, at, "sent-back", task.stage, null);
   })();
 }
 

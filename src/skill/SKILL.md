@@ -29,10 +29,9 @@ relay task update --stage doing --status "Opened the PR; waiting for CI"
 relay task update --blocked-on me --reason "Which datacenter should go first?"
 relay task update --blocked-on others --reason "Waiting on the storage team to approve the config change"
 relay task update --pr https://github.com/acme/api/pull/12   # a PR this session didn't open
-relay task done --status "Rolled out to every staging datacenter"
 ```
 
-- Stages, in order: `research`, `plan`, `doing`, `rollout` (rolling out or verifying), `done`. Move it on when the work does; skipping a stage is fine.
+- Stages, in order: `research`, `plan`, `doing`, `rollout` (rolling out or verifying). Move it on when the work does; skipping a stage is fine. Only the user moves a task to `done` (below).
 - `--status` is one short line the user reads at a glance: where it stands now, not what you did ten steps ago.
 - **Before ending your turn**, make sure the board says what the task waits on. Waiting for the user's answer or decision: `--blocked-on me`. Waiting for anyone else (a team, a reviewer, a deploy, a long job): `--blocked-on others`. Any update without `--blocked-on` clears the block, so repeat it while it holds. An agent that stops without saying shows as waiting on the user.
 - PRs this session opens join the task on their own.
@@ -48,7 +47,15 @@ EOF
 
 A plan recorded again (revised) needs approving again. On a task that skips approval, recording a plan is optional and just informs.
 
-**When the board hands you a task** ("I started T-12 from the relay board"), this session is already on it: don't register it again. When the board asks you to track a session, register what it's working on with `relay task new`, or say it isn't a task. `relay task link <task>` puts this session on an existing task (say, a second session on the same work). `relay task show` prints this session's task; `relay task --json` lists them all, by section: `needs-you`, `working`, `waiting`, `paused`, `untracked`, `ideas`, `done`.
+**Finishing.** When the work is finished by the task's own bar (merged, rolled out, verified, answered), say so with a note on what you did and how you checked it. The task waits in the board's **Check it** section until the user looks: **Approve Done** moves it to Done and closes its idle sessions' tabs; **Not Done Yet** sends it back and shows them this session, to tell you what's missing. Any `relay task update` after that takes it out of Check it again, so report as you pick the work back up, and run `relay task done` again once it's finished.
+
+```sh
+relay task done --status "Rolled out to every staging datacenter" --summary - <<'EOF'
+Rolled the cache out to all 6 staging datacenters. Search p99 stayed under 120ms in each (dashboard checked after every one); no errors in the logs.
+EOF
+```
+
+**When the board hands you a task** ("I started T-12 from the relay board"), this session is already on it: don't register it again. When the board asks you to track a session, register what it's working on with `relay task new`, or say it isn't a task. `relay task link <task>` puts this session on an existing task (say, a second session on the same work). `relay task show` prints this session's task; `relay task --json` lists them all, by section: `needs-you`, `check`, `working`, `waiting`, `paused`, `untracked`, `ideas`, `done`.
 
 ## Pull requests
 

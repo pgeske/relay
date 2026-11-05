@@ -10,10 +10,11 @@ import { timeAgo, type Confirm, type Tone } from "./view.ts";
  */
 
 /** Sections top to bottom; `hot` ones are waiting on you. */
-export type TaskLane = "needs-you" | "working" | "waiting" | "paused" | "untracked" | "ideas" | "done";
+export type TaskLane = "needs-you" | "check" | "working" | "waiting" | "paused" | "untracked" | "ideas" | "done";
 
 const LANES: { id: TaskLane; title: string; hint: string; hot: boolean }[] = [
   { id: "needs-you", title: "Needs you", hint: "A plan to approve, a question, or a PR to move along", hot: true },
+  { id: "check", title: "Check it", hint: "Its agent says it's done: approve it, or send it back", hot: true },
   { id: "working", title: "Agent working", hint: "A session is on it right now", hot: false },
   { id: "waiting", title: "Waiting on others", hint: "A team, a review, a deploy", hot: false },
   { id: "paused", title: "Paused", hint: "In progress, but no session is open", hot: false },
@@ -27,7 +28,7 @@ const DONE_SHOWN_MS = 14 * 24 * 60 * 60 * 1000;
 const FOLDERS_SHOWN = 8;
 
 /** What a task card's controls ask relay's server: `POST /api/board/tasks/actions/<action>` with the card's `id`. */
-export const TASK_ACTIONS = ["start", "approve-plan", "open", "done", "reopen", "delete"] as const;
+export const TASK_ACTIONS = ["start", "approve-plan", "open", "approve-done", "send-back", "done", "reopen", "delete"] as const;
 export type TaskAction = (typeof TASK_ACTIONS)[number];
 /** What an untracked session's controls ask: the same endpoint, with the session's `sessionFile`. */
 export const SESSION_ACTIONS = ["open-session", "track", "dismiss", "close-session"] as const;
@@ -127,6 +128,15 @@ export interface PlanView {
   approved: boolean;
 }
 
+/** Why the agent says the task is done, for you to check before it is. */
+export interface FinishView {
+  /** What the agent did and how it checked; null when it said nothing. */
+  text: string | null;
+  at: string;
+  /** It waits for you to approve it or send it back. */
+  awaiting: boolean;
+}
+
 export interface HistoryView {
   at: string;
   text: string;
@@ -149,6 +159,7 @@ export interface TaskCardView {
   status: { text: string; ago: string } | null;
   reason: ReasonView;
   plan: PlanView | null;
+  finish: FinishView | null;
   prs: TaskPrView[];
   session: TaskSessionView | null;
   /** The card's one step forward: approve a plan, start, resume, answer. */
@@ -258,7 +269,8 @@ interface Placement {
 
 /**
  * Which section a task goes in. A working agent needs nothing from you yet, so that comes first.
- * Then what the agent said it's waiting on (your approval of its plan, your answer), then PRs that
+ * Then a task its agent says is finished, for you to check before it's done. Then what the agent
+ * said it's waiting on (your approval of its plan, your answer), then PRs that
  * need a click from you, then what it's waiting on elsewhere. An agent that stopped without saying
  * anything is waiting on you too: that's how a task you meant to finish in fifteen minutes gets forgotten.
  */
@@ -275,6 +287,8 @@ export function placeTask(
   const onTask = sessions.filter((session) => session.onTask);
   const working = onTask.find((session) => session.live?.status === "working");
   if (working) return { lane: "working", reason: { text: "Agent working", tone: "wait", since: null }, at: working.activeAt ?? task.updatedAt };
+  // Its agent said it's finished: nothing else matters until you check it.
+  if (task.finishedAt) return { lane: "check", reason: { text: "Agent says it's done", tone: "ok", since: ago(task.finishedAt) }, at: task.finishedAt };
 
   if (task.approvePlan && task.plan && !task.planApprovedAt) {
     return { lane: "needs-you", reason: { text: "Plan ready for your approval", tone: "warn", since: ago(task.planAt) }, at: task.planAt ?? task.updatedAt };
@@ -356,6 +370,8 @@ const EVENT_TEXT: Record<TaskEvent["kind"], (event: TaskEvent) => string> = {
   unblocked: () => "Unblocked",
   plan: () => "Wrote a plan",
   "plan-approved": () => "You approved the plan",
+  finished: (event) => (event.text ? `Agent says it's done: ${event.text}` : "Agent says it's done"),
+  "sent-back": () => "You sent it back: not done yet",
   done: () => "Done",
   reopened: () => "Reopened",
 };
@@ -381,6 +397,13 @@ function taskCard(task: Task, inputs: TaskInputs, places: Map<string, PrPlace>, 
         running: "Agent working…",
       }),
     );
+  } else if (placement.lane === "check") {
+    steps.push(
+      action("approve-done", "Approve Done", "Move it to Done and close its idle sessions; omp keeps their conversations", {
+        confirm: { title: `Approve ${ref} as done?`, message: "Moves it to Done and closes its idle session tabs. omp keeps the conversations, so you can resume them.", button: "Approve", destructive: false },
+      }),
+      action("send-back", "Not Done Yet", "Put it back in progress and show its session, so you can tell the agent what's missing"),
+    );
   } else if (placement.lane === "ideas") {
     steps.push(action("start", "Start", `Open a new session${task.cwd ? ` in ${task.cwd}` : ""} and hand it this task`, { running: "Starting…" }));
   } else if (placement.lane === "needs-you" && primary) {
@@ -393,7 +416,7 @@ function taskCard(task: Task, inputs: TaskInputs, places: Map<string, PrPlace>, 
 
   const menu: TaskActionView[] = [];
   if (task.stage === "done") menu.push(action("reopen", "Reopen Task", "Put it back in progress"));
-  else menu.push(action("done", "Mark Done", "Move it to Done"));
+  else if (placement.lane !== "check") menu.push(action("done", "Mark Done", "Move it to Done and close its idle sessions"));
   menu.push(
     action("delete", "Delete Task…", "Forget the task; its sessions and PRs stay", {
       confirm: { title: `Delete ${ref}?`, message: "The board forgets the task and its history. Its sessions and pull requests stay.", button: "Delete", destructive: true },
@@ -421,6 +444,7 @@ function taskCard(task: Task, inputs: TaskInputs, places: Map<string, PrPlace>, 
           approved: task.planApprovedAt !== null,
         }
       : null,
+    finish: task.finishNote || task.finishedAt ? { text: task.finishNote, at: task.finishedAt ?? task.doneAt ?? task.updatedAt, awaiting: placement.lane === "check" } : null,
     prs: prs
       // Merged and closed PRs older than the PR board's Merged section drop off; while GitHub can't be read, every PR shows.
       .filter(({ place }) => place !== null || inputs.board === null)
@@ -469,7 +493,7 @@ export function taskBoardView(inputs: TaskInputs, home: string): TaskBoardView {
   }
   // Waiting the longest first where something waits; else the most recent first.
   for (const [lane, cards] of byLane) {
-    cards.sort(lane === "needs-you" || lane === "waiting" ? (a, b) => a.sortKey.localeCompare(b.sortKey) : (a, b) => b.sortKey.localeCompare(a.sortKey));
+    cards.sort(lane === "needs-you" || lane === "check" || lane === "waiting" ? (a, b) => a.sortKey.localeCompare(b.sortKey) : (a, b) => b.sortKey.localeCompare(a.sortKey));
   }
 
   const tracked = new Set(inputs.sessions.map((link) => link.sessionFile));
@@ -502,7 +526,7 @@ export function taskBoardView(inputs: TaskInputs, home: string): TaskBoardView {
 
   const lanes = LANES.map(({ id, title, hint, hot }) => ({ id, title, hint, hot, cards: byLane.get(id)!, sessions: id === "untracked" ? untracked : [] }));
   const open = lanes.filter((lane) => lane.id !== "done").flatMap((lane) => lane.cards);
-  const needsYou = byLane.get("needs-you")!;
+  const needsYou = lanes.filter((lane) => lane.hot).flatMap((lane) => lane.cards);
 
   const folders = [
     ...inputs.tasks.toSorted((a, b) => b.updatedAt.localeCompare(a.updatedAt)).flatMap((task) => (task.cwd ? [task.cwd] : [])),

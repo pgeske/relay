@@ -107,9 +107,24 @@ struct TaskCardView: View {
                 if let status = card.status {
                     StatusText(status: status)
                 }
-                if card.plan != nil || !card.prs.isEmpty {
+                if card.plan != nil || card.finish != nil || !card.prs.isEmpty {
                     VStack(alignment: .leading, spacing: 4) {
-                        if let plan = card.plan { PlanLine(plan: plan, card: card) }
+                        if let plan = card.plan {
+                            NoteLine(
+                                note: Note(symbol: "list.number", title: "Plan", text: plan.text, at: plan.at, steps: ["approve-plan"]),
+                                state: plan.awaiting ? "waiting for your approval" : plan.approved ? "approved" : "written",
+                                waiting: plan.awaiting,
+                                card: card
+                            )
+                        }
+                        if let finish = card.finish {
+                            NoteLine(
+                                note: Note(symbol: "checkmark.seal", title: "Done note", text: finish.text ?? "The agent didn't say why.", at: finish.at, steps: ["approve-done", "send-back"]),
+                                state: finish.awaiting ? "check it" : "approved",
+                                waiting: finish.awaiting,
+                                card: card
+                            )
+                        }
                         PRLines(prs: card.prs)
                     }
                     .font(.zoomed(.subheadline))
@@ -286,9 +301,21 @@ private struct StatusText: View {
     }
 }
 
-/// The task's plan, and whether it waits for you; clicking shows it, with Approve while it waits.
-private struct PlanLine: View {
-    let plan: Plan
+/// Something the agent wrote for you to read: its plan, or why it says the task is done.
+private struct Note: Hashable {
+    var symbol: String
+    var title: String
+    var text: String
+    var at: Date
+    /// The card's steps its popover offers while they're on the card, like Approve Plan.
+    var steps: [String]
+}
+
+/// A note on a line, with where it stands; clicking shows it, with its steps while they wait for you.
+private struct NoteLine: View {
+    let note: Note
+    let state: String
+    let waiting: Bool
     let card: TaskCard
 
     @State private var hovering = false
@@ -297,10 +324,10 @@ private struct PlanLine: View {
     var body: some View {
         Button { showing = true } label: {
             HStack(alignment: .firstTextBaseline, spacing: 5) {
-                Image(systemName: "list.number").frame(width: 14 * Zoom.shared.scale)
-                Text("Plan").fontWeight(.medium)
-                Text(plan.awaiting ? "waiting for your approval" : plan.approved ? "approved" : "written")
-                    .foregroundStyle(plan.awaiting ? AnyShapeStyle(Color.boardOrange) : AnyShapeStyle(.secondary))
+                Image(systemName: note.symbol).frame(width: 14 * Zoom.shared.scale)
+                Text(note.title).fontWeight(.medium)
+                Text(state)
+                    .foregroundStyle(waiting ? AnyShapeStyle(Color.boardOrange) : AnyShapeStyle(.secondary))
                 Image(systemName: "chevron.down").font(.zoomed(size: 7, weight: .bold)).foregroundStyle(.secondary)
             }
             .padding(.horizontal, 4)
@@ -312,49 +339,57 @@ private struct PlanLine: View {
         .buttonStyle(.plain)
         .onHover { hovering = $0 }
         .pointerStyle(.link)
-        .help("Show the plan")
-        .popover(isPresented: $showing, arrowEdge: .bottom) { PlanPopover(plan: plan, card: card, isPresented: $showing) }
+        .help("Show the \(note.title.lowercased())")
+        .popover(isPresented: $showing, arrowEdge: .bottom) { NotePopover(note: note, card: card, isPresented: $showing) }
     }
 }
 
-/// The plan as the agent wrote it, with Approve Plan while it waits for you.
-private struct PlanPopover: View {
-    let plan: Plan
+/// A note as the agent wrote it, with its steps (Approve Plan; Approve Done, Not Done Yet) while they wait for you.
+private struct NotePopover: View {
+    let note: Note
     let card: TaskCard
     @Binding var isPresented: Bool
 
     @Environment(BoardModel.self) private var model
 
     var body: some View {
+        let steps = card.steps.filter { note.steps.contains($0.action) }
         VStack(alignment: .leading, spacing: 10) {
             HStack(alignment: .firstTextBaseline, spacing: 6) {
-                Text("Plan").font(.zoomedHeadline)
+                Text(note.title).font(.zoomedHeadline)
                 Text(card.ref).foregroundStyle(.secondary)
                 Spacer()
-                Text(plan.at, format: .relative(presentation: .named)).foregroundStyle(.secondary)
+                Text(note.at, format: .relative(presentation: .named)).foregroundStyle(.secondary)
             }
             Text(card.title).font(.zoomed(.callout)).foregroundStyle(.secondary)
             Divider()
-            ScrollView { MarkdownText(text: plan.text) }
+            ScrollView { MarkdownText(text: note.text) }
                 .frame(maxHeight: 420)
                 .scrollBounceBehavior(.basedOnSize)
-            if let approve = card.steps.first(where: { $0.action == "approve-plan" }) {
+            if !steps.isEmpty {
                 HStack {
                     Spacer()
-                    Button("Approve Plan") {
-                        isPresented = false
-                        // The popover already showed the plan: approving here needs no second ask.
-                        var direct = approve
-                        direct.confirm = nil
-                        model.request(direct, on: .task(card.id))
+                    // The first step is the way forward; the rest come before it, as macOS lays out buttons.
+                    ForEach(steps.dropFirst().reversed(), id: \.self) { step in
+                        Button(step.label) { run(step) }
                     }
-                    .keyboardShortcut(.defaultAction)
+                    if let primary = steps.first {
+                        Button(primary.label) { run(primary) }.keyboardShortcut(.defaultAction)
+                    }
                 }
             }
         }
         .font(.zoomed(.body))
         .padding(16)
         .frame(width: 520 * Zoom.shared.scale)
+    }
+
+    private func run(_ step: BoardAction) {
+        isPresented = false
+        // The popover already showed the note: acting on it here needs no second ask.
+        var direct = step
+        direct.confirm = nil
+        model.request(direct, on: .task(card.id))
     }
 }
 
@@ -503,6 +538,11 @@ private struct TaskDetailsPopover: View {
                 MarkdownText(text: details).foregroundStyle(.secondary)
             }
             ReasonLine(reason: card.reason)
+            if let finish = card.finish, let text = finish.text {
+                Divider()
+                Text("Why the agent says it's done").font(.zoomed(.callout).weight(.semibold)).foregroundStyle(.secondary)
+                MarkdownText(text: text)
+            }
             Divider()
             Text("History").font(.zoomed(.callout).weight(.semibold)).foregroundStyle(.secondary)
             ScrollView {

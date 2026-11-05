@@ -47,6 +47,8 @@ struct TaskCard: Decodable, Sendable, Identifiable {
     /// Why it's in its section.
     var reason: Reason
     var plan: Plan?
+    /// Why its agent says it's done, once it said so.
+    var finish: Finish?
     var prs: [TaskPR]
     var session: TaskSession?
     var steps: [BoardAction]
@@ -97,6 +99,14 @@ struct Plan: Decodable, Sendable, Hashable {
     /// It waits for your approval.
     var awaiting: Bool
     var approved: Bool
+}
+
+struct Finish: Decodable, Sendable, Hashable {
+    /// What the agent did and how it checked.
+    var text: String?
+    var at: Date
+    /// It waits for you to approve it or send it back.
+    var awaiting: Bool
 }
 
 struct TaskPR: Decodable, Sendable, Hashable, Identifiable {
