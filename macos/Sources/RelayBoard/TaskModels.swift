@@ -50,7 +50,8 @@ struct TaskCard: Decodable, Sendable, Identifiable {
     var prs: [TaskPR]
     var session: TaskSession?
     var steps: [BoardAction]
-    /// Said in the step's place while the agent works.
+    /// Said in the step's place for the moment between a control the window ran (Start, Approve
+    /// Plan) and the server's board catching up; the server never sends it.
     var running: String?
     var menu: [BoardAction]
     var history: [HistoryItem]

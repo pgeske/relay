@@ -153,8 +153,6 @@ export interface TaskCardView {
   session: TaskSessionView | null;
   /** The card's one step forward: approve a plan, start, resume, answer. */
   steps: TaskActionView[];
-  /** What the card says in its step's place while the agent works. */
-  running: string | null;
   /** The rest of its controls, for its "…" menu. */
   menu: TaskActionView[];
   history: HistoryView[];
@@ -375,9 +373,8 @@ function taskCard(task: Task, inputs: TaskInputs, places: Map<string, PrPlace>, 
   const ref = taskRef(task.id);
 
   const steps: TaskActionView[] = [];
-  let running: string | null = null;
-  if (placement.lane === "working") running = "Agent working…";
-  else if (task.approvePlan && task.plan && !task.planApprovedAt && task.stage !== "done") {
+  // A working task's section says the agent is on it, so its footer stays free for a step forward.
+  if (task.approvePlan && task.plan && !task.planApprovedAt && task.stage !== "done" && placement.lane !== "working") {
     steps.push(
       action("approve-plan", "Approve Plan", "Tell the task's session to carry out its plan", {
         confirm: { title: `Approve the plan for ${ref}?`, message: "Tells the task's session to go ahead and carry it out.", button: "Approve", destructive: false },
@@ -450,7 +447,6 @@ function taskCard(task: Task, inputs: TaskInputs, places: Map<string, PrPlace>, 
         }
       : null,
     steps,
-    running,
     menu,
     history: (inputs.events.get(task.id) ?? []).slice(0, HISTORY_SHOWN).map((event) => ({ at: event.at, text: EVENT_TEXT[event.kind](event), stage: STAGE_LABELS[event.stage] })),
     updatedAt: task.updatedAt,
