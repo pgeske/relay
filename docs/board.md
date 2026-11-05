@@ -1,0 +1,72 @@
+# Relay Board
+
+The full reference for **Relay Board**, relay's macOS app for your tasks and pull requests. The [README](../README.md) has the short version.
+
+```sh
+relay board          # or prefix B inside relay
+```
+
+Relay Board is a macOS app (macOS 26 or newer) that relay's installer puts in `~/Applications` and `relay update` keeps on the same version as relay. The app reads the board from relay's server (`relay server install`); when the server isn't running, it says so and shows the command that starts it. Every refresh asks GitHub fresh. The app refreshes every minute, or every 10 seconds while a session is on one of the board's requests so a finished step shows soon, and whenever you press ⌘R; it holds off while a confirmation is open or a button is working. Elsewhere, read the board with `relay board --json` and `relay task --json`.
+
+## Tasks
+
+Relay Board opens on **Tasks**: everything you're getting done, a level above pull requests. A task can be code or not (a rollout, an investigation, getting a team to do something), and can take several sessions and PRs. Agents keep each one current as they work, so a glance tells you which tasks need you while you're busy with another.
+
+Tasks sit in sections by what they need: **Needs you** (a plan to approve, a question, a PR ready to merge, or an agent that stopped and is waiting for your reply, with how long it has waited), **Check it** (its agent says it's done: read its done note, then **Approve Done**, or **Not Done Yet** to send it back and jump to its session), **Agent working**, **Waiting on others** (a team, a review, a deploy), **Paused** (in progress, but no session is open), **Not tracked** (open relay sessions no task knows about, each with a **Track** button that asks it to register its task, **Not a Task** to stop offering, or **Close Session** (right-click or the … menu) to close its tab; omp keeps the conversation, so you can resume it), **Ideas**, and **Done**. A task moving to Done (Approve Done, or Mark Done from its menu) closes its idle sessions' tabs, so finished work doesn't leave windows behind; omp keeps their conversations to resume, and a session still working stays open. Each card shows how far along it is (Research, Plan, Doing, Rollout, Done), why it's in its section, its agent's latest status, its plan, its PRs and where each is on the PR board, and its session, with one step forward: **Approve Plan**, **Approve Done**, **Start**, **Resume**, or **Go to Session**. Click a card for its details and history. A task has a color of its own, and its PRs wear that color on the PR board.
+
+**New Task** (⌘N) jots one down: what you want done, optional details (paste or drop screenshots into them too; the agent gets each one's saved path), a project, the folder its session starts in, and whether you approve its plan before the agent starts. **Start** opens a new relay tab with an agent on it; **Save as Idea** keeps it for later. Projects group tasks in the sidebar.
+
+Agents report through `relay task`, which the relay skill teaches them: they register a task when they start on one (`relay task new <title>`), report its stage, status, and what it's blocked on (`relay task update`), record their plan and wait for your approval (`relay task plan`), and say it's finished with a note on what they did and how they checked (`relay task done --summary`), which puts it in Check it for you. PRs a task's session opens join the task on their own. `relay task` lists your tasks, and `relay task --json` gives agents the whole board. Tasks live in `~/.local/share/relay/board.db` with the rest of the board.
+
+## Pull requests
+
+This opens **Relay Board**, a macOS app (macOS 26 or newer) that relay's installer puts in `~/Applications` and `relay update` keeps on the same version as relay. The app reads the board from relay's server (`relay server install`); when the server isn't running, it says so and shows the command that starts it. Every refresh asks GitHub fresh. The app refreshes every minute, or every 10 seconds while a session is on one of the board's requests so a finished step shows soon, and whenever you press ⌘R; it holds off while a confirmation is open or a button is working. Elsewhere, read the board with `relay board --json`.
+
+Your open pull requests sit in lanes top to bottom as work moves: **Draft**, **Agent review**, **Human review** (until every approval it needs is in, including any a merge gate asks for), **Approved · blocked** (all approvals in, but CI is red or running, or GitHub still won't merge: a merge gate said no, branch rules, or conflicts), and **Ready to merge**, then the PRs you merged lately. Each lane's cards fill the window's width, as many across as fit, and its header stays at the top while you scroll through it. Cards side by side are as tall as each other, so their sessions and step buttons line up. **Merged** is a list instead, newest first, a line per PR with when it merged; its **…** menu and right-click menu are the card's. Click a lane's header to fold it; the board remembers, and **Merged** starts folded. An empty lane is just its header. The sidebar shows how many each lane holds and opens one on its own, and the Dock icon counts the PRs waiting on you (Approved · blocked and Ready to merge). Each card's header names the repo and PR number, the ticket its title starts with, and how long the PR has been quiet (stale after a week). Below the title, a few status rows, always in the same order and only the ones that matter in the card's lane: **CI** in every lane, **Agent** (its agent review) in Agent review and Human review, **Approvals** from Human review on ("1 of 2 · needs some-team" when a merge gate says how many are missing, **Changes requested** in red), and **Slack** once an approval ask exists. Anything that needs you, like a request that stopped without a result or what keeps GitHub from merging an approved PR, gets a notice line under the rows. Click a card to open the PR in your browser. PRs waiting on your review stay off the board, and the app doesn't search for them; `relay board --json` still lists them (`teammates`, and `bots` counted per bot). GitHub's search can list a PR as open for a little while after it merged or closed; the board goes by the PR's own state, so it leaves the lanes right away (a merged one joins the merged list), and PRs the board recently asked to merge are read directly to be sure.
+
+Each card's **…** button, in its top corner, holds what you can do with it: **Open in Browser**, **Copy Link**, **Open Session**, the card's next step, and **Close Pull Request…**, which closes the PR on GitHub after you confirm; its branch stays. Right-clicking the card shows the same menu.
+
+When an omp session opened or claimed a PR, the card names that session on a row of its own. Click it to jump to the session: relay switches to its tab, reopening it if it was closed, and brings your terminal to the front.
+
+Below the session, a full-width button takes the card's next step, in the lane's color with a symbol of its own. Cards in **Agent review** get a **Review** button that asks the session to run a reviewer agent on the PR, and cards in **Ready to merge** a **Merge** button that asks it to merge the PR the repo's normal way, checking checks and approvals first and never bypassing branch protection. These step buttons move a PR to its next lane; Draft and Merged cards have none. CI can go red in any lane, so fixing it isn't a button: on any card with a session, red CI's **Fix CI** control (marked with a wrench) in the CI row asks the session to fix CI. It looks at the failing checks, retries the jobs if the failure was flaky, or fixes a real failure with a new signed commit, without force-pushing or bypassing checks. Merge and Fix CI ask you to confirm first. Each one reopens a closed session in a background tab first, says no while the session is busy, and says no if the PR already merged or closed (then the board refreshes to catch up).
+
+Once the session takes a request on, its button gives way to a spinner in the same place, the width of the card, until it's done (**Agent reviewing…**, **Agent merging…**): a review or CI fix when the agent records its result, a merge when the PR merges or closes. The row the request is about says so too (**Reviewing…** in the Agent row); a CI fix shows only in the CI row it was asked from (**Red · agent fixing…**). If the session goes idle or closes first, a notice says the request stopped without a result, and the card offers it again in orange (**Review Again**, **Merge Again**; for CI, the CI row's **Fix CI Again** while CI is still red).
+
+GitHub can't tell whether a reviewer agent looked at a PR, so relay keeps that itself, in `~/.local/share/relay/board.db`, together with what the reviewer said: click the value in a card's Agent row to read it. A review is tied to the commit it covered: push new commits and the PR goes back to Agent review until it is reviewed again.
+
+Not every PR needs a reviewer agent. A card in Agent review has **Skip Agent Review** in its **…** menu, which sends the PR straight to Human review; its Agent row then reads **Skipped**. A skip is for the PR, not a commit, so it holds through new pushes. **Require Agent Review** in the same menu takes it back.
+
+A Fix CI result is kept the same way, tied to the head commit when it was recorded. After a fix, the CI row's value gets an asterisk (**Running\***, then **Green\***) that opens what the agent found and did; if it couldn't fix CI, an **Agent couldn't fix CI** notice opens why. Either goes away with the next commit.
+
+Cards in **Human review** move on through Slack. **Ask for Approval** asks the session to draft a Slack message asking each reviewer the PR still waits on (the people and teams GitHub still has review requests out to) for a review: the PR's link and a sentence on what it does and why, written like your earlier review requests, in the channel where that team or person takes review requests (it asks you when that's unclear). Before drafting, it searches Slack (private channels too) for an ask already sent, say one you wrote yourself, by the PR's URL and `<repo>#<number>`. One that asks a reviewer in their channel, or clearly asks their team elsewhere, is linked instead of drafted again, counting as asked when it was sent; when it can't tell whether a message counts, it asks you. It tells you which asks it found and which it drafted. Reviewers who share a channel share one message. When GitHub lists nobody but approvals are still missing, the session works out who from the PR's required reviewers or CODEOWNERS. Each ask is recorded for its reviewer, so pressing the button again only asks reviewers no ask went to yet. Once every reviewer has an ask, the button becomes **Bump**: for each ask whose reviewer hasn't approved, the session finds the message you sent (or tells you if you never sent the draft) and drafts a short bump in its thread; a found ask is already that message. Both only ever create drafts; you send them. The card's Slack row has a line per ask (**#payments-eng · asked 20m ago**, **#infra · bumped 1d ago**), each opening it in Slack; a found ask reads the same, its tooltip saying it was found. An ask whose reviewer approved is checked off and dimmed. With three or more, two show and the rest fold into **+N more**, which lists them all. Both confirm first, and follow a request like the other steps (**Agent drafting approval ask…**, **Agent drafting bump…**, or **Ask for Approval Again** / **Bump Again** if the session stopped before recording every draft).
+
+The board's buttons type into your sessions, so its endpoints (`GET /api/board`, `POST /api/board/actions/<action>`, and the tasks' `POST /api/board/tasks` and `POST /api/board/tasks/actions/<action>`) answer only this computer: a request must come over loopback and name `localhost`, and it must carry the bearer token in `~/.config/relay/token`, a mode-600 file the app reads and a web page can't. A page that rebinds its domain to 127.0.0.1 fails the first check, and no page can read the token.
+
+```sh
+relay board review <pr-url> --passed --summary "Found nothing to change."
+relay board review <pr-url> --findings 3 --summary - < review.md   # a longer write-up from stdin
+relay board ci-fix <pr-url> --fixed --summary - < fix.md            # or --not-fixed, saying why
+relay board approval <pr-url> --asked --for <reviewer> --channel <channel> --slack <channel-link>   # after drafting an ask
+relay board approval <pr-url> --asked --existing --for <reviewer> --channel <channel> --slack <permalink>   # an ask found already sent
+relay board approval <pr-url> --bumped --for <reviewer> --slack <permalink>   # after drafting a bump; the link moves to the sent ask
+```
+
+relay installs an omp skill (`~/.omp/agent/skills/relay`) that tells agents to record every review, CI fix, approval ask, and bump they finish and to read the board with `relay board --json`, so you rarely run these by hand. Each card in the JSON also says where every request the board sent stands (`requests`), the latest CI fix (`ciFix`), and the approval asks (`approval`: each reviewer's ask, with its channel, when it was asked, recorded, and last bumped, whether the session drafted it or found it already sent (`source`), its Slack link, and whether that reviewer approved; and the reviewers no ask went to yet).
+
+The board reads GitHub through the [`gh`](https://cli.github.com) CLI. Settings live in `~/.config/relay/board.json`; every field is optional:
+
+```json
+{
+  "sources": [{ "org": "my-org", "ghUser": "my-work-account" }],
+  "gateChecks": ["merge-queue/gate"],
+  "reviewTeams": ["my-org/my-team"],
+  "mergedDays": 7
+}
+```
+
+| Field | Meaning |
+|---|---|
+| `sources` | Orgs to search, each with the `gh` account to use (`gh auth token --user`). Default: everything gh's active account sees. |
+| `gateChecks` | Checks that gate merging instead of testing code. They never count as CI running, and block the PR when they fail. |
+| `reviewTeams` | Teams whose review requests count as waiting on you. Default: every team you are on, which can include busy admin teams. |
+| `mergedDays` | How far back the Merged section goes. Default 7. |
