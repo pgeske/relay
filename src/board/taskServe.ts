@@ -3,7 +3,7 @@ import type { IncomingMessage } from "node:http";
 import { homedir } from "node:os";
 import { resolveSessionFile } from "../server/sessionFile.ts";
 import { parsePaneTitle } from "../server/sessions.ts";
-import { listOmpPanes, mainSessionName, newWindow, pasteText, type Pane } from "../tmux.ts";
+import { killWindow, listOmpPanes, mainSessionName, newWindow, pasteText, type Pane } from "../tmux.ts";
 import { liveSessions } from "./command.ts";
 import { readSessionHeader } from "./owners.ts";
 import { ActionError, promptSession, showSession, waitUntilReady, type BoardActionResult } from "./serve.ts";
@@ -144,7 +144,7 @@ export interface TaskActionTarget {
 /**
  * Runs one of a task card's controls, or an untracked session's. `start` opens a session on the
  * task, `approve-plan` tells its session to carry out its plan, `open` shows its session; `track`
- * asks an untracked session to register its task.
+ * asks an untracked session to register its task, `close-session` closes its relay tab.
  */
 export async function runTaskAction(action: string, target: TaskActionTarget): Promise<BoardActionResult> {
   try {
@@ -217,6 +217,10 @@ async function runSessionAction(action: SessionAction, sessionFile: string | und
       }
       return { status: 200, message: `"${session.name}" won't be offered for tracking again` };
     }
+    case "close-session":
+      // Like closing it from the phone: its tab goes, and omp keeps the conversation to resume.
+      await killWindow(live.get(sessionFile)!.windowId);
+      return { status: 200, message: `Closed "${session.name}"` };
   }
 }
 

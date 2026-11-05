@@ -134,6 +134,8 @@ struct UntrackedSession: Decodable, Sendable, Identifiable {
     var open: BoardAction
     var track: BoardAction
     var dismiss: BoardAction
+    /// Nil from a relay too old to close sessions.
+    var close: BoardAction?
 
     var id: String { sessionFile }
 }

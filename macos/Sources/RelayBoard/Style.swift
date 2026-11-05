@@ -99,6 +99,7 @@ extension BoardAction {
         case "open", "open-session": "terminal"
         case "track": "plus.circle"
         case "dismiss": "eye.slash"
+        case "close-session": "xmark.circle"
         case "done": "checkmark.circle"
         case "reopen": "arrow.uturn.backward"
         case "delete": "trash"

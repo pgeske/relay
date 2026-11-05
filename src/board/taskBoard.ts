@@ -30,7 +30,7 @@ const FOLDERS_SHOWN = 8;
 export const TASK_ACTIONS = ["start", "approve-plan", "open", "done", "reopen", "delete"] as const;
 export type TaskAction = (typeof TASK_ACTIONS)[number];
 /** What an untracked session's controls ask: the same endpoint, with the session's `sessionFile`. */
-export const SESSION_ACTIONS = ["open-session", "track", "dismiss"] as const;
+export const SESSION_ACTIONS = ["open-session", "track", "dismiss", "close-session"] as const;
 export type SessionAction = (typeof SESSION_ACTIONS)[number];
 
 /** The stages a card's progress bar shows; `idea` is before the first. */
@@ -173,6 +173,7 @@ export interface UntrackedSessionView {
   open: TaskActionView;
   track: TaskActionView;
   dismiss: TaskActionView;
+  close: TaskActionView;
 }
 
 export interface TaskLaneView {
@@ -493,6 +494,13 @@ export function taskBoardView(inputs: TaskInputs, home: string): TaskBoardView {
           stalled: false,
         }),
         dismiss: action("dismiss", "Not a Task", "Stop offering to track this session"),
+        // Closing saves the conversation, so only a session in the middle of something asks first.
+        close: action("close-session", "Close Session", "Close this session's relay tab; omp keeps the conversation, so you can resume it", {
+          confirm:
+            session.live!.status === "working"
+              ? { title: `Close "${sessionTitle(session.title)}"?`, message: "It's working right now; closing stops what it's doing. omp keeps the conversation, so you can resume it.", button: "Close Session", destructive: true }
+              : null,
+        }),
       }),
     );
 

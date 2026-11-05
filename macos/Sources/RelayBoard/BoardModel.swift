@@ -194,7 +194,7 @@ final class BoardModel {
                 case .session: break
                 }
             }
-            if result.ok, ["close", "delete", "dismiss"].contains(action.action) { removed.insert(target.key) }
+            if result.ok, ["close", "delete", "dismiss", "close-session"].contains(action.action) { removed.insert(target.key) }
             // The session took a step on, or the card was out of date (the PR merged, or its session is
             // already on a request): show what's true now. Task controls change the task's section, so
             // they show soon too.

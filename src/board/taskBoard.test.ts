@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { placeTask, type TaskSessionLink } from "./taskBoard.ts";
+import { placeTask, taskBoardView, type TaskSessionInfo, type TaskSessionLink } from "./taskBoard.ts";
 import type { Task } from "./taskStore.ts";
 
 const now = new Date("2026-11-04T12:00:00Z");
@@ -86,5 +86,21 @@ describe("where a task goes", () => {
     expect(placeTask(task({ stage: "idea" }), [], [], now).lane).toBe("ideas");
     // Started and moved on, but its session is gone: paused, not an idea.
     expect(placeTask(task({ stage: "research" }), [], [], now).lane).toBe("paused");
+  });
+});
+
+describe("an untracked session", () => {
+  function untracked(status: "working" | "idle") {
+    const info: TaskSessionInfo = { ...session(status), sessionFile: "/sessions/loose.jsonl", title: "Quick question" };
+    const view = taskBoardView(
+      { tasks: [], projects: [], events: new Map(), sessions: [], sessionInfo: new Map([[info.sessionFile, info]]), prs: new Map(), board: null, dismissed: new Set(), now },
+      "/home",
+    );
+    return view.lanes.find((lane) => lane.id === "untracked")!.sessions[0];
+  }
+
+  test("closes right away while idle, but asks first while it's working", () => {
+    expect(untracked("idle").close).toMatchObject({ action: "close-session", label: "Close Session", confirm: null });
+    expect(untracked("working").close.confirm).toMatchObject({ title: 'Close "Quick question"?', button: "Close Session", destructive: true });
   });
 });

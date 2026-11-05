@@ -563,7 +563,8 @@ private struct RowList<Rows: View>: View {
 }
 
 /// An open session no task knows about: what it's called, where, and whether it's working, with
-/// Track, which asks it to register its task. Clicking it shows the session.
+/// Track, which asks it to register its task. Clicking it shows the session; its "…" menu and
+/// right-click menu also close it.
 private struct UntrackedRow: View {
     let session: UntrackedSession
 
@@ -593,10 +594,7 @@ private struct UntrackedRow: View {
             .controlSize(.small)
             .disabled(session.state == "working" || model.isSending(session.track, on: target))
             .help(session.state == "working" ? "It's working; track it once it's idle" : session.track.hint)
-            CardMenu {
-                Button(session.open.label, systemImage: "terminal") { model.request(session.open, on: target) }
-                Button(session.dismiss.label, systemImage: session.dismiss.symbol) { model.request(session.dismiss, on: target) }
-            }
+            CardMenu { menuItems(target) }
         }
         .lineLimit(1)
         .padding(.horizontal, 12)
@@ -604,8 +602,18 @@ private struct UntrackedRow: View {
         .background(Color.primary.opacity(hovering ? 0.05 : 0))
         .contentShape(.rect)
         .onTapGesture { model.request(session.open, on: target) }
+        .contextMenu { menuItems(target) }
         .onHover { hovering = $0 }
         .help(session.open.hint)
+    }
+
+    @ViewBuilder private func menuItems(_ target: ActionTarget) -> some View {
+        Button(session.open.label, systemImage: "terminal") { model.request(session.open, on: target) }
+        Button(session.dismiss.label, systemImage: session.dismiss.symbol) { model.request(session.dismiss, on: target) }
+        if let close = session.close {
+            Divider()
+            Button(close.confirm == nil ? close.label : "\(close.label)…", systemImage: close.symbol, role: .destructive) { model.request(close, on: target) }
+        }
     }
 }
 
