@@ -159,9 +159,16 @@ enum ActionTarget: Hashable, Sendable {
 struct NewTask: Encodable, Sendable {
     var title: String
     var details: String
+    /// Screenshots pasted into its details; the server saves them and lists their paths in its details.
+    var images: [Image]
     var project: String
     var folder: String
     var approvePlan: Bool
     /// Start a session on it now, rather than keeping it as an idea.
     var start: Bool
+
+    struct Image: Encodable, Sendable {
+        var base64: String
+        var mimeType: String
+    }
 }

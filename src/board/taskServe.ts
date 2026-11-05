@@ -3,6 +3,7 @@ import type { IncomingMessage } from "node:http";
 import { homedir } from "node:os";
 import { resolveSessionFile } from "../server/sessionFile.ts";
 import { parsePaneTitle } from "../server/sessions.ts";
+import { parseUploadedImages, saveUploadedImages, type UploadedImage } from "../server/uploads.ts";
 import { killWindow, listOmpPanes, mainSessionName, newWindow, pasteText, type Pane } from "../tmux.ts";
 import { liveSessions } from "./command.ts";
 import { readSessionHeader } from "./owners.ts";
@@ -26,8 +27,8 @@ import {
   type TaskSession,
 } from "./taskStore.ts";
 
-/** A new task's details can run long; anything past this isn't a task description. */
-const MAX_TASK_BODY_BYTES = 64 * 1024;
+/** A new task's details can run long, and its screenshots longer; anything past this isn't a task. */
+const MAX_TASK_BODY_BYTES = 30 * 1024 * 1024;
 
 function startPrompt(task: Task): string {
   const plan = task.approvePlan
@@ -228,6 +229,8 @@ async function runSessionAction(action: SessionAction, sessionFile: string | und
 export interface NewTaskRequest {
   title: string;
   details?: string;
+  /** Screenshots pasted into its details, saved for its agent to read. */
+  images: UploadedImage[];
   /** A project's name: an existing one, or a new one to create. */
   project?: string;
   /** Where its session starts; ~ means your home. */
@@ -243,13 +246,16 @@ export async function createTaskFromBoard(request: NewTaskRequest): Promise<Boar
   if (!title) return { status: 400, message: "a task needs a title" };
   const folder = request.folder?.trim() ? request.folder.trim().replace(/^~(?=$|\/)/, homedir()) : null;
   if (folder && !(existsSync(folder) && statSync(folder).isDirectory())) return { status: 400, message: `${request.folder} isn't a folder` };
+  // Its screenshots go below what you wrote, one "[Attached image: <path>]" line each, like the phone's.
+  const attachments = (await saveUploadedImages(request.images)).join("\n");
+  const details = [request.details?.trim(), attachments].filter(Boolean).join("\n\n") || null;
   const at = new Date().toISOString();
   const db = openBoardStore();
   let task: Task;
   try {
     task = createTask(db, {
       title,
-      details: request.details?.trim() || null,
+      details,
       projectId: request.project?.trim() ? ensureProject(db, request.project.trim(), at).id : null,
       stage: "idea",
       status: null,
@@ -292,5 +298,13 @@ export function parseNewTask(body: Record<string, unknown>): NewTaskRequest {
   };
   const title = text("title");
   if (!title) throw new Error("missing title");
-  return { title, details: text("details"), project: text("project"), folder: text("folder"), approvePlan: body.approvePlan !== false, start: body.start === true };
+  return {
+    title,
+    details: text("details"),
+    images: parseUploadedImages(body.images),
+    project: text("project"),
+    folder: text("folder"),
+    approvePlan: body.approvePlan !== false,
+    start: body.start === true,
+  };
 }

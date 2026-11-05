@@ -1,8 +1,6 @@
-import { mkdir, writeFile } from "node:fs/promises";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import type { Duplex } from "node:stream";
 import { homedir } from "node:os";
-import { dirname, join } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import { WebSocketServer } from "ws";
 import { fetchBoardView, isLocalRequest, readActionBody, runBoardAction } from "../board/serve.ts";
@@ -28,11 +26,12 @@ import {
   writeConfig,
   type Pane,
 } from "../tmux.ts";
-import { TOKEN_PATH, UPLOADS_DIR, SERVER_PORT } from "../paths.ts";
+import { TOKEN_PATH, SERVER_PORT } from "../paths.ts";
 import { loadToken, tokenMatches } from "../token.ts";
 import { refreshUpdateNotice } from "../update.ts";
 import { installSkill } from "../skill.ts";
 import { VERSION } from "../version.ts";
+import { parseUploadedImages, saveUploadedImages } from "./uploads.ts";
 
 const MAX_BODY_BYTES = 30 * 1024 * 1024;
 const DEFAULT_PAGE_LIMIT = 60;
@@ -40,13 +39,6 @@ const MAX_PAGE_LIMIT = 500;
 const UPDATE_CHECK_INTERVAL_MS = 6 * 60 * 60 * 1000;
 /** Room for hanging up a live call (ending omp's live mode, restoring devices) before exiting. */
 const SHUTDOWN_TIMEOUT_MS = 12_000;
-
-const UPLOAD_EXTENSIONS: Record<string, string> = {
-  "image/png": "png",
-  "image/jpeg": "jpg",
-  "image/gif": "gif",
-  "image/webp": "webp",
-};
 
 /** Keys the phone may press: enough for Stop and answering interactive TUI prompts. */
 const ALLOWED_KEYS: Record<string, true> = {
@@ -175,25 +167,13 @@ async function createSession(req: IncomingMessage, res: ServerResponse): Promise
 async function handleInput(req: IncomingMessage, res: ServerResponse, pane: Pane): Promise<void> {
   const body = await readJson(req);
   const text = typeof body.text === "string" ? body.text.trim() : "";
-  const images = Array.isArray(body.images) ? body.images : [];
-
-  const attachmentLines: string[] = [];
-  const timestamp = Date.now();
-  for (let index = 0; index < images.length; index += 1) {
-    const image = images[index];
-    if (!image || typeof image !== "object") throw new HttpError(400, "invalid image");
-    const record = image as Record<string, unknown>;
-    const base64 = typeof record.base64 === "string" ? record.base64 : "";
-    if (!base64) throw new HttpError(400, "invalid image");
-    const mimeType = typeof record.mimeType === "string" ? record.mimeType : "image/png";
-    const bytes = Buffer.from(base64, "base64");
-    if (bytes.length === 0) throw new HttpError(400, "invalid image");
-    const extension = UPLOAD_EXTENSIONS[mimeType] ?? "bin";
-    const path = join(UPLOADS_DIR, `${timestamp}-${index}.${extension}`);
-    await mkdir(dirname(path), { recursive: true });
-    await writeFile(path, bytes);
-    attachmentLines.push(`[Attached image: ${path}]`);
+  let images;
+  try {
+    images = parseUploadedImages(body.images);
+  } catch (error) {
+    throw new HttpError(400, error instanceof Error ? error.message : "invalid image");
   }
+  const attachmentLines = await saveUploadedImages(images);
 
   const message = [text, ...attachmentLines].filter((part) => part.length > 0).join("\n");
   if (message.length === 0) throw new HttpError(400, "empty message");

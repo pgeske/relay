@@ -641,6 +641,7 @@ struct NewTaskSheet: View {
     @Environment(\.dismiss) private var dismiss
     @State private var title = ""
     @State private var details = ""
+    @State private var screenshots: [Screenshot] = []
     @State private var projectName = ""
     @State private var folder = ""
     @State private var approvePlan = true
@@ -651,8 +652,16 @@ struct NewTaskSheet: View {
             Form {
                 TextField("Task", text: $title, prompt: Text("What do you want done?"))
                     .focused($titleFocused)
-                TextField("Details", text: $details, prompt: Text("Anything the agent should know (optional)"), axis: .vertical)
-                    .lineLimit(3...8)
+                // Its own full-width row, so what you type starts at the left like a note, rather
+                // than hugging the right edge the way a form's labeled fields do.
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("Details")
+                    DetailsEditor(text: $details, placeholder: "Anything the agent should know (optional). Paste or drop screenshots here.") { pasted in
+                        screenshots += pasted
+                    }
+                    .frame(height: 96 * Zoom.shared.scale)
+                    if !screenshots.isEmpty { screenshotStrip }
+                }
                 HStack {
                     TextField("Project", text: $projectName, prompt: Text("None"))
                     if !projects.isEmpty {
@@ -717,10 +726,38 @@ struct NewTaskSheet: View {
     private var ready: Bool { !title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && !model.isCreating }
 
     private func submit(start: Bool) {
-        let task = NewTask(title: title, details: details, project: projectName, folder: folder, approvePlan: approvePlan, start: start)
+        let images = screenshots.map { NewTask.Image(base64: $0.data.base64EncodedString(), mimeType: $0.mimeType) }
+        let task = NewTask(title: title, details: details, images: images, project: projectName, folder: folder, approvePlan: approvePlan, start: start)
         Task {
             if await model.create(task) { dismiss() }
         }
+    }
+
+    /// The pasted screenshots as thumbnails, each with a button to take it back out.
+    private var screenshotStrip: some View {
+        ScrollView(.horizontal) {
+            HStack(spacing: 8) {
+                ForEach(screenshots) { screenshot in
+                    Image(nsImage: screenshot.image)
+                        .resizable()
+                        .scaledToFill()
+                        .frame(width: 96, height: 64)
+                        .clipShape(.rect(cornerRadius: 6))
+                        .overlay(RoundedRectangle(cornerRadius: 6).strokeBorder(.separator))
+                        .overlay(alignment: .topTrailing) {
+                            Button { screenshots.removeAll { $0.id == screenshot.id } } label: {
+                                Image(systemName: "xmark.circle.fill")
+                                    .symbolRenderingMode(.palette)
+                                    .foregroundStyle(.white, .black.opacity(0.6))
+                            }
+                            .buttonStyle(.plain)
+                            .padding(4)
+                            .help("Remove this screenshot")
+                        }
+                }
+            }
+        }
+        .scrollIndicators(.never)
     }
 
     private func chooseFolder() {
