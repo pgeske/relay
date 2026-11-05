@@ -352,21 +352,7 @@ private struct PlanPopover: View {
         }
         .font(.zoomed(.body))
         .padding(16)
-        .frame(width: 460 * Zoom.shared.scale)
-    }
-}
-
-/// Agents write a little Markdown (code spans, bold, links); line breaks are theirs too.
-private struct MarkdownText: View {
-    let text: String
-
-    var body: some View {
-        let markdown = try? AttributedString(markdown: text, options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace))
-        Text(markdown ?? AttributedString(text))
-            .textSelection(.enabled)
-            .lineSpacing(2)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .fixedSize(horizontal: false, vertical: true)
+        .frame(width: 520 * Zoom.shared.scale)
     }
 }
 
