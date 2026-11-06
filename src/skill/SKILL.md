@@ -34,6 +34,7 @@ relay task update --pr https://github.com/acme/api/pull/12   # a PR this session
 - Stages, in order: `research`, `plan`, `doing`, `rollout` (rolling out or verifying). Move it on when the work does; skipping a stage is fine. Only the user moves a task to `done` (below).
 - `--status` is one short line the user reads at a glance: where it stands now, not what you did ten steps ago.
 - **Before ending your turn**, make sure the board says what the task waits on. Waiting for the user's answer or decision: `--blocked-on me`. Waiting for anyone else (a team, a reviewer, a deploy, a long job): `--blocked-on others`. Any update without `--blocked-on` clears the block, so repeat it while it holds. An agent that stops without saying shows as waiting on the user.
+- The user can **pause** a task on the board to set it aside. It stays in Paused while you keep reporting, until they resume it or you finish it.
 - PRs this session opens join the task on their own.
 
 **Plans.** Unless the task skips plan approval, record your plan and then stop until the user approves it on the board (they press **Approve Plan**, which tells you to go ahead):

@@ -70,6 +70,7 @@ flowchart LR
 - **You never chase an agent.** It reports its stage, its status, and what it's blocked on. If it stops without saying, the card moves to Needs you.
 - **Nothing ships without you.** A finished task lands in **Ready to ship** with a note on what the agent did and how it checked. One click on **Ship It** and it's shipped.
 - **Plans wait for you,** unless you say the task can skip that step.
+- **Park what can wait.** **Pause** a task from its menu and it sits in **Paused**, folded away, until you press **Resume**.
 - **PRs come along.** PRs a task's session opens join the task and wear its color on the PR board.
 
 ## 🔀 Pull requests

@@ -48,6 +48,8 @@ export interface Task {
   /** Why its agent says it's done: what it did and how it checked. Kept after you approve it. */
   finishNote: string | null;
   doneAt: string | null;
+  /** When you set it aside on the board; null while it's in play. It stays paused until you resume it, ship it, or its agent delivers. */
+  pausedAt: string | null;
 }
 
 /** One step in a task's history, as its card's details list it. */
@@ -62,6 +64,8 @@ export type TaskEventKind =
   | "plan-approved"
   | "finished"
   | "sent-back"
+  | "paused"
+  | "resumed"
   | "done"
   | "reopened";
 
@@ -110,6 +114,7 @@ interface TaskRow {
   finished_at: string | null;
   finish_note: string | null;
   done_at: string | null;
+  paused_at: string | null;
 }
 
 const STAGE_CHECK = `CHECK (stage IN (${TASK_STAGES.map((stage) => `'${stage}'`).join(", ")}))`;
@@ -140,7 +145,8 @@ export function createTaskTables(db: Database): void {
     updated_at TEXT NOT NULL,
     finished_at TEXT,
     finish_note TEXT,
-    done_at TEXT
+    done_at TEXT,
+    paused_at TEXT
   )`);
   // Tasks went straight to done before you checked them.
   const taskColumns = db.query<{ name: string }, []>("SELECT name FROM pragma_table_info('tasks')").all();
@@ -148,6 +154,8 @@ export function createTaskTables(db: Database): void {
     db.run("ALTER TABLE tasks ADD COLUMN finished_at TEXT");
     db.run("ALTER TABLE tasks ADD COLUMN finish_note TEXT");
   }
+  // Tasks were only ever paused by having no session open.
+  if (!taskColumns.some((column) => column.name === "paused_at")) db.run("ALTER TABLE tasks ADD COLUMN paused_at TEXT");
   db.run(`CREATE TABLE IF NOT EXISTS task_events (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     task_id INTEGER NOT NULL,
@@ -199,6 +207,7 @@ function toTask(row: TaskRow): Task {
     finishedAt: row.finished_at,
     finishNote: row.finish_note,
     doneAt: row.done_at,
+    pausedAt: row.paused_at,
   };
 }
 
@@ -253,7 +262,8 @@ export function listTasks(db: Database): Task[] {
 /**
  * What an agent reports as it works. Every report says whether the task is blocked, so a report
  * that names no blocker clears one: a block nobody repeats doesn't linger after it's resolved.
- * A report also means the task moved on from finished: more work, or done for good.
+ * A report also means the task moved on from finished: more work, or done for good. Only shipping
+ * or reopening it ends a pause; the agent reporting in doesn't take it off hold.
  */
 export interface TaskReport {
   stage?: TaskStage;
@@ -273,7 +283,8 @@ export function reportTask(db: Database, id: number, report: TaskReport): Task {
     const blockedAt = blocked ? (task.blockedOn === blocked.on ? task.blockedAt : report.at) : null;
     db.query(
       `UPDATE tasks SET stage = $stage, status = $status, status_at = $statusAt, blocked_on = $blockedOn, blocked_reason = $blockedReason,
-         blocked_at = $blockedAt, project_id = $projectId, updated_at = $at, finished_at = NULL, done_at = $doneAt WHERE id = $id`,
+         blocked_at = $blockedAt, project_id = $projectId, updated_at = $at, finished_at = NULL, done_at = $doneAt,
+         paused_at = $pausedAt WHERE id = $id`,
     ).run({
       $id: id,
       $stage: stage,
@@ -285,6 +296,7 @@ export function reportTask(db: Database, id: number, report: TaskReport): Task {
       $projectId: report.projectId ?? task.projectId,
       $at: report.at,
       $doneAt: stage === "done" ? (task.doneAt ?? report.at) : null,
+      $pausedAt: stage === "done" || task.stage === "done" ? null : task.pausedAt,
     });
     if (stage !== task.stage) addEvent(db, id, report.at, stage === "done" ? "done" : task.stage === "done" ? "reopened" : "stage", stage, null);
     if (report.status !== undefined) addEvent(db, id, report.at, "status", stage, report.status);
@@ -296,7 +308,7 @@ export function reportTask(db: Database, id: number, report: TaskReport): Task {
 
 /**
  * Notes that the agent says the task is finished, and why. It isn't done until you ship it:
- * the board shows it to you to ship or send back.
+ * the board shows it to you to ship or send back, so it comes off pause.
  */
 export function finishTask(db: Database, id: number, finish: { note: string | null; status?: string; at: string }): Task {
   return db.transaction(() => {
@@ -304,7 +316,7 @@ export function finishTask(db: Database, id: number, finish: { note: string | nu
     if (!task) throw new Error(`no task T-${id}`);
     db.query(
       `UPDATE tasks SET finished_at = $at, finish_note = $note, status = $status, status_at = $statusAt,
-         blocked_on = NULL, blocked_reason = NULL, blocked_at = NULL, updated_at = $at WHERE id = $id`,
+         blocked_on = NULL, blocked_reason = NULL, blocked_at = NULL, paused_at = NULL, updated_at = $at WHERE id = $id`,
     ).run({
       $id: id,
       $at: finish.at,
@@ -324,6 +336,28 @@ export function sendBack(db: Database, id: number, at: string): void {
     if (!task) throw new Error(`no task T-${id}`);
     db.query("UPDATE tasks SET finished_at = NULL, updated_at = ? WHERE id = ?").run(at, id);
     addEvent(db, id, at, "sent-back", task.stage, null);
+  })();
+}
+
+/** You set a task aside on the board: it waits in Paused, whatever its sessions do, until you resume it. */
+export function pauseTask(db: Database, id: number, at: string): void {
+  db.transaction(() => {
+    const task = getTask(db, id);
+    if (!task) throw new Error(`no task T-${id}`);
+    if (task.pausedAt) return;
+    db.query("UPDATE tasks SET paused_at = ?, updated_at = ? WHERE id = ?").run(at, at, id);
+    addEvent(db, id, at, "paused", task.stage, null);
+  })();
+}
+
+/** You picked a paused task back up: the board places it by what it needs again. */
+export function resumeTask(db: Database, id: number, at: string): void {
+  db.transaction(() => {
+    const task = getTask(db, id);
+    if (!task) throw new Error(`no task T-${id}`);
+    if (!task.pausedAt) return;
+    db.query("UPDATE tasks SET paused_at = NULL, updated_at = ? WHERE id = ?").run(at, id);
+    addEvent(db, id, at, "resumed", task.stage, null);
   })();
 }
 

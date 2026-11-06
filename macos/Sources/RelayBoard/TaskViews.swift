@@ -51,8 +51,8 @@ private struct TaskSection: View {
 
     init(lane: TaskLane) {
         self.lane = lane
-        // Done is history: it starts folded.
-        _folded = AppStorage(wrappedValue: lane.id == "done", "tasks.\(lane.id).folded")
+        // Done is history, and what's paused or untracked can wait: they start folded, however full.
+        _folded = AppStorage(wrappedValue: ["done", "paused", "untracked"].contains(lane.id), "tasks.\(lane.id).folded")
     }
 
     var body: some View {

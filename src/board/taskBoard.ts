@@ -17,7 +17,7 @@ const LANES: { id: TaskLane; title: string; hint: string; hot: boolean }[] = [
   { id: "ship", title: "Ready to ship", hint: "Its agent delivered: look it over, then ship it", hot: true },
   { id: "working", title: "Agent working", hint: "A session is on it right now", hot: false },
   { id: "waiting", title: "Waiting on others", hint: "A team, a review, a deploy", hot: false },
-  { id: "paused", title: "Paused", hint: "In progress, but no session is open", hot: false },
+  { id: "paused", title: "Paused", hint: "Set aside, or no session open", hot: false },
   { id: "untracked", title: "Not tracked", hint: "Open sessions no task knows about", hot: false },
   { id: "ideas", title: "Ideas", hint: "Not started yet", hot: false },
   { id: "done", title: "Shipped", hint: "Shipped in the last two weeks", hot: false },
@@ -28,7 +28,7 @@ const DONE_SHOWN_MS = 14 * 24 * 60 * 60 * 1000;
 const FOLDERS_SHOWN = 8;
 
 /** What a task card's controls ask relay's server: `POST /api/board/tasks/actions/<action>` with the card's `id`. */
-export const TASK_ACTIONS = ["start", "approve-plan", "open", "ship", "send-back", "done", "reopen", "delete"] as const;
+export const TASK_ACTIONS = ["start", "approve-plan", "open", "ship", "send-back", "pause", "resume", "unpause", "done", "reopen", "delete"] as const;
 export type TaskAction = (typeof TASK_ACTIONS)[number];
 /** What an untracked session's controls ask: the same endpoint, with the session's `sessionFile`. */
 export const SESSION_ACTIONS = ["open-session", "track", "dismiss", "close-session"] as const;
@@ -268,7 +268,8 @@ interface Placement {
 }
 
 /**
- * Which section a task goes in. A working agent needs nothing from you yet, so that comes first.
+ * Which section a task goes in. One you paused stays paused, whatever its sessions do, until you
+ * resume it. Otherwise a working agent needs nothing from you yet, so that comes first.
  * Then a task its agent delivered, for you to look over and ship. Then what the agent
  * said it's waiting on (your approval of its plan, your answer), then PRs that
  * need a click from you, then what it's waiting on elsewhere. An agent that stopped without saying
@@ -282,6 +283,7 @@ export function placeTask(
 ): Placement {
   const ago = (iso: string | null) => since(iso, now);
   if (task.stage === "done") return { lane: "done", reason: { text: `Shipped ${timeAgo(task.doneAt ?? task.updatedAt, now)}`, tone: "ok", since: null }, at: task.doneAt ?? task.updatedAt };
+  if (task.pausedAt) return { lane: "paused", reason: { text: "You paused it", tone: "muted", since: ago(task.pausedAt) }, at: task.pausedAt };
 
   // What a session that moved on to another task is doing now is that task's business.
   const onTask = sessions.filter((session) => session.onTask);
@@ -372,6 +374,8 @@ const EVENT_TEXT: Record<TaskEvent["kind"], (event: TaskEvent) => string> = {
   "plan-approved": () => "You approved the plan",
   finished: (event) => (event.text ? `Delivered: ${event.text}` : "Delivered"),
   "sent-back": () => "You sent it back: not yet",
+  paused: () => "You paused it",
+  resumed: () => "You resumed it",
   done: () => "Shipped",
   reopened: () => "Reopened",
 };
@@ -389,8 +393,14 @@ function taskCard(task: Task, inputs: TaskInputs, places: Map<string, PrPlace>, 
   const ref = taskRef(task.id);
 
   const steps: TaskActionView[] = [];
-  // A working task's section says the agent is on it, so its footer stays free for a step forward.
-  if (task.approvePlan && task.plan && !task.planApprovedAt && task.stage !== "done" && placement.lane !== "working") {
+  if (task.pausedAt) {
+    steps.push(
+      action("resume", "Resume", primary ? "Take it off hold and reopen its latest session" : `Take it off hold and open a new session${task.cwd ? ` in ${task.cwd}` : ""} on it`, {
+        running: primary ? null : "Starting…",
+      }),
+    );
+    // A working task's section says the agent is on it, so its footer stays free for a step forward.
+  } else if (task.approvePlan && task.plan && !task.planApprovedAt && task.stage !== "done" && placement.lane !== "working") {
     steps.push(
       action("approve-plan", "Approve Plan", "Tell the task's session to carry out its plan", {
         confirm: { title: `Approve the plan for ${ref}?`, message: "Tells the task's session to go ahead and carry it out.", button: "Approve", destructive: false },
@@ -416,6 +426,8 @@ function taskCard(task: Task, inputs: TaskInputs, places: Map<string, PrPlace>, 
   const menu: TaskActionView[] = [];
   if (task.stage === "done") menu.push(action("reopen", "Reopen Task", "Put it back in progress"));
   else if (placement.lane !== "ship") menu.push(action("done", "Mark Shipped", "Move it to Shipped and close its idle sessions"));
+  if (task.pausedAt) menu.push(action("unpause", "Unpause", "Take it off hold without opening a session"));
+  else if (placement.lane !== "done" && placement.lane !== "ship" && placement.lane !== "ideas") menu.push(action("pause", "Pause", "Set it aside in Paused until you resume it"));
   menu.push(
     action("delete", "Delete Task…", "Forget the task; its sessions and PRs stay", {
       confirm: { title: `Delete ${ref}?`, message: "The board forgets the task and its history. Its sessions and pull requests stay.", button: "Delete", destructive: true },

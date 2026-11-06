@@ -27,6 +27,7 @@ function task(overrides: Partial<Task> = {}): Task {
     finishedAt: null,
     finishNote: null,
     doneAt: null,
+    pausedAt: null,
     ...overrides,
   };
 }
@@ -76,6 +77,25 @@ describe("where a task goes", () => {
 
   test("a session that moved on to another task doesn't count as working on this one", () => {
     expect(placeTask(task(), [session("working", 1, false)], [], now)).toMatchObject({ lane: "paused", reason: { text: "Its session moved on to another task" } });
+  });
+
+  test("a task you paused stays paused, even with its agent working or a PR ready, and offers Resume", () => {
+    const paused = task({ pausedAt: minutesAgo(20), blockedOn: "me", blockedAt: minutesAgo(30) });
+    expect(placeTask(paused, [session("working")], [{ ref: "acme/api#1", lane: "ready" }], now)).toMatchObject({ lane: "paused", reason: { text: "You paused it", since: "20m" } });
+
+    const view = taskBoardView({ tasks: [paused], projects: [], events: new Map(), sessions: [], sessionInfo: new Map(), prs: new Map(), board: null, dismissed: new Set(), now }, "/home");
+    const card = view.lanes.find((lane) => lane.id === "paused")!.cards[0];
+    expect(card.steps.map((step) => step.action)).toEqual(["resume"]);
+    expect(card.menu.map((item) => item.action)).toContain("unpause");
+    expect(card.menu.map((item) => item.action)).not.toContain("pause");
+  });
+
+  test("any task in play can be paused, but not one shipped, delivered, or not started", () => {
+    const menuOf = (t: Task) => taskBoardView({ tasks: [t], projects: [], events: new Map(), sessions: [], sessionInfo: new Map(), prs: new Map(), board: null, dismissed: new Set(), now }, "/home").lanes.flatMap((lane) => lane.cards)[0].menu.map((item) => item.action);
+    expect(menuOf(task({ blockedOn: "others", blockedAt: minutesAgo(5) }))).toContain("pause");
+    expect(menuOf(task({ stage: "done", doneAt: minutesAgo(5) }))).not.toContain("pause");
+    expect(menuOf(task({ finishedAt: minutesAgo(5) }))).not.toContain("pause");
+    expect(menuOf(task({ stage: "idea" }))).not.toContain("pause");
   });
 
   test("an agent that stopped without saying anything is your turn", () => {

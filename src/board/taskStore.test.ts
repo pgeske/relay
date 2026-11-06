@@ -9,8 +9,10 @@ import {
   getTask,
   linkSession,
   linkSessionPrs,
+  pauseTask,
   recordPlan,
   reportTask,
+  resumeTask,
   sendBack,
   taskPrs,
   type NewTask,
@@ -77,6 +79,23 @@ test("a finished task waits to be checked until it's sent back or the agent repo
 
   finishTask(db, id, { note: "Really done", at: "2026-11-04T13:00:00Z" });
   expect(reportTask(db, id, { stage: "done", blocked: null, at: "2026-11-04T13:10:00Z" })).toMatchObject({ stage: "done", finishedAt: null, finishNote: "Really done", doneAt: "2026-11-04T13:10:00Z" });
+});
+
+test("a pause holds through the agent's reports, and ends when you resume, it delivers, or it ships", () => {
+  const db = openBoardStore(":memory:");
+  const { id } = createTask(db, { ...base, stage: "doing" });
+  pauseTask(db, id, "2026-11-04T10:05:00Z");
+  expect(reportTask(db, id, { status: "Still waiting on CI", blocked: { on: "others", reason: "CI" }, at: "2026-11-04T10:10:00Z" }).pausedAt).toBe("2026-11-04T10:05:00Z");
+
+  resumeTask(db, id, "2026-11-04T10:20:00Z");
+  expect(getTask(db, id)?.pausedAt).toBeNull();
+
+  pauseTask(db, id, "2026-11-04T10:30:00Z");
+  expect(finishTask(db, id, { note: "Done after all", at: "2026-11-04T10:40:00Z" }).pausedAt).toBeNull();
+
+  sendBack(db, id, "2026-11-04T10:45:00Z");
+  pauseTask(db, id, "2026-11-04T10:50:00Z");
+  expect(reportTask(db, id, { stage: "done", blocked: null, at: "2026-11-04T11:00:00Z" }).pausedAt).toBeNull();
 });
 
 test("a board from before tasks were checked gains the columns, keeping its tasks", () => {

@@ -20,7 +20,9 @@ import {
   getTask,
   linkSession,
   markStarted,
+  pauseTask,
   reportTask,
+  resumeTask,
   sendBack,
   taskRef,
   taskSessions,
@@ -174,8 +176,9 @@ export interface TaskActionTarget {
  * Runs one of a task card's controls, or an untracked session's. `start` opens a session on the
  * task, `approve-plan` tells its session to carry out its plan, `open` shows its session;
  * `ship` and `done` finish it, closing its idle sessions, and `send-back` returns a task
- * its agent called finished and shows you its session. `track` asks an untracked session to
- * register its task, `close-session` closes its relay tab.
+ * its agent called finished and shows you its session. `pause` sets a task aside in Paused until
+ * `unpause` takes it off hold, or `resume` does and shows its session (or starts one).
+ * `track` asks an untracked session to register its task, `close-session` closes its relay tab.
  */
 export async function runTaskAction(action: string, target: TaskActionTarget): Promise<BoardActionResult> {
   try {
@@ -197,6 +200,16 @@ export async function runTaskAction(action: string, target: TaskActionTarget): P
           if (!task.finishedAt) return { status: 409, message: `${taskRef(id)} isn't ready to ship` };
           sendBack(db, id, at);
           break;
+        case "pause":
+          if (task.stage === "done") return { status: 409, message: `${taskRef(id)} is already shipped` };
+          pauseTask(db, id, at);
+          return { status: 200, message: `Paused ${taskRef(id)}` };
+        case "unpause":
+          resumeTask(db, id, at);
+          return { status: 200, message: `Unpaused ${taskRef(id)}` };
+        case "resume":
+          resumeTask(db, id, at);
+          break;
         case "reopen":
           reportTask(db, id, { stage: "doing", blocked: null, at });
           return { status: 200, message: `Reopened ${taskRef(id)}` };
@@ -209,6 +222,10 @@ export async function runTaskAction(action: string, target: TaskActionTarget): P
     }
 
     if (action === "start") return { status: 200, message: await startTask(task) };
+    if (action === "resume") {
+      const session = taskSession(id, await liveSessions(), false);
+      return { status: 200, message: session ? await showSession(session.sessionFile, session.live, session.name) : await startTask(task) };
+    }
     if (action === "ship" || action === "done") return { status: 200, message: await completeTask(id) };
     const session = taskSession(id, await liveSessions(), action === "approve-plan");
     if (!session) {
