@@ -47,7 +47,7 @@ EOF
 
 A plan recorded again (revised) needs approving again. On a task that skips approval, recording a plan is optional and just informs.
 
-**Finishing.** When the work is finished by the task's own bar (merged, rolled out, verified, answered), say so with a note on what you did and how you checked it. The task waits in the board's **Check it** section until the user looks: **Approve Done** moves it to Done and closes its idle sessions' tabs; **Not Done Yet** sends it back and shows them this session, to tell you what's missing. Any `relay task update` after that takes it out of Check it again, so report as you pick the work back up, and run `relay task done` again once it's finished.
+**Finishing.** When the work is finished by the task's own bar (merged, rolled out, verified, answered), say so with a note on what you did and how you checked it. The board shows that note on the task's card, so write it for the user to verify at a glance: the outcome first, then the evidence. The task waits in the board's **Ready to ship** section until the user looks: **Ship It** moves it to Shipped and closes its idle sessions' tabs; **Not Yet** sends it back and shows them this session, to tell you what's missing. Any `relay task update` after that takes it out of Ready to ship again, so report as you pick the work back up, and run `relay task done` again once it's finished.
 
 ```sh
 relay task done --status "Rolled out to every staging datacenter" --summary - <<'EOF'
@@ -55,7 +55,7 @@ Rolled the cache out to all 6 staging datacenters. Search p99 stayed under 120ms
 EOF
 ```
 
-**When the board hands you a task** ("I started T-12 from the relay board"), this session is already on it: don't register it again. When the board asks you to track a session, register what it's working on with `relay task new`, or say it isn't a task. `relay task link <task>` puts this session on an existing task (say, a second session on the same work). `relay task show` prints this session's task; `relay task --json` lists them all, by section: `needs-you`, `check`, `working`, `waiting`, `paused`, `untracked`, `ideas`, `done`.
+**When the board hands you a task** ("I started T-12 from the relay board"), this session is already on it: don't register it again. When the board asks you to track a session, register what it's working on with `relay task new`, or say it isn't a task. `relay task link <task>` puts this session on an existing task (say, a second session on the same work). `relay task show` prints this session's task; `relay task --json` lists them all, by section: `needs-you`, `ship`, `working`, `waiting`, `paused`, `untracked`, `ideas`, `done`.
 
 ## Pull requests
 

@@ -103,11 +103,16 @@ struct TaskCardView: View {
                         .help(card.title)
                 }
                 StageBar(card: card)
-                ReasonLine(reason: card.reason)
+                if let finish = card.finish, finish.awaiting {
+                    DeliveryNote(card: card, finish: finish)
+                } else {
+                    ReasonLine(reason: card.reason)
+                }
                 if let status = card.status {
                     StatusText(status: status)
                 }
-                if card.plan != nil || card.finish != nil || !card.prs.isEmpty {
+                let earlierDelivery = card.finish.flatMap { $0.awaiting ? nil : $0 }
+                if card.plan != nil || earlierDelivery != nil || !card.prs.isEmpty {
                     VStack(alignment: .leading, spacing: 4) {
                         if let plan = card.plan {
                             NoteLine(
@@ -117,11 +122,12 @@ struct TaskCardView: View {
                                 card: card
                             )
                         }
-                        if let finish = card.finish {
+                        // Delivered once and sent back, or more work reported since: still worth a look.
+                        if let finish = earlierDelivery {
                             NoteLine(
-                                note: Note(symbol: "checkmark.seal", title: "Done note", text: finish.text ?? "The agent didn't say why.", at: finish.at, steps: ["approve-done", "send-back"]),
-                                state: finish.awaiting ? "check it" : "approved",
-                                waiting: finish.awaiting,
+                                note: Note(symbol: "gift", title: "Last delivery", text: finish.text ?? "The agent didn't say what it did.", at: finish.at, steps: []),
+                                state: "sent back",
+                                waiting: false,
                                 card: card
                             )
                         }
@@ -148,13 +154,12 @@ struct TaskCardView: View {
         .background {
             RoundedRectangle(cornerRadius: 12, style: .continuous)
                 .fill(Color(nsColor: .controlBackgroundColor))
-                .shadow(color: .black.opacity(hovering ? 0.14 : 0.06), radius: hovering ? 6 : 2, y: hovering ? 3 : 1)
+                .shadow(color: delivered ? Color.boardGreen.opacity(hovering ? 0.3 : 0.16) : .black.opacity(hovering ? 0.14 : 0.06), radius: hovering ? 6 : delivered ? 4 : 2, y: hovering ? 3 : 1)
         }
         .overlay {
             RoundedRectangle(cornerRadius: 12, style: .continuous)
-                .strokeBorder(Color.primary.opacity(hovering ? 0.14 : 0.07), lineWidth: 1)
+                .strokeBorder(delivered ? Color.boardGreen.opacity(hovering ? 0.55 : 0.35) : Color.primary.opacity(hovering ? 0.14 : 0.07), lineWidth: 1)
         }
-        .overlay(alignment: .leading) { TaskEdge(hue: card.hue) }
         .contentShape(.rect(cornerRadius: 12))
         .onTapGesture { showingDetails = true }
         .popover(isPresented: $showingDetails, arrowEdge: .trailing) { TaskDetailsPopover(card: card) }
@@ -163,6 +168,9 @@ struct TaskCardView: View {
         .help("Show \(card.ref)'s details and history")
         .contextMenu { TaskMenuItems(card: card) }
     }
+
+    /// Its agent delivered and it waits for you to ship it: the card wears the section's green.
+    private var delivered: Bool { card.finish?.awaiting == true }
 
     private var header: some View {
         HStack(spacing: 6) {
@@ -344,7 +352,68 @@ private struct NoteLine: View {
     }
 }
 
-/// A note as the agent wrote it, with its steps (Approve Plan; Approve Done, Not Done Yet) while they wait for you.
+/// What the agent delivered, unwrapped right on its card: when, and the start of its note on what
+/// it did and how it checked, to look over before you ship it. Clicking it shows the whole note,
+/// with Ship It and Not Yet.
+private struct DeliveryNote: View {
+    let card: TaskCard
+    let finish: Finish
+
+    @State private var hovering = false
+    @State private var showing = false
+
+    var body: some View {
+        Button { showing = true } label: {
+            VStack(alignment: .leading, spacing: 5) {
+                HStack(alignment: .firstTextBaseline, spacing: 5) {
+                    Image(systemName: "gift.fill")
+                    Text("Delivered")
+                    if let since = card.reason.since {
+                        Text(verbatim: "· \(since)").foregroundStyle(Color.boardGreen.opacity(0.75))
+                    }
+                    Spacer(minLength: 4)
+                    Text("Read it all").font(.zoomed(.caption)).opacity(hovering ? 1 : 0)
+                }
+                .font(.zoomed(.subheadline).weight(.semibold))
+                .foregroundStyle(Color.boardGreen)
+                Text(preview)
+                    .font(.zoomed(.subheadline))
+                    .foregroundStyle(.primary.opacity(0.85))
+                    .lineLimit(4)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            .padding(.horizontal, 8)
+            .padding(.vertical, 6)
+            .background(Color.boardGreen.opacity(hovering ? 0.14 : 0.09), in: .rect(cornerRadius: 8))
+            .contentShape(.rect)
+        }
+        .buttonStyle(.plain)
+        .onHover { hovering = $0 }
+        .pointerStyle(.link)
+        .animation(.easeOut(duration: 0.12), value: hovering)
+        .help("Read what the agent did and how it checked")
+        .popover(isPresented: $showing, arrowEdge: .bottom) {
+            NotePopover(note: Note(symbol: "gift", title: "Delivered", text: text, at: finish.at, steps: ["ship", "send-back"]), card: card, isPresented: $showing)
+        }
+    }
+
+    private var text: String { finish.text ?? "The agent didn't say what it did." }
+
+    /// The note's Markdown read as a few plain lines: headings and list markers dropped, inline
+    /// styling (bold, code) kept.
+    private var preview: AttributedString {
+        let lines = text.split(whereSeparator: \.isNewline).compactMap { line -> String? in
+            let trimmed = line.trimmingCharacters(in: .whitespaces)
+            guard !trimmed.isEmpty, !trimmed.hasPrefix("```") else { return nil }
+            return trimmed.replacing(/^(#+|[-*+]|\d+[.)])\s+/, with: "")
+        }
+        let plain = lines.joined(separator: "\n")
+        return (try? AttributedString(markdown: plain, options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace))) ?? AttributedString(plain)
+    }
+}
+
+/// A note as the agent wrote it, with its steps (Approve Plan; Ship It, Not Yet) while they wait for you.
 private struct NotePopover: View {
     let note: Note
     let card: TaskCard
@@ -481,7 +550,8 @@ private struct TaskSessionLine: View {
     }
 }
 
-/// The task's next step, a full-width button, or in its place what the agent is doing.
+/// The task's next steps, or in their place what the agent is doing. The first is the way forward,
+/// a full-width button; any other (Not Yet beside Ship It) sits at its side, quieter.
 private struct TaskStepSlot: View {
     let card: TaskCard
 
@@ -489,8 +559,11 @@ private struct TaskStepSlot: View {
         Group {
             if let running = card.running {
                 RunningLabel(text: running).transition(.blurReplace)
-            } else {
-                ForEach(card.steps, id: \.self) { StepButton(step: $0, target: .task(card.id)) }
+            } else if let primary = card.steps.first {
+                HStack(spacing: 6) {
+                    StepButton(step: primary, target: .task(card.id))
+                    ForEach(card.steps.dropFirst(), id: \.self) { SecondaryStepButton(step: $0, target: .task(card.id)) }
+                }
             }
         }
         .animation(.smooth(duration: 0.3), value: card.running)
@@ -540,7 +613,7 @@ private struct TaskDetailsPopover: View {
             ReasonLine(reason: card.reason)
             if let finish = card.finish, let text = finish.text {
                 Divider()
-                Text("Why the agent says it's done").font(.zoomed(.callout).weight(.semibold)).foregroundStyle(.secondary)
+                Text("What the agent delivered").font(.zoomed(.callout).weight(.semibold)).foregroundStyle(.secondary)
                 MarkdownText(text: text)
             }
             Divider()

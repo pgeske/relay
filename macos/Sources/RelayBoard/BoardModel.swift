@@ -5,6 +5,13 @@ struct Toast: Identifiable, Equatable {
     let id = UUID()
     var message: String
     var failed: Bool
+    /// Its icon when it went well; a checkmark unless something deserves its own.
+    var symbol = "checkmark.circle.fill"
+}
+
+/// A task just shipped, celebrated with a chime and confetti; each shipment starts a new burst.
+struct Shipment: Identifiable, Equatable {
+    let id = UUID()
 }
 
 /// A control waiting for the user to confirm it.
@@ -24,6 +31,8 @@ final class BoardModel {
     private(set) var failure: BoardError?
     private(set) var isRefreshing = false
     var toast: Toast?
+    /// The task just shipped, while its confetti falls.
+    var shipment: Shipment?
     var confirming: PendingAction?
     /// The New Task sheet is up.
     var composing = false
@@ -187,6 +196,9 @@ final class BoardModel {
             }
             let result = try await client.perform(action.action, on: target, plan: plan)
             toast = Toast(message: result.message, failed: !result.ok)
+            if result.ok, ["ship", "done"].contains(action.action), case .task = target {
+                celebrate()
+            }
             if result.ok, let running = action.running {
                 switch target {
                 case .pr(let ref): started[ref] = action
@@ -194,7 +206,7 @@ final class BoardModel {
                 case .session: break
                 }
             }
-            if result.ok, ["close", "delete", "dismiss", "close-session"].contains(action.action) { removed.insert(target.key) }
+            if result.ok, ["close", "delete", "dismiss", "close-session", "ship", "done"].contains(action.action) { removed.insert(target.key) }
             // The session took a step on, a menu control moved the card (skipping its agent review), or the
             // card was out of date (the PR merged, or its session is already on a request): show what's true now.
             // Task controls change the task's section, so they show soon too.
@@ -204,6 +216,14 @@ final class BoardModel {
         } catch {
             report(error)
         }
+    }
+
+    /// Shipping is the last click of a task: make it feel like one. The card leaves at once (the
+    /// next refresh shows it under Shipped), with a chime and confetti.
+    private func celebrate() {
+        toast?.symbol = "paperplane.fill"
+        shipment = Shipment()
+        NSSound(named: "Hero")?.play()
     }
 
     private func report(_ error: any Error) {

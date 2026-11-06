@@ -597,6 +597,42 @@ struct StepButton: View {
     }
 }
 
+/// A step beside the way forward, like Not Yet beside Ship It: as tall as it, but quiet and only as
+/// wide as its label.
+struct SecondaryStepButton: View {
+    let step: BoardAction
+    let target: ActionTarget
+
+    @Environment(BoardModel.self) private var model
+    @State private var hovering = false
+
+    var body: some View {
+        let sending = model.isSending(step, on: target)
+        let shape = RoundedRectangle(cornerRadius: StepMetrics.radius, style: .continuous)
+        Button { model.request(step, on: target) } label: {
+            HStack(spacing: 5) {
+                if sending { Spinner() } else { Image(systemName: step.symbol) }
+                Text(step.label)
+            }
+            .font(StepMetrics.font)
+            .lineLimit(1)
+            .fixedSize()
+            .padding(.horizontal, 10)
+            .frame(minHeight: StepMetrics.height)
+            .foregroundStyle(.primary.opacity(0.8))
+            .background(shape.fill(Color.primary.opacity(hovering ? 0.11 : 0.06)))
+            .overlay(shape.strokeBorder(Color.primary.opacity(0.08), lineWidth: 1))
+            .contentShape(shape)
+        }
+        .buttonStyle(.plain)
+        .onHover { hovering = $0 }
+        .pointerStyle(.link)
+        .animation(.easeOut(duration: 0.12), value: hovering)
+        .disabled(sending)
+        .help(step.hint)
+    }
+}
+
 /// A card's step: a filled bar in the step's color, legible in an inactive window too, that lights up
 /// under the pointer and gives a little when pressed.
 private struct StepButtonStyle: ButtonStyle {

@@ -53,7 +53,7 @@ You need [tmux](https://github.com/tmux/tmux) and omp on your `PATH`. relay runs
 
 A **task** is one thing you want done: a fix, a rollout, an investigation, or getting another team to do something. It can take a few sessions and PRs, or none at all.
 
-Relay Board opens on your tasks, grouped by what they need: **Needs you**, **Check it**, **Agent working**, **Waiting on others**, **Paused**, **Ideas**, and **Done**. Open sessions that no task knows about show up under **Not tracked**, so nothing slips through.
+Relay Board opens on your tasks, grouped by what they need: **Needs you**, **Ready to ship**, **Agent working**, **Waiting on others**, **Paused**, **Ideas**, and **Shipped**. Open sessions that no task knows about show up under **Not tracked**, so nothing slips through.
 
 Here's the loop:
 
@@ -62,13 +62,13 @@ flowchart LR
   idea["💡 New task<br/>(⌘N)"] --> work["🔎 Agent researches<br/>and plans"]
   work --> plan(["✅ You approve<br/>the plan"])
   plan --> doing["🛠️ Agent does it<br/>and rolls out"]
-  doing --> check(["👀 You check it"])
-  check -- "Not done yet" --> doing
-  check -- "Approve done" --> done["🏁 Done"]
+  doing --> ship(["🎁 Agent delivers,<br/>you look it over"])
+  ship -- "Not yet" --> doing
+  ship -- "Ship it" --> done["🚀 Shipped"]
 ```
 
 - **You never chase an agent.** It reports its stage, its status, and what it's blocked on. If it stops without saying, the card moves to Needs you.
-- **Nothing finishes without you.** "Done" lands in **Check it** with a note on what the agent did and how it checked, until you approve it.
+- **Nothing ships without you.** A finished task lands in **Ready to ship** with a note on what the agent did and how it checked. One click on **Ship It** and it's shipped.
 - **Plans wait for you,** unless you say the task can skip that step.
 - **PRs come along.** PRs a task's session opens join the task and wear its color on the PR board.
 
@@ -124,7 +124,7 @@ relay task new "Roll out the cache"     # register a task; this session is on it
 relay task update --stage doing --status "PR open, waiting on CI"
 relay task update --blocked-on me --reason "Which region goes first?"
 relay task plan --summary - < plan.md   # waits for approval on the board
-relay task done --summary - < done.md   # waits in Check it for you
+relay task done --summary - < done.md   # waits in Ready to ship for you
 relay task --json                       # every task, by section
 relay board --json                      # every PR, by lane
 ```

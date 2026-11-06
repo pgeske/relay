@@ -95,13 +95,14 @@ extension BoardAction {
         case "merge": "arrow.triangle.merge"
         case "fix-ci": "wrench.and.screwdriver"
         case "start": "play.fill"
-        case "approve-plan", "approve-done": "checkmark.circle.fill"
-        case "send-back": "arrow.uturn.backward.circle"
+        case "approve-plan": "checkmark.circle.fill"
+        case "ship": "paperplane.fill"
+        case "send-back": "arrow.uturn.backward"
         case "open", "open-session": "terminal"
         case "track": "plus.circle"
         case "dismiss": "eye.slash"
         case "close-session": "xmark.circle"
-        case "done": "checkmark.circle"
+        case "done": "paperplane"
         case "reopen": "arrow.uturn.backward"
         case "delete": "trash"
         case "skip-review": "forward"
@@ -115,7 +116,7 @@ extension BoardAction {
         if stalled == true { return .boardOrangeFill }
         return switch action {
         case "review": .boardPurpleFill
-        case "merge", "approve-plan", "approve-done": .boardGreenFill
+        case "merge", "approve-plan", "ship": .boardGreenFill
         default: .boardBlueFill
         }
     }
@@ -125,13 +126,13 @@ extension TaskLane {
     var symbol: String {
         switch id {
         case "needs-you": "bell.badge.fill"
-        case "check": "checkmark.seal.fill"
+        case "ship": "shippingbox.fill"
         case "working": "sparkles"
         case "waiting": "hourglass"
         case "paused": "pause.circle.fill"
         case "untracked": "questionmark.circle"
         case "ideas": "lightbulb.fill"
-        case "done": "checkmark.circle.fill"
+        case "done": "checkmark.seal.fill"
         default: "circle.fill"
         }
     }
@@ -139,7 +140,7 @@ extension TaskLane {
     var tint: Color {
         switch id {
         case "needs-you": .boardOrange
-        case "check": .boardGreen
+        case "ship": .boardGreen
         case "working": .boardPurple
         case "waiting": .boardBlue
         case "ideas": .boardAmber

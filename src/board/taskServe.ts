@@ -31,9 +31,9 @@ import {
 /** A new task's details can run long, and its screenshots longer; anything past this isn't a task. */
 const MAX_TASK_BODY_BYTES = 30 * 1024 * 1024;
 
-/** How a session hands its task back: you check it before it counts as done. */
+/** How a session hands its task back: you look it over and ship it before it counts as done. */
 const FINISH_ASK =
-  "When it's finished, run `relay task done --summary -` with what you did and how you checked it (on stdin, through a heredoc): I check it on the board before it counts as done.";
+  "When it's finished, run `relay task done --summary -` with what you did and how you checked it (on stdin, through a heredoc): I look it over and ship it from the board before it counts as done.";
 
 function startPrompt(task: Task): string {
   const plan = task.approvePlan
@@ -103,7 +103,7 @@ function taskSession(taskId: number, live: Map<string, Pane>, onTaskOnly: boolea
 }
 
 /**
- * Moves a task to Done and closes the relay tabs of its sessions, so finished work doesn't leave
+ * Moves a task to Shipped and closes the relay tabs of its sessions, so finished work doesn't leave
  * windows behind. omp keeps their conversations to resume. A session still working, or one that
  * moved on to another task, stays open.
  */
@@ -120,7 +120,7 @@ async function completeTask(id: number): Promise<string> {
   const closed = idle.length ? `; closed ${idle.length === 1 ? "its session" : `${idle.length} sessions`}` : "";
   const working = open.length - idle.length;
   const kept = working ? `; left ${working === 1 ? "a working session" : `${working} working sessions`} open` : "";
-  return `${taskRef(id)} is done${closed}${kept}`;
+  return `Shipped ${taskRef(id)}${closed}${kept}`;
 }
 
 /**
@@ -173,7 +173,7 @@ export interface TaskActionTarget {
 /**
  * Runs one of a task card's controls, or an untracked session's. `start` opens a session on the
  * task, `approve-plan` tells its session to carry out its plan, `open` shows its session;
- * `approve-done` and `done` finish it, closing its idle sessions, and `send-back` returns a task
+ * `ship` and `done` finish it, closing its idle sessions, and `send-back` returns a task
  * its agent called finished and shows you its session. `track` asks an untracked session to
  * register its task, `close-session` closes its relay tab.
  */
@@ -190,11 +190,11 @@ export async function runTaskAction(action: string, target: TaskActionTarget): P
       if (!task) return { status: 404, message: `no task ${taskRef(id)}` };
       const at = new Date().toISOString();
       switch (action) {
-        case "approve-done":
-          if (!task.finishedAt) return { status: 409, message: `${taskRef(id)} isn't waiting for you to check it` };
+        case "ship":
+          if (!task.finishedAt) return { status: 409, message: `${taskRef(id)} isn't ready to ship` };
           break;
         case "send-back":
-          if (!task.finishedAt) return { status: 409, message: `${taskRef(id)} isn't waiting for you to check it` };
+          if (!task.finishedAt) return { status: 409, message: `${taskRef(id)} isn't ready to ship` };
           sendBack(db, id, at);
           break;
         case "reopen":
@@ -209,7 +209,7 @@ export async function runTaskAction(action: string, target: TaskActionTarget): P
     }
 
     if (action === "start") return { status: 200, message: await startTask(task) };
-    if (action === "approve-done" || action === "done") return { status: 200, message: await completeTask(id) };
+    if (action === "ship" || action === "done") return { status: 200, message: await completeTask(id) };
     const session = taskSession(id, await liveSessions(), action === "approve-plan");
     if (!session) {
       if (action === "send-back") return { status: 200, message: `Sent ${taskRef(id)} back; it has no session to open` };

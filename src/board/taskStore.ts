@@ -295,8 +295,8 @@ export function reportTask(db: Database, id: number, report: TaskReport): Task {
 }
 
 /**
- * Notes that the agent says the task is finished, and why. It isn't done until you check it:
- * the board shows it to you to approve or send back.
+ * Notes that the agent says the task is finished, and why. It isn't done until you ship it:
+ * the board shows it to you to ship or send back.
  */
 export function finishTask(db: Database, id: number, finish: { note: string | null; status?: string; at: string }): Task {
   return db.transaction(() => {

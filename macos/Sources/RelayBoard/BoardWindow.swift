@@ -42,6 +42,7 @@ struct BoardWindow: View {
         }
         .sheet(isPresented: $model.composing) { NewTaskSheet(project: selectedProject) }
         .overlay(alignment: .bottom) { ToastView() }
+        .overlay { ShipCelebration() }
         .alert(model.confirming?.confirm.title ?? "", isPresented: confirmingBinding, presenting: model.confirming) { pending in
             if pending.confirm.destructive {
                 Button(pending.confirm.button, role: .destructive) { model.confirm(pending) }
@@ -334,7 +335,7 @@ private struct ToastView: View {
                 Label {
                     Text(toast.message).lineLimit(3)
                 } icon: {
-                    Image(systemName: toast.failed ? "exclamationmark.triangle.fill" : "checkmark.circle.fill")
+                    Image(systemName: toast.failed ? "exclamationmark.triangle.fill" : toast.symbol)
                         .foregroundStyle(toast.failed ? Color.boardRed : Color.boardGreen)
                 }
                 .font(.zoomed(.callout).weight(.medium))
@@ -353,5 +354,22 @@ private struct ToastView: View {
             }
         }
         .animation(.spring(duration: 0.35), value: model.toast)
+    }
+}
+
+/// Confetti over the whole window for a task just shipped, unless you asked macOS to reduce motion.
+private struct ShipCelebration: View {
+    @Environment(BoardModel.self) private var model
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    var body: some View {
+        if let shipment = model.shipment, !reduceMotion {
+            ConfettiBurst()
+                .id(shipment.id)
+                .task(id: shipment.id) {
+                    try? await Task.sleep(for: .seconds(ConfettiBurst.duration))
+                    if model.shipment?.id == shipment.id { model.shipment = nil }
+                }
+        }
     }
 }

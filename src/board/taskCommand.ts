@@ -55,7 +55,7 @@ Usage:
                                       it waits for you to approve it on the board
   relay task done [<task>] --summary <text|-> [--status <text>]
                                       Say it's finished: what you did and how you checked.
-                                      It waits for you to check it on the board before it's done
+                                      It waits in Ready to ship until you ship it from the board
   relay task show [<task>] [--json]   A task, its sessions, PRs, and history
 
 <task> is its id (T-12 or 12); left out, it's the task this session is on.
@@ -256,7 +256,7 @@ async function done(args: string[]): Promise<void> {
   try {
     const task = await resolveTask(db, leadingRef(args));
     finishTask(db, task.id, { note, status: flagValue(args, "--status"), at });
-    console.log(`${taskRef(task.id)} waits for the user to check it on the board; it moves to Done once they approve it: ${task.title}`);
+    console.log(`${taskRef(task.id)} is ready to ship: it waits on the board until the user ships it or sends it back: ${task.title}`);
   } finally {
     db.close();
   }
@@ -297,7 +297,7 @@ async function show(args: string[]): Promise<void> {
   ];
   if (card.status) lines.push(`Status: ${card.status.text} (${card.status.ago})`);
   if (card.plan) lines.push(`Plan: ${card.plan.awaiting ? "waiting for approval" : card.plan.approved ? "approved" : "recorded"}`);
-  if (card.finish) lines.push(`Done note${card.finish.awaiting ? " (waiting for the user to check it)" : ""}: ${card.finish.text ?? "none"}`);
+  if (card.finish) lines.push(`Delivery note${card.finish.awaiting ? " (ready for the user to ship)" : ""}: ${card.finish.text ?? "none"}`);
   for (const pr of card.prs) lines.push(`PR ${pr.ref}: ${pr.state}`);
   if (card.session) lines.push(`Session: ${card.session.title} (${card.session.state})${card.session.others ? ` and ${card.session.others} more` : ""}`);
   console.log(lines.join("\n"));
