@@ -590,7 +590,7 @@ struct StepButton: View {
                 Text(step.label)
             }
         }
-        .buttonStyle(StepButtonStyle(fill: step.fill))
+        .buttonStyle(StepButtonStyle(tint: step.tint))
         .disabled(sending)
         .sensoryFeedback(.alignment, trigger: clicks)
         .help(step.hint)
@@ -633,19 +633,20 @@ struct SecondaryStepButton: View {
     }
 }
 
-/// A card's step: a filled bar in the step's color, legible in an inactive window too, that lights up
-/// under the pointer and gives a little when pressed.
+/// A card's step: a soft wash of the step's color with its label in that color, like the card's
+/// status chips and the running request, so it reads as the way forward without outweighing the card.
+/// It deepens under the pointer and gives a little when pressed.
 private struct StepButtonStyle: ButtonStyle {
-    let fill: Color
+    let tint: Color
 
     func makeBody(configuration: Configuration) -> some View {
-        StepButtonBody(configuration: configuration, fill: fill)
+        StepButtonBody(configuration: configuration, tint: tint)
     }
 }
 
 private struct StepButtonBody: View {
     let configuration: ButtonStyleConfiguration
-    let fill: Color
+    let tint: Color
 
     @Environment(\.isEnabled) private var isEnabled
     @State private var hovering = false
@@ -653,19 +654,14 @@ private struct StepButtonBody: View {
     var body: some View {
         let shape = RoundedRectangle(cornerRadius: StepMetrics.radius, style: .continuous)
         let pressed = configuration.isPressed
+        let wash = pressed ? 0.28 : hovering && isEnabled ? 0.22 : 0.14
         configuration.label
             .font(StepMetrics.font)
             .lineLimit(1)
-            .foregroundStyle(.white)
+            .foregroundStyle(tint.opacity(isEnabled ? 1 : 0.6))
             .frame(maxWidth: .infinity, minHeight: StepMetrics.height)
-            .background {
-                shape
-                    .fill(fill.opacity(isEnabled ? 1 : 0.7))
-                    .overlay(shape.fill(.linearGradient(colors: [.white.opacity(0.14), .clear], startPoint: .top, endPoint: .bottom)))
-                    .shadow(color: fill.opacity(hovering && !pressed ? 0.35 : 0.15), radius: hovering && !pressed ? 4 : 1, y: 1)
-            }
-            .overlay(shape.fill(pressed ? Color.black.opacity(0.16) : Color.white.opacity(hovering && isEnabled ? 0.1 : 0)))
-            .overlay(shape.strokeBorder(.white.opacity(0.12), lineWidth: 1))
+            .background(shape.fill(tint.opacity(wash)))
+            .overlay(shape.strokeBorder(tint.opacity(hovering && isEnabled ? 0.45 : 0.25), lineWidth: 1))
             .contentShape(shape)
             .scaleEffect(pressed ? 0.97 : 1)
             .onHover { hovering = $0 }

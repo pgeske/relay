@@ -18,12 +18,6 @@ extension Color {
     static let boardOrange = adaptive(light: 0xBC4C00, dark: 0xFF9F43)
     static let boardBlue = adaptive(light: 0x0969DA, dark: 0x58A6FF)
     static let boardPurple = adaptive(light: 0x8250DF, dark: 0xBC8CFF)
-
-    // Fills that carry white text, a shade deeper than the text colors in dark mode.
-    static let boardGreenFill = adaptive(light: 0x1F883D, dark: 0x238636)
-    static let boardBlueFill = adaptive(light: 0x0969DA, dark: 0x1F6FEB)
-    static let boardPurpleFill = adaptive(light: 0x8250DF, dark: 0x8957E5)
-    static let boardOrangeFill = adaptive(light: 0xBC4C00, dark: 0xBD561D)
 }
 
 extension Tone {
@@ -112,12 +106,12 @@ extension BoardAction {
     }
 
     /// A step's button color: its lane's, or a warning once its request stopped without a result.
-    var fill: Color {
-        if stalled == true { return .boardOrangeFill }
+    var tint: Color {
+        if stalled == true { return .boardOrange }
         return switch action {
-        case "review": .boardPurpleFill
-        case "merge", "approve-plan", "ship": .boardGreenFill
-        default: .boardBlueFill
+        case "review": .boardPurple
+        case "merge", "approve-plan", "ship": .boardGreen
+        default: .boardBlue
         }
     }
 }
