@@ -36,6 +36,8 @@ final class BoardModel {
     var confirming: PendingAction?
     /// The New Task sheet is up.
     var composing = false
+    /// What the New Task sheet's model picker offers; nil until it first opens, or while omp can't list them.
+    private(set) var modelChoices: ModelChoices?
     /// Controls on their way to the server, as "<target> <action>".
     private var sending: Set<String> = []
     /// Requests the server took on that its board doesn't show yet, by PR card ref.
@@ -132,6 +134,12 @@ final class BoardModel {
     }
 
     var isCreating: Bool { sending.contains("new-task") }
+
+    /// Asks omp which models it has, once: the list only changes when you add a provider.
+    func loadModelChoices() async {
+        guard modelChoices == nil else { return }
+        modelChoices = try? await client.models()
+    }
 
     /// Refreshes every `refreshSeconds` the server asks for, holding off while a control is being
     /// confirmed or sent, so the card it's on stays put.

@@ -761,6 +761,9 @@ struct NewTaskSheet: View {
     /// Typing a new project's name, in place of the project chip.
     @State private var namingProject = false
     @State private var approvePlan = true
+    /// The model and thinking level its sessions start on; nil keeps omp's default.
+    @State private var chosenModel: String?
+    @State private var chosenLevel: String?
     @FocusState private var focus: Field?
 
     private enum Field { case title, projectName }
@@ -812,6 +815,7 @@ struct NewTaskSheet: View {
             projectName = project?.name ?? ""
             focus = .title
         }
+        .task { await model.loadModelChoices() }
     }
 
     /// The task's options as chips on the left, then its two ways in: keep it as an idea, or start it.
@@ -825,6 +829,7 @@ struct NewTaskSheet: View {
             .toggleStyle(ChipToggleStyle())
             .fixedSize()
             .help("Review the agent's plan on the board before it starts the work")
+            modelChip
             Spacer(minLength: 12)
             if model.isCreating { ProgressView().controlSize(.small) }
             Button { submit(start: false) } label: {
@@ -887,6 +892,67 @@ struct NewTaskSheet: View {
         }
     }
 
+    /// The model and thinking level its sessions start on, picked like omp's `/switch` and `/effort`.
+    /// Untinted while it's omp's default, so a choice you made stands out.
+    @ViewBuilder private var modelChip: some View {
+        if let choices = model.modelChoices {
+            Menu {
+                let levels = choices.option(chosenModel ?? choices.defaults.model)?.thinkingLevels ?? []
+                if !levels.isEmpty {
+                    Section("Thinking") {
+                        checkmarkButton("Default", selected: chosenLevel == nil) { chosenLevel = nil }
+                        ForEach(levels, id: \.self) { level in
+                            checkmarkButton(ModelOption.levelLabel(level), selected: chosenLevel == level) { chosenLevel = level }
+                        }
+                    }
+                }
+                Section("Model") {
+                    checkmarkButton("Default", selected: chosenModel == nil) { pick(model: nil, in: choices) }
+                    ForEach(choices.providers, id: \.self) { provider in
+                        Menu(provider) {
+                            ForEach(choices.models.filter { $0.provider == provider }) { option in
+                                checkmarkButton(option.name, selected: chosenModel == option.selector) { pick(model: option.selector, in: choices) }
+                            }
+                        }
+                    }
+                }
+            } label: {
+                Label(modelLabel(choices), systemImage: "cpu")
+                    .lineLimit(1)
+                    .modifier(Chip(on: chosenModel != nil || chosenLevel != nil))
+            }
+            .menuStyle(.button)
+            .buttonStyle(.plain)
+            .menuIndicator(.hidden)
+            .menuOrder(.fixed)
+            .fixedSize()
+            .help("The model and thinking level its sessions start on")
+        }
+    }
+
+    private func checkmarkButton(_ title: String, selected: Bool, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            if selected { Label(title, systemImage: "checkmark") } else { Text(title) }
+        }
+    }
+
+    /// Switching models drops a thinking level the new one doesn't take, like omp's `/switch` would.
+    private func pick(model selector: String?, in choices: ModelChoices) {
+        chosenModel = selector
+        let levels = choices.option(selector ?? choices.defaults.model)?.thinkingLevels ?? []
+        if let level = chosenLevel, !levels.contains(level) { chosenLevel = nil }
+    }
+
+    /// "Opus 5.5 · Medium": what it'll start on, defaults filled in.
+    private func modelLabel(_ choices: ModelChoices) -> String {
+        let selector = chosenModel ?? choices.defaults.model
+        let option = choices.option(selector)
+        let name = option?.shortName ?? selector?.split(separator: "/").last.map(String.init) ?? "Default model"
+        let level = chosenLevel ?? choices.defaults.thinkingLevel
+        guard let level, option?.thinkingLevels.isEmpty == false else { return name }
+        return "\(name) · \(ModelOption.levelLabel(level))"
+    }
+
     private var projects: [Project] { model.board?.tasks?.projects ?? [] }
 
     private var ready: Bool { !title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && !model.isCreating }
@@ -894,7 +960,7 @@ struct NewTaskSheet: View {
     private func submit(start: Bool) {
         guard ready else { return }
         let images = screenshots.map { NewTask.Image(base64: $0.data.base64EncodedString(), mimeType: $0.mimeType) }
-        let task = NewTask(title: title, details: details, images: images, project: projectName, approvePlan: approvePlan, start: start)
+        let task = NewTask(title: title, details: details, images: images, project: projectName, approvePlan: approvePlan, start: start, model: chosenModel, thinkingLevel: chosenLevel)
         Task {
             if await model.create(task) { dismiss() }
         }

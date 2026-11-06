@@ -174,9 +174,52 @@ struct NewTask: Encodable, Sendable {
     var approvePlan: Bool
     /// Start a session on it now, rather than keeping it as an idea.
     var start: Bool
+    /// The model its sessions start on, as `provider/id`; nil for omp's default.
+    var model: String?
+    /// Their thinking level; nil for omp's default.
+    var thinkingLevel: String?
 
     struct Image: Encodable, Sendable {
         var base64: String
         var mimeType: String
+    }
+}
+
+/// The models omp can start a session on, from `GET /api/models`, and the one it starts on by default.
+struct ModelChoices: Decodable, Sendable {
+    var models: [ModelOption]
+    var defaults: Defaults
+
+    struct Defaults: Decodable, Sendable {
+        var model: String?
+        var thinkingLevel: String?
+    }
+
+    func option(_ selector: String?) -> ModelOption? {
+        models.first { $0.selector == selector }
+    }
+
+    /// Providers in the order omp lists them, without repeats.
+    var providers: [String] {
+        var seen: Set<String> = []
+        return models.map(\.provider).filter { seen.insert($0).inserted }
+    }
+}
+
+struct ModelOption: Decodable, Sendable, Identifiable {
+    /// `provider/id`, what `omp --model` takes.
+    var selector: String
+    var name: String
+    var provider: String
+    /// The levels `omp --thinking` takes for it; empty when it can't think.
+    var thinkingLevels: [String]
+
+    var id: String { selector }
+
+    /// "Claude Opus 5.5" reads as "Opus 5.5" on a chip that's already about models.
+    var shortName: String { name.hasPrefix("Claude ") ? String(name.dropFirst("Claude ".count)) : name }
+
+    static func levelLabel(_ level: String) -> String {
+        level == "xhigh" ? "Extra High" : level.prefix(1).uppercased() + level.dropFirst()
     }
 }

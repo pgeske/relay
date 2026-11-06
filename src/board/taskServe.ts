@@ -1,6 +1,7 @@
 import { existsSync } from "node:fs";
 import type { IncomingMessage } from "node:http";
 import { homedir } from "node:os";
+import { THINKING_LEVELS, listModels } from "../server/modelState.ts";
 import { resolveSessionFile } from "../server/sessionFile.ts";
 import { parsePaneTitle } from "../server/sessions.ts";
 import { parseUploadedImages, saveUploadedImages, type UploadedImage } from "../server/uploads.ts";
@@ -126,15 +127,17 @@ async function completeTask(id: number): Promise<string> {
 }
 
 /**
- * Starts a session on a task in a new background relay tab: omp in the task's folder, linked to
- * the task as soon as it knows its session file, then handed the task.
+ * Starts a session on a task in a new background relay tab: omp in the task's folder, on the
+ * task's model and thinking level when it names them, linked to the task as soon as it knows its
+ * session file, then handed the task.
  */
 async function startTask(task: Task): Promise<string> {
   const tmuxSession = await mainSessionName();
   if (!tmuxSession) throw new ActionError(409, "relay isn't running; open it with `relay` first");
   const cwd = task.cwd && existsSync(task.cwd) ? task.cwd : homedir();
   const startedAt = Date.now();
-  const paneId = await newWindow(tmuxSession, cwd);
+  const agentArgs = [...(task.model ? ["--model", task.model] : []), ...(task.thinkingLevel ? ["--thinking", task.thinkingLevel] : [])];
+  const paneId = await newWindow(tmuxSession, cwd, agentArgs);
   await waitUntilReady(paneId);
   const pane = (await listOmpPanes()).find((candidate) => candidate.paneId === paneId);
   const sessionFile = pane ? await resolveSessionFile(pane, { pointerWrittenAfter: startedAt }) : null;
@@ -291,6 +294,10 @@ export interface NewTaskRequest {
   approvePlan: boolean;
   /** Start a session on it now, rather than keeping it as an idea. */
   start: boolean;
+  /** A `provider/id` from `omp models`; omitted for omp's default. */
+  model?: string;
+  /** omp's thinking level for its sessions; omitted for the default. */
+  thinkingLevel?: string;
 }
 
 /** Where sessions on tasks made from the board start: a scratch folder, since agents pick their repos themselves. */
@@ -300,6 +307,9 @@ const NEW_TASK_FOLDER = "/tmp";
 export async function createTaskFromBoard(request: NewTaskRequest): Promise<BoardActionResult & { task?: number }> {
   const title = request.title.trim();
   if (!title) return { status: 400, message: "a task needs a title" };
+  if (request.model && !(await listModels()).some((option) => option.selector === request.model)) {
+    return { status: 400, message: `omp has no model ${request.model}` };
+  }
   // Its screenshots go below what you wrote, one "[Attached image: <path>]" line each, like the phone's.
   const attachments = (await saveUploadedImages(request.images)).join("\n");
   const details = [request.details?.trim(), attachments].filter(Boolean).join("\n\n") || null;
@@ -315,6 +325,8 @@ export async function createTaskFromBoard(request: NewTaskRequest): Promise<Boar
       status: null,
       approvePlan: request.approvePlan,
       cwd: NEW_TASK_FOLDER,
+      model: request.model ?? null,
+      thinkingLevel: request.thinkingLevel ?? null,
       at,
     });
   } finally {
@@ -352,6 +364,8 @@ export function parseNewTask(body: Record<string, unknown>): NewTaskRequest {
   };
   const title = text("title");
   if (!title) throw new Error("missing title");
+  const thinkingLevel = text("thinkingLevel") || undefined;
+  if (thinkingLevel && THINKING_LEVELS[thinkingLevel] !== true) throw new Error(`unknown thinking level: ${thinkingLevel}`);
   return {
     title,
     details: text("details"),
@@ -359,5 +373,7 @@ export function parseNewTask(body: Record<string, unknown>): NewTaskRequest {
     project: text("project"),
     approvePlan: body.approvePlan !== false,
     start: body.start === true,
+    model: text("model") || undefined,
+    thinkingLevel,
   };
 }

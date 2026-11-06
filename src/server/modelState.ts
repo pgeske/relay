@@ -82,7 +82,7 @@ function splitRoleSelector(raw: string): ModelState {
  * What a brand-new omp starts with: `modelRoles.default` (whose `:level` suffix wins) and then
  * `defaultThinkingLevel`. Only those two top-level keys are read, so a tiny line scan suffices.
  */
-async function configuredDefaults(): Promise<ModelState> {
+export async function configuredDefaults(): Promise<ModelState> {
   let text: string;
   try {
     text = await readFile(CONFIG_PATH, "utf8");

@@ -41,6 +41,9 @@ export interface Task {
   planApprovedAt: string | null;
   /** Where the board starts its sessions; null for a task an agent registered from its own session. */
   cwd: string | null;
+  /** The model and thinking level the board starts its sessions with (`--model`, `--thinking`); null for omp's default. */
+  model: string | null;
+  thinkingLevel: string | null;
   createdAt: string;
   updatedAt: string;
   /** When its agent said it's finished; null until then, and once it moves on (you approve it, send it back, or it reports more work). */
@@ -109,6 +112,8 @@ interface TaskRow {
   plan_at: string | null;
   plan_approved_at: string | null;
   cwd: string | null;
+  model: string | null;
+  thinking_level: string | null;
   created_at: string;
   updated_at: string;
   finished_at: string | null;
@@ -146,7 +151,9 @@ export function createTaskTables(db: Database): void {
     finished_at TEXT,
     finish_note TEXT,
     done_at TEXT,
-    paused_at TEXT
+    paused_at TEXT,
+    model TEXT,
+    thinking_level TEXT
   )`);
   // Tasks went straight to done before you checked them.
   const taskColumns = db.query<{ name: string }, []>("SELECT name FROM pragma_table_info('tasks')").all();
@@ -156,6 +163,11 @@ export function createTaskTables(db: Database): void {
   }
   // Tasks were only ever paused by having no session open.
   if (!taskColumns.some((column) => column.name === "paused_at")) db.run("ALTER TABLE tasks ADD COLUMN paused_at TEXT");
+  // Every task's sessions once started with omp's default model.
+  if (!taskColumns.some((column) => column.name === "model")) {
+    db.run("ALTER TABLE tasks ADD COLUMN model TEXT");
+    db.run("ALTER TABLE tasks ADD COLUMN thinking_level TEXT");
+  }
   db.run(`CREATE TABLE IF NOT EXISTS task_events (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     task_id INTEGER NOT NULL,
@@ -202,6 +214,8 @@ function toTask(row: TaskRow): Task {
     planAt: row.plan_at,
     planApprovedAt: row.plan_approved_at,
     cwd: row.cwd,
+    model: row.model,
+    thinkingLevel: row.thinking_level,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
     finishedAt: row.finished_at,
@@ -223,6 +237,9 @@ export interface NewTask {
   status: string | null;
   approvePlan: boolean;
   cwd: string | null;
+  /** Null for omp's default. */
+  model?: string | null;
+  thinkingLevel?: string | null;
   at: string;
 }
 
@@ -230,8 +247,8 @@ export function createTask(db: Database, task: NewTask): Task {
   return db.transaction(() => {
     const row = db
       .query<TaskRow, Record<string, string | number | null>>(
-        `INSERT INTO tasks (title, details, project_id, stage, status, status_at, approve_plan, cwd, created_at, updated_at, done_at)
-         VALUES ($title, $details, $projectId, $stage, $status, $statusAt, $approvePlan, $cwd, $at, $at, $doneAt) RETURNING *`,
+        `INSERT INTO tasks (title, details, project_id, stage, status, status_at, approve_plan, cwd, model, thinking_level, created_at, updated_at, done_at)
+         VALUES ($title, $details, $projectId, $stage, $status, $statusAt, $approvePlan, $cwd, $model, $thinkingLevel, $at, $at, $doneAt) RETURNING *`,
       )
       .get({
         $title: task.title,
@@ -242,6 +259,8 @@ export function createTask(db: Database, task: NewTask): Task {
         $statusAt: task.status ? task.at : null,
         $approvePlan: task.approvePlan ? 1 : 0,
         $cwd: task.cwd,
+        $model: task.model ?? null,
+        $thinkingLevel: task.thinkingLevel ?? null,
         $at: task.at,
         $doneAt: task.stage === "done" ? task.at : null,
       })!;

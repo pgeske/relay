@@ -11,7 +11,7 @@ import { startSessionEvents } from "./events.ts";
 import { readEntryImage, readMessagePage } from "./messages.ts";
 import { isVoiceEnabled } from "../voice.ts";
 import { findSessionPane, listSessions, toSession, type Session } from "./sessions.ts";
-import { THINKING_LEVELS, listModels, rememberChoice } from "./modelState.ts";
+import { THINKING_LEVELS, configuredDefaults, listModels, rememberChoice } from "./modelState.ts";
 import { resolveSessionFile } from "./sessionFile.ts";
 import {
   adoptLoginShellEnv,
@@ -383,7 +383,9 @@ async function route(
   }
   if (resource === "models" && !rawId) {
     if (req.method !== "GET") throw new HttpError(405, "method not allowed");
-    sendJson(res, 200, { models: await listModels() });
+    // `defaults` is what a new omp starts on, for pickers that offer "omp's default".
+    const [models, defaults] = await Promise.all([listModels(), configuredDefaults()]);
+    sendJson(res, 200, { models, defaults });
     return;
   }
   if (resource !== "sessions") {

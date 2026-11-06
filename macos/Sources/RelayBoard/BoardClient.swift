@@ -87,6 +87,15 @@ struct BoardClient: Sendable {
         try await post("api/board/tasks", body: try JSONEncoder().encode(task))
     }
 
+    /// The models omp can start a task's sessions on, and its default.
+    func models() async throws -> ModelChoices {
+        let (data, response) = try await send("api/models")
+        guard response.statusCode == 200 else {
+            throw BoardError.server(status: response.statusCode, message: Self.message(in: data) ?? "HTTP \(response.statusCode)")
+        }
+        return try JSONDecoder().decode(ModelChoices.self, from: data)
+    }
+
     private func post(_ path: String, body: Data) async throws -> ActionResult {
         let (data, response) = try await send(path, method: "POST", body: body)
         let ok = (200..<300).contains(response.statusCode)

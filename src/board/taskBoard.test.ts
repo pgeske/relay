@@ -22,6 +22,8 @@ function task(overrides: Partial<Task> = {}): Task {
     planAt: null,
     planApprovedAt: null,
     cwd: null,
+    model: null,
+    thinkingLevel: null,
     createdAt: minutesAgo(120),
     updatedAt: minutesAgo(60),
     finishedAt: null,
