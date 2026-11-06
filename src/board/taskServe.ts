@@ -1,4 +1,4 @@
-import { existsSync, statSync } from "node:fs";
+import { existsSync } from "node:fs";
 import type { IncomingMessage } from "node:http";
 import { homedir } from "node:os";
 import { resolveSessionFile } from "../server/sessionFile.ts";
@@ -288,19 +288,18 @@ export interface NewTaskRequest {
   images: UploadedImage[];
   /** A project's name: an existing one, or a new one to create. */
   project?: string;
-  /** Where its session starts; ~ means your home. */
-  folder?: string;
   approvePlan: boolean;
   /** Start a session on it now, rather than keeping it as an idea. */
   start: boolean;
 }
 
+/** Where sessions on tasks made from the board start: a scratch folder, since agents pick their repos themselves. */
+const NEW_TASK_FOLDER = "/tmp";
+
 /** Creates a task from the board, starting a session on it when asked. */
 export async function createTaskFromBoard(request: NewTaskRequest): Promise<BoardActionResult & { task?: number }> {
   const title = request.title.trim();
   if (!title) return { status: 400, message: "a task needs a title" };
-  const folder = request.folder?.trim() ? request.folder.trim().replace(/^~(?=$|\/)/, homedir()) : null;
-  if (folder && !(existsSync(folder) && statSync(folder).isDirectory())) return { status: 400, message: `${request.folder} isn't a folder` };
   // Its screenshots go below what you wrote, one "[Attached image: <path>]" line each, like the phone's.
   const attachments = (await saveUploadedImages(request.images)).join("\n");
   const details = [request.details?.trim(), attachments].filter(Boolean).join("\n\n") || null;
@@ -315,7 +314,7 @@ export async function createTaskFromBoard(request: NewTaskRequest): Promise<Boar
       stage: "idea",
       status: null,
       approvePlan: request.approvePlan,
-      cwd: folder ?? homedir(),
+      cwd: NEW_TASK_FOLDER,
       at,
     });
   } finally {
@@ -358,7 +357,6 @@ export function parseNewTask(body: Record<string, unknown>): NewTaskRequest {
     details: text("details"),
     images: parseUploadedImages(body.images),
     project: text("project"),
-    folder: text("folder"),
     approvePlan: body.approvePlan !== false,
     start: body.start === true,
   };

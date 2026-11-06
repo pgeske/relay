@@ -7,8 +7,6 @@ struct TaskBoard: Decodable, Sendable {
     var lanes: [TaskLane]
     var projects: [Project]
     var needsYou: Int
-    /// Folders a new task can start in, most recent first.
-    var folders: [String]
 }
 
 struct TaskLane: Decodable, Sendable, Identifiable {
@@ -173,7 +171,6 @@ struct NewTask: Encodable, Sendable {
     /// Screenshots pasted into its details; the server saves them and lists their paths in its details.
     var images: [Image]
     var project: String
-    var folder: String
     var approvePlan: Bool
     /// Start a session on it now, rather than keeping it as an idea.
     var start: Bool

@@ -24,8 +24,6 @@ const LANES: { id: TaskLane; title: string; hint: string; hot: boolean }[] = [
 ];
 
 const DONE_SHOWN_MS = 14 * 24 * 60 * 60 * 1000;
-/** How many folders the new-task sheet suggests. */
-const FOLDERS_SHOWN = 8;
 
 /** What a task card's controls ask relay's server: `POST /api/board/tasks/actions/<action>` with the card's `id`. */
 export const TASK_ACTIONS = ["start", "approve-plan", "open", "ship", "send-back", "pause", "resume", "unpause", "done", "reopen", "delete"] as const;
@@ -207,8 +205,6 @@ export interface TaskBoardView {
   lanes: TaskLaneView[];
   projects: ProjectView[];
   needsYou: number;
-  /** Folders a new task can start in: its recent tasks', then open sessions'. */
-  folders: string[];
 }
 
 /** How a PR card on the PR board names the task it's part of. */
@@ -539,10 +535,6 @@ export function taskBoardView(inputs: TaskInputs, home: string): TaskBoardView {
   const open = lanes.filter((lane) => lane.id !== "done").flatMap((lane) => lane.cards);
   const needsYou = lanes.filter((lane) => lane.hot).flatMap((lane) => lane.cards);
 
-  const folders = [
-    ...inputs.tasks.toSorted((a, b) => b.updatedAt.localeCompare(a.updatedAt)).flatMap((task) => (task.cwd ? [task.cwd] : [])),
-    ...[...inputs.sessionInfo.values()].filter((session) => session.live).flatMap((session) => (session.cwd ? [session.cwd] : [])),
-  ];
   return {
     lanes,
     projects: inputs.projects.map((project) => ({
@@ -552,7 +544,6 @@ export function taskBoardView(inputs: TaskInputs, home: string): TaskBoardView {
       needsYou: needsYou.filter((card) => card.project?.id === project.id).length,
     })),
     needsYou: needsYou.length,
-    folders: [...new Set(folders)].slice(0, FOLDERS_SHOWN),
   };
 }
 

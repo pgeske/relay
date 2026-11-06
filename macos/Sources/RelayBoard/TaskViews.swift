@@ -747,8 +747,8 @@ private struct DoneRow: View {
     }
 }
 
-/// Jots down a task: what you want done, and optionally where, under which project, and whether you
-/// approve its plan first. Start opens a session on it right away; Save as Idea keeps it for later.
+/// Jots down a task: what you want done, anything the agent should know, its project, and whether you
+/// approve its plan first. Start (⌘↩) opens a session on it right away; Save as Idea keeps it for later.
 struct NewTaskSheet: View {
     let project: Project?
 
@@ -758,91 +758,122 @@ struct NewTaskSheet: View {
     @State private var details = ""
     @State private var screenshots: [Screenshot] = []
     @State private var projectName = ""
-    @State private var folder = ""
+    /// Typing a new project's name, in place of the project chip.
+    @State private var namingProject = false
     @State private var approvePlan = true
-    @FocusState private var titleFocused: Bool
+    @FocusState private var focus: Field?
+
+    private enum Field { case title, projectName }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            Form {
-                TextField("Task", text: $title, prompt: Text("What do you want done?"))
-                    .focused($titleFocused)
-                // Its own full-width row, so what you type starts at the left like a note, rather
-                // than hugging the right edge the way a form's labeled fields do.
-                VStack(alignment: .leading, spacing: 8) {
-                    Text("Details")
-                    DetailsEditor(text: $details, placeholder: "Anything the agent should know (optional). Paste or drop screenshots here.") { pasted in
-                        screenshots += pasted
-                    }
-                    .frame(height: 96 * Zoom.shared.scale)
-                    if !screenshots.isEmpty { screenshotStrip }
+            VStack(alignment: .leading, spacing: 14) {
+                Text("New Task")
+                    .font(.zoomed(size: 11, weight: .semibold))
+                    .foregroundStyle(.secondary)
+                    .textCase(.uppercase)
+                    .kerning(0.6)
+                TextField("Task", text: $title, prompt: Text("What do you want done?"), axis: .vertical)
+                    .textFieldStyle(.plain)
+                    .font(.zoomed(size: 22, weight: .semibold))
+                    .lineLimit(1...3)
+                    .focused($focus, equals: .title)
+                DetailsEditor(text: $details, placeholder: "Anything the agent should know: context, links, what done looks like. Paste or drop screenshots here too.", onSubmit: { submit(start: true) }) { pasted in
+                    screenshots += pasted
                 }
-                HStack {
-                    TextField("Project", text: $projectName, prompt: Text("None"))
-                    if !projects.isEmpty {
-                        Menu {
-                            Button("None") { projectName = "" }
-                            Divider()
-                            ForEach(projects) { project in Button(project.name) { projectName = project.name } }
-                        } label: {
-                            Image(systemName: "chevron.up.chevron.down")
-                        }
-                        .menuStyle(.button)
-                        .menuIndicator(.hidden)
-                        .fixedSize()
-                        .help("Pick a project")
-                    }
-                }
-                HStack {
-                    TextField("Folder", text: $folder, prompt: Text("~"))
-                    Menu {
-                        ForEach(folders, id: \.self) { path in Button(path) { folder = path } }
-                        if !folders.isEmpty { Divider() }
-                        Button("Choose…") { chooseFolder() }
-                    } label: {
-                        Image(systemName: "folder")
-                    }
-                    .menuStyle(.button)
-                    .menuIndicator(.hidden)
-                    .fixedSize()
-                    .help("Where its session starts")
-                }
-                Toggle("Approve its plan before the agent starts on it", isOn: $approvePlan)
+                .frame(minHeight: 200 * Zoom.shared.scale)
+                if !screenshots.isEmpty { screenshotStrip }
             }
-            .formStyle(.grouped)
-            HStack {
-                Button("Cancel", role: .cancel) { dismiss() }
-                    .keyboardShortcut(.cancelAction)
-                Spacer()
-                if model.isCreating { ProgressView().controlSize(.small) }
-                Button("Save as Idea") { submit(start: false) }
-                    .disabled(!ready)
-                Button("Start") { submit(start: true) }
-                    .keyboardShortcut(.defaultAction)
-                    .disabled(!ready)
-            }
-            .padding([.horizontal, .bottom], 20)
+            .padding(.horizontal, 28)
+            .padding(.top, 24)
+            .padding(.bottom, 18)
+            Divider()
+            footer
+                .padding(.horizontal, 20)
+                .padding(.vertical, 14)
         }
         .font(.zoomed(.body))
-        .frame(width: 520)
+        .frame(width: 640)
         .onAppear {
             projectName = project?.name ?? ""
-            folder = folders.first ?? "~"
-            titleFocused = true
+            focus = .title
+        }
+    }
+
+    /// The task's options as chips on the left, then the ways out of the sheet.
+    private var footer: some View {
+        HStack(spacing: 8) {
+            projectChip
+            Toggle(isOn: $approvePlan) {
+                Label("Approve plan first", systemImage: approvePlan ? "checkmark.circle.fill" : "circle")
+            }
+            .toggleStyle(ChipToggleStyle())
+            .help("Review the agent's plan on the board before it starts the work")
+            Spacer(minLength: 12)
+            if model.isCreating { ProgressView().controlSize(.small) }
+            Button("Cancel", role: .cancel) { dismiss() }
+                .keyboardShortcut(.cancelAction)
+                .buttonStyle(.plain)
+                .foregroundStyle(.secondary)
+                .padding(.horizontal, 6)
+            Button("Save as Idea") { submit(start: false) }
+                .buttonStyle(.glass)
+                .disabled(!ready)
+            Button { submit(start: true) } label: {
+                HStack(spacing: 6) {
+                    Text("Start")
+                    Text("⌘↩").font(.zoomed(.callout)).opacity(0.7)
+                }
+            }
+            .buttonStyle(.glassProminent)
+            .keyboardShortcut(.return, modifiers: .command)
+            .disabled(!ready)
+        }
+        .controlSize(.large)
+    }
+
+    /// The project it goes under: pick one, none, or name a new one in place.
+    @ViewBuilder private var projectChip: some View {
+        if namingProject {
+            TextField("Project", text: $projectName, prompt: Text("New project"))
+                .textFieldStyle(.plain)
+                .focused($focus, equals: .projectName)
+                .frame(width: 140)
+                .modifier(Chip(on: true))
+                .onSubmit { namingProject = false }
+                .onChange(of: focus) { if focus != .projectName { namingProject = false } }
+        } else {
+            Menu {
+                Button("None") { projectName = "" }
+                if !projects.isEmpty { Divider() }
+                ForEach(projects) { project in Button(project.name) { projectName = project.name } }
+                Divider()
+                Button("New Project…") {
+                    projectName = ""
+                    namingProject = true
+                    focus = .projectName
+                }
+            } label: {
+                Label(projectName.isEmpty ? "No project" : projectName, systemImage: "folder")
+                    .lineLimit(1)
+                    .modifier(Chip(on: !projectName.isEmpty))
+            }
+            .menuStyle(.button)
+            .buttonStyle(.plain)
+            .menuIndicator(.hidden)
+            .fixedSize()
+            .help("The project it goes under")
         }
     }
 
     private var projects: [Project] { model.board?.tasks?.projects ?? [] }
-    private var folders: [String] {
-        let home = URL.homeDirectory.path(percentEncoded: false).replacing(/\/$/, with: "")
-        return (model.board?.tasks?.folders ?? []).map { $0 == home ? "~" : $0.hasPrefix(home + "/") ? "~" + $0.dropFirst(home.count) : $0 }
-    }
 
     private var ready: Bool { !title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && !model.isCreating }
 
     private func submit(start: Bool) {
+        guard ready else { return }
         let images = screenshots.map { NewTask.Image(base64: $0.data.base64EncodedString(), mimeType: $0.mimeType) }
-        let task = NewTask(title: title, details: details, images: images, project: projectName, folder: folder, approvePlan: approvePlan, start: start)
+        let task = NewTask(title: title, details: details, images: images, project: projectName, approvePlan: approvePlan, start: start)
         Task {
             if await model.create(task) { dismiss() }
         }
@@ -874,13 +905,29 @@ struct NewTaskSheet: View {
         }
         .scrollIndicators(.never)
     }
+}
 
-    private func chooseFolder() {
-        let panel = NSOpenPanel()
-        panel.canChooseDirectories = true
-        panel.canChooseFiles = false
-        panel.allowsMultipleSelection = false
-        panel.prompt = "Choose"
-        if panel.runModal() == .OK, let url = panel.url { folder = url.path(percentEncoded: false) }
+/// A small capsule for a new task's options: tinted with the accent color when it's set.
+private struct Chip: ViewModifier {
+    let on: Bool
+
+    func body(content: Content) -> some View {
+        content
+            .font(.zoomed(.callout).weight(.medium))
+            .foregroundStyle(on ? AnyShapeStyle(.tint) : AnyShapeStyle(.secondary))
+            .padding(.horizontal, 10)
+            .padding(.vertical, 5)
+            .background(on ? AnyShapeStyle(.tint.opacity(0.15)) : AnyShapeStyle(.quaternary.opacity(0.6)), in: .capsule)
+            .contentShape(.capsule)
+    }
+}
+
+/// A toggle drawn as a `Chip` that flips when clicked.
+private struct ChipToggleStyle: ToggleStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        Button { configuration.isOn.toggle() } label: {
+            configuration.label.modifier(Chip(on: configuration.isOn))
+        }
+        .buttonStyle(.plain)
     }
 }

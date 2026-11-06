@@ -53,15 +53,20 @@ struct Screenshot: Identifiable {
 
 /// A plain-text box for a task's details that takes screenshots too: pasting or dropping an image
 /// hands it to `onScreenshots` instead of the text. SwiftUI's text fields drop pasted images.
+/// ⌘↩ calls `onSubmit`: SwiftUI's keyboard shortcuts don't hear keys typed into an AppKit text view.
 struct DetailsEditor: NSViewRepresentable {
     @Binding var text: String
     let placeholder: String
+    let onSubmit: () -> Void
     let onScreenshots: ([Screenshot]) -> Void
 
     func makeNSView(context: Context) -> NSScrollView {
         let scrollView = ScreenshotTextView.scrollableTextView()
         scrollView.drawsBackground = false
         scrollView.borderType = .noBorder
+        // Only while scrolling, so a short note doesn't sit beside an empty scroll track.
+        scrollView.autohidesScrollers = true
+        scrollView.scrollerStyle = .overlay
         let textView = scrollView.documentView as! ScreenshotTextView
         textView.delegate = context.coordinator
         textView.isRichText = false
@@ -80,6 +85,7 @@ struct DetailsEditor: NSViewRepresentable {
         context.coordinator.parent = self
         let textView = scrollView.documentView as! ScreenshotTextView
         textView.onScreenshots = onScreenshots
+        textView.onSubmit = onSubmit
         textView.placeholder = placeholder
         let font = NSFont.systemFont(ofSize: BoardTextStyle.body.rawValue * Zoom.shared.scale)
         if textView.font != font {
@@ -106,12 +112,22 @@ struct DetailsEditor: NSViewRepresentable {
 /// The text view behind `DetailsEditor`: plain text, but images pasted or dropped on it become screenshots.
 final class ScreenshotTextView: NSTextView {
     var onScreenshots: ([Screenshot]) -> Void = { _ in }
+    var onSubmit: () -> Void = {}
     var placeholder = "" { didSet { needsDisplay = true } }
 
     /// A plain-text view turns Paste off when the clipboard holds only an image, so ⌘V would never reach `paste`.
     override func validateUserInterfaceItem(_ item: any NSValidatedUserInterfaceItem) -> Bool {
         if item.action == #selector(paste(_:)), Screenshot.isOn(.general) { return true }
         return super.validateUserInterfaceItem(item)
+    }
+
+    override func keyDown(with event: NSEvent) {
+        let isReturn = event.keyCode == 36 || event.keyCode == 76  // Return, or Enter on a keypad
+        if isReturn, event.modifierFlags.intersection(.deviceIndependentFlagsMask) == .command {
+            onSubmit()
+        } else {
+            super.keyDown(with: event)
+        }
     }
 
     override func paste(_ sender: Any?) {
@@ -142,7 +158,9 @@ final class ScreenshotTextView: NSTextView {
     override func draw(_ dirtyRect: NSRect) {
         super.draw(dirtyRect)
         guard string.isEmpty, let font else { return }
-        let origin = NSPoint(x: textContainerOrigin.x + (textContainer?.lineFragmentPadding ?? 0), y: textContainerOrigin.y)
-        (placeholder as NSString).draw(at: origin, withAttributes: [.font: font, .foregroundColor: NSColor.placeholderTextColor])
+        // Wrapped to the text's width, so a long placeholder runs onto more lines instead of off the edge.
+        let inset = textContainer?.lineFragmentPadding ?? 0
+        let rect = NSRect(x: textContainerOrigin.x + inset, y: textContainerOrigin.y, width: bounds.width - textContainerOrigin.x - 2 * inset, height: bounds.height)
+        (placeholder as NSString).draw(in: rect, withAttributes: [.font: font, .foregroundColor: NSColor.placeholderTextColor])
     }
 }
