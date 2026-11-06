@@ -768,11 +768,25 @@ struct NewTaskSheet: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             VStack(alignment: .leading, spacing: 14) {
-                Text("New Task")
-                    .font(.zoomed(size: 11, weight: .semibold))
-                    .foregroundStyle(.secondary)
-                    .textCase(.uppercase)
-                    .kerning(0.6)
+                HStack {
+                    Text("New Task")
+                        .font(.zoomed(size: 11, weight: .semibold))
+                        .foregroundStyle(.secondary)
+                        .textCase(.uppercase)
+                        .kerning(0.6)
+                    Spacer()
+                    Button { dismiss() } label: {
+                        Image(systemName: "xmark")
+                            .font(.zoomed(size: 10, weight: .bold))
+                            .foregroundStyle(.secondary)
+                            .frame(width: 22 * Zoom.shared.scale, height: 22 * Zoom.shared.scale)
+                            .background(.quaternary.opacity(0.6), in: .circle)
+                            .contentShape(.circle)
+                    }
+                    .buttonStyle(.plain)
+                    .keyboardShortcut(.cancelAction)
+                    .help("Close (Esc)")
+                }
                 TextField("Task", text: $title, prompt: Text("What do you want done?"), axis: .vertical)
                     .textFieldStyle(.plain)
                     .font(.zoomed(size: 22, weight: .semibold))
@@ -793,42 +807,49 @@ struct NewTaskSheet: View {
                 .padding(.vertical, 14)
         }
         .font(.zoomed(.body))
-        .frame(width: 640)
+        .frame(width: 640 * Zoom.shared.scale)
         .onAppear {
             projectName = project?.name ?? ""
             focus = .title
         }
     }
 
-    /// The task's options as chips on the left, then the ways out of the sheet.
+    /// The task's options as chips on the left, then its two ways in: keep it as an idea, or start it.
     private var footer: some View {
         HStack(spacing: 8) {
             projectChip
             Toggle(isOn: $approvePlan) {
                 Label("Approve plan first", systemImage: approvePlan ? "checkmark.circle.fill" : "circle")
+                    .lineLimit(1)
             }
             .toggleStyle(ChipToggleStyle())
+            .fixedSize()
             .help("Review the agent's plan on the board before it starts the work")
             Spacer(minLength: 12)
             if model.isCreating { ProgressView().controlSize(.small) }
-            Button("Cancel", role: .cancel) { dismiss() }
-                .keyboardShortcut(.cancelAction)
-                .buttonStyle(.plain)
-                .foregroundStyle(.secondary)
-                .padding(.horizontal, 6)
-            Button("Save as Idea") { submit(start: false) }
-                .buttonStyle(.glass)
-                .disabled(!ready)
+            Button { submit(start: false) } label: {
+                Label("Save as Idea", systemImage: "lightbulb")
+                    .font(.zoomed(.body).weight(.medium))
+                    .padding(.horizontal, 2)
+            }
+            .buttonStyle(.glass)
+            .disabled(!ready)
+            .help("Keep it in Ideas without starting a session")
             Button { submit(start: true) } label: {
                 HStack(spacing: 6) {
-                    Text("Start")
-                    Text("⌘↩").font(.zoomed(.callout)).opacity(0.7)
+                    Label("Start", systemImage: "play.fill")
+                        .font(.zoomed(.body).weight(.semibold))
+                    Text("⌘↩").font(.zoomed(.callout)).opacity(0.65)
                 }
+                .padding(.horizontal, 2)
             }
-            .buttonStyle(.glassProminent)
+            .buttonStyle(StartButtonStyle())
             .keyboardShortcut(.return, modifiers: .command)
             .disabled(!ready)
+            .help("Open a session on it now (⌘↩)")
         }
+        .lineLimit(1)
+        .fixedSize(horizontal: false, vertical: true)
         .controlSize(.large)
     }
 
@@ -929,5 +950,22 @@ private struct ChipToggleStyle: ToggleStyle {
             configuration.label.modifier(Chip(on: configuration.isOn))
         }
         .buttonStyle(.plain)
+    }
+}
+
+/// The sheet's main button: solid accent color that dims only while it can't be pressed. Glass's
+/// prominent style fades whenever the window isn't the active one, which made Start look disabled.
+private struct StartButtonStyle: ButtonStyle {
+    @Environment(\.isEnabled) private var isEnabled
+
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .foregroundStyle(.white)
+            .padding(.horizontal, 14)
+            .padding(.vertical, 7)
+            .background(Color.accentColor.opacity(configuration.isPressed ? 0.8 : 1), in: .capsule)
+            .shadow(color: .accentColor.opacity(isEnabled ? 0.35 : 0), radius: 6, y: 2)
+            .opacity(isEnabled ? 1 : 0.4)
+            .contentShape(.capsule)
     }
 }
