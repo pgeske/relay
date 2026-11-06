@@ -19,6 +19,8 @@ struct BoardWindow: View {
                 .navigationSplitViewColumnWidth(min: 190 * zoom, ideal: 215 * zoom, max: 280 * zoom)
         } detail: {
             BoardContent(selection: selection ?? .tasks)
+                // Centered under the board you're looking at, not the whole window with its sidebar.
+                .overlay(alignment: .bottom) { ToastView() }
         }
         // Text without a font of its own, like sidebar rows, follows the zoom too.
         .font(.zoomed(.body))
@@ -41,7 +43,6 @@ struct BoardWindow: View {
             }
         }
         .sheet(isPresented: $model.composing) { NewTaskSheet(project: selectedProject) }
-        .overlay(alignment: .bottom) { ToastView() }
         .overlay { ShipCelebration() }
         .alert(model.confirming?.confirm.title ?? "", isPresented: confirmingBinding, presenting: model.confirming) { pending in
             if pending.confirm.destructive {
