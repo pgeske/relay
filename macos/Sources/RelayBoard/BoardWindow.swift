@@ -332,28 +332,61 @@ private struct ToastView: View {
     var body: some View {
         ZStack {
             if let toast = model.toast {
-                Label {
-                    Text(toast.message).lineLimit(3)
-                } icon: {
-                    Image(systemName: toast.failed ? "exclamationmark.triangle.fill" : toast.symbol)
-                        .foregroundStyle(toast.failed ? Color.boardRed : Color.boardGreen)
-                }
-                .font(.zoomed(.callout).weight(.medium))
-                .padding(.horizontal, 16)
-                .padding(.vertical, 10)
-                .frame(maxWidth: 560)
-                .glassEffect(.regular, in: .rect(cornerRadius: 18))
-                .padding(.bottom, 22)
-                .transition(.move(edge: .bottom).combined(with: .opacity))
-                .id(toast.id)
-                .task(id: toast.id) {
-                    try? await Task.sleep(for: .seconds(5))
+                ToastPill(toast: toast) {
                     if model.toast?.id == toast.id { model.toast = nil }
                 }
-                .onTapGesture { model.toast = nil }
+                .padding(.bottom, 26)
+                // Rises out of the bottom edge with a little give, and settles away in place.
+                .transition(.asymmetric(
+                    insertion: .offset(y: 24).combined(with: .scale(scale: 0.92, anchor: .bottom)).combined(with: .opacity),
+                    removal: .scale(scale: 0.96).combined(with: .opacity)
+                ))
+                .id(toast.id)
             }
         }
-        .animation(.spring(duration: 0.35), value: model.toast)
+        .animation(.spring(duration: 0.45, bounce: 0.3), value: model.toast)
+    }
+}
+
+/// One toast: its icon in a soft badge of its color, then the message, on a slightly tinted glass pill.
+private struct ToastPill: View {
+    let toast: Toast
+    let dismiss: () -> Void
+    @State private var hovering = false
+    @State private var shown = false
+
+    private var tint: Color { toast.failed ? .boardRed : .boardGreen }
+
+    var body: some View {
+        let zoom = Zoom.shared.scale
+        HStack(spacing: 10 * zoom) {
+            Image(systemName: toast.failed ? "exclamationmark.triangle.fill" : toast.symbol)
+                .font(.zoomed(size: 13, weight: .semibold))
+                .foregroundStyle(tint)
+                .symbolEffect(.bounce, value: shown)
+                .frame(width: 28 * zoom, height: 28 * zoom)
+                .background(tint.opacity(0.16), in: .circle)
+            Text(toast.message)
+                .font(.zoomed(.callout))
+                .lineLimit(2)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .padding(.leading, 7 * zoom)
+        .padding(.trailing, 18 * zoom)
+        .padding(.vertical, 7 * zoom)
+        .frame(maxWidth: 520 * zoom)
+        .glassEffect(.regular.tint(tint.opacity(0.07)).interactive(), in: .capsule)
+        .shadow(color: .black.opacity(0.22), radius: 18, y: 8)
+        .contentShape(.capsule)
+        .onTapGesture(perform: dismiss)
+        .onHover { hovering = $0 }
+        .onAppear { shown = true }
+        // Gone after a few seconds, but never from under the pointer: hovering holds it.
+        .task(id: hovering) {
+            guard !hovering else { return }
+            do { try await Task.sleep(for: .seconds(5)) } catch { return }
+            dismiss()
+        }
     }
 }
 
