@@ -132,6 +132,12 @@ describe("where a task goes", () => {
   });
 });
 
+test("sections run by who moves next: your move first, quickest to clear on top; then in motion, parked, untracked, shipped", () => {
+  const view = taskBoardView({ tasks: [], projects: [], events: new Map(), sessions: [], sessionInfo: new Map(), prs: new Map(), board: null, dismissed: new Set(), now }, "/home");
+  expect(view.lanes.map((lane) => lane.id)).toEqual(["ship", "needs-you", "working", "waiting", "paused", "ideas", "untracked", "done"]);
+  expect(view.lanes.filter((lane) => lane.hot).map((lane) => lane.id)).toEqual(["ship", "needs-you"]);
+});
+
 describe("an untracked session", () => {
   function untracked(status: "working" | "idle") {
     const info: TaskSessionInfo = { ...session(status), sessionFile: "/sessions/loose.jsonl", title: "Quick question" };

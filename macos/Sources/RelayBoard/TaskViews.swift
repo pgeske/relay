@@ -1,9 +1,10 @@
 import AppKit
 import SwiftUI
 
-/// Your tasks, section by section in the order they need you: what's waiting on you first, then
-/// what agents are on, what waits on others, what's paused, sessions no task knows about, ideas,
-/// and what's done. `project` narrows it to one project's tasks.
+/// Your tasks, section by section in the order the server sends, grouped by who moves next: your
+/// move (ready to ship, needs you), in motion (agent working, waiting on others), parked (paused,
+/// ideas), then sessions no task knows about, then what shipped. A gap sets each group apart.
+/// `project` narrows it to one project's tasks.
 struct TasksView: View {
     let project: Project?
 
@@ -24,7 +25,12 @@ struct TasksView: View {
         } else {
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 0, pinnedViews: [.sectionHeaders]) {
-                    ForEach(lanes) { TaskSection(lane: $0) }
+                    ForEach(lanes) { lane in
+                        if Self.groupStarts.contains(lane.id) {
+                            Color.clear.frame(height: 14 * Zoom.shared.scale)
+                        }
+                        TaskSection(lane: lane)
+                    }
                 }
                 .padding(.top, 6)
                 .padding(.bottom, 16)
@@ -42,6 +48,9 @@ struct TasksView: View {
             return lane
         }
     }
+
+    /// The first section of each group after the first.
+    private static let groupStarts: Set<String> = ["working", "paused", "untracked", "done"]
 }
 
 /// One section: its header, then its cards (or sessions) unless it's folded or empty.

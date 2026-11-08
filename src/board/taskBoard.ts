@@ -9,17 +9,20 @@ import { timeAgo, type Confirm, type Tone } from "./view.ts";
  * here; the app only lays it out.
  */
 
-/** Sections top to bottom; `hot` ones are waiting on you. */
-export type TaskLane = "needs-you" | "ship" | "working" | "waiting" | "paused" | "untracked" | "ideas" | "done";
+/**
+ * Sections top to bottom, by who moves next: your move (`hot`: what you can clear fastest first),
+ * then what's in motion without you, then what's parked, then sessions no task knows about and what shipped.
+ */
+export type TaskLane = "ship" | "needs-you" | "working" | "waiting" | "paused" | "ideas" | "untracked" | "done";
 
 const LANES: { id: TaskLane; title: string; hint: string; hot: boolean }[] = [
-  { id: "needs-you", title: "Needs you", hint: "A plan to approve, a question, or a PR to move along", hot: true },
   { id: "ship", title: "Ready to ship", hint: "Its agent delivered: look it over, then ship it", hot: true },
+  { id: "needs-you", title: "Needs you", hint: "A plan to approve, a question, or a PR to move along", hot: true },
   { id: "working", title: "Agent working", hint: "A session is on it right now", hot: false },
   { id: "waiting", title: "Waiting on others", hint: "A team, a review, a deploy", hot: false },
   { id: "paused", title: "Paused", hint: "Set aside, or no session open", hot: false },
-  { id: "untracked", title: "Not tracked", hint: "Open sessions no task knows about", hot: false },
   { id: "ideas", title: "Ideas", hint: "Not started yet", hot: false },
+  { id: "untracked", title: "Not tracked", hint: "Open sessions no task knows about", hot: false },
   { id: "done", title: "Shipped", hint: "Shipped in the last two weeks", hot: false },
 ];
 

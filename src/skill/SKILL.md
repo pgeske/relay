@@ -56,7 +56,7 @@ Rolled the cache out to all 6 staging datacenters. Search p99 stayed under 120ms
 EOF
 ```
 
-**When the board hands you a task** ("I started T-12 from the relay board"), this session is already on it: don't register it again. When the board asks you to track a session, register what it's working on with `relay task new`, or say it isn't a task. `relay task link <task>` puts this session on an existing task (say, a second session on the same work). `relay task show` prints this session's task; `relay task --json` lists them all, by section: `needs-you`, `ship`, `working`, `waiting`, `paused`, `untracked`, `ideas`, `done`.
+**When the board hands you a task** ("I started T-12 from the relay board"), this session is already on it: don't register it again. When the board asks you to track a session, register what it's working on with `relay task new`, or say it isn't a task. `relay task link <task>` puts this session on an existing task (say, a second session on the same work). `relay task show` prints this session's task; `relay task --json` lists them all, by section: `ship`, `needs-you`, `working`, `waiting`, `paused`, `ideas`, `untracked`, `done`.
 
 ## Pull requests
 

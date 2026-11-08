@@ -53,7 +53,7 @@ You need [tmux](https://github.com/tmux/tmux) and omp on your `PATH`. relay runs
 
 A **task** is one thing you want done: a fix, a rollout, an investigation, or getting another team to do something. It can take a few sessions and PRs, or none at all.
 
-Relay Board opens on your tasks, grouped by what they need: **Needs you**, **Ready to ship**, **Agent working**, **Waiting on others**, **Paused**, **Ideas**, and **Shipped**. Open sessions that no task knows about show up under **Not tracked**, so nothing slips through.
+Relay Board opens on your tasks, sorted by who moves next. **Your move** comes first: **Ready to ship**, then **Needs you**. Then what's moving without you: **Agent working** and **Waiting on others**. Then what's parked: **Paused** and **Ideas**. Open sessions that no task knows about show up under **Not tracked**, so nothing slips through, and **Shipped** sits at the bottom.
 
 Here's the loop:
 
