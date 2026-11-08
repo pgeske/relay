@@ -809,12 +809,13 @@ struct NewTaskSheet: View {
                 }
                 .frame(minHeight: 200 * Zoom.shared.scale)
                 if !screenshots.isEmpty { screenshotStrip }
+                options
             }
             .padding(.horizontal, 28)
             .padding(.top, 24)
             .padding(.bottom, 18)
             Divider()
-            footer
+            actions
                 .padding(.horizontal, 20)
                 .padding(.vertical, 14)
         }
@@ -827,9 +828,10 @@ struct NewTaskSheet: View {
         .task { await model.loadModelChoices() }
     }
 
-    /// The task's options as chips on the left, then its two ways in: keep it as an idea, or start it.
-    private var footer: some View {
-        HStack(spacing: 8) {
+    /// The task's options as chips under the details. They wrap onto another line rather than crowd
+    /// the buttons when a long model or project name (or a smaller zoom) leaves too little room.
+    private var options: some View {
+        FlowLayout(spacing: 8) {
             projectChip
             Toggle(isOn: $approvePlan) {
                 Label("Approve plan first", systemImage: approvePlan ? "checkmark.circle.fill" : "circle")
@@ -839,7 +841,14 @@ struct NewTaskSheet: View {
             .fixedSize()
             .help("Review the agent's plan on the board before it starts the work")
             modelChip
-            Spacer(minLength: 12)
+        }
+        .controlSize(.large)
+    }
+
+    /// Its two ways in, on a row of their own so they always show in full: keep it as an idea, or start it.
+    private var actions: some View {
+        HStack(spacing: 10) {
+            Spacer(minLength: 0)
             if model.isCreating { ProgressView().controlSize(.small) }
             Button { submit(start: false) } label: {
                 Label("Save as Idea", systemImage: "lightbulb")
@@ -847,6 +856,7 @@ struct NewTaskSheet: View {
                     .padding(.horizontal, 2)
             }
             .buttonStyle(.glass)
+            .fixedSize()
             .disabled(!ready)
             .help("Keep it in Ideas without starting a session")
             Button { submit(start: true) } label: {
@@ -858,12 +868,12 @@ struct NewTaskSheet: View {
                 .padding(.horizontal, 2)
             }
             .buttonStyle(StartButtonStyle())
+            .fixedSize()
             .keyboardShortcut(.return, modifiers: .command)
             .disabled(!ready)
             .help("Open a session on it now (⌘↩)")
         }
         .lineLimit(1)
-        .fixedSize(horizontal: false, vertical: true)
         .controlSize(.large)
     }
 
@@ -1015,6 +1025,55 @@ private struct Chip: ViewModifier {
             .padding(.vertical, 5)
             .background(on ? AnyShapeStyle(.tint.opacity(0.15)) : AnyShapeStyle(.quaternary.opacity(0.6)), in: .capsule)
             .contentShape(.capsule)
+    }
+}
+
+/// Lays its views out left to right, starting a new line whenever the next one wouldn't fit.
+private struct FlowLayout: Layout {
+    let spacing: CGFloat
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        let lines = lines(for: subviews, width: proposal.width ?? .infinity)
+        let width = lines.map(\.width).max() ?? 0
+        let height = lines.map(\.height).reduce(0, +) + spacing * CGFloat(max(lines.count - 1, 0))
+        return CGSize(width: width, height: height)
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        var y = bounds.minY
+        for line in lines(for: subviews, width: bounds.width) {
+            var x = bounds.minX
+            for index in line.indices {
+                let size = subviews[index].sizeThatFits(.unspecified)
+                subviews[index].place(at: CGPoint(x: x, y: y + (line.height - size.height) / 2), proposal: .unspecified)
+                x += size.width + spacing
+            }
+            y += line.height + spacing
+        }
+    }
+
+    private struct Line {
+        var indices: [Int] = []
+        var width: CGFloat = 0
+        var height: CGFloat = 0
+    }
+
+    private func lines(for subviews: Subviews, width maxWidth: CGFloat) -> [Line] {
+        var lines: [Line] = []
+        var line = Line()
+        for (index, subview) in subviews.enumerated() {
+            let size = subview.sizeThatFits(.unspecified)
+            let needed = line.indices.isEmpty ? size.width : line.width + spacing + size.width
+            if needed > maxWidth, !line.indices.isEmpty {
+                lines.append(line)
+                line = Line()
+            }
+            line.width = line.indices.isEmpty ? size.width : line.width + spacing + size.width
+            line.height = max(line.height, size.height)
+            line.indices.append(index)
+        }
+        if !line.indices.isEmpty { lines.append(line) }
+        return lines
     }
 }
 
