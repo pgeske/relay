@@ -55,6 +55,8 @@ export interface Task {
   doneAt: string | null;
   /** When you set it aside on the board; null while it's in play. It stays paused until you resume it, ship it, or its agent delivers. */
   pausedAt: string | null;
+  /** When relay's watcher last reported for its agent, which forgot to; null once the agent reports itself. */
+  autoReportedAt: string | null;
 }
 
 /** One step in a task's history, as its card's details list it. */
@@ -81,6 +83,8 @@ export interface TaskEvent {
   /** The stage the task was in after it. */
   stage: TaskStage;
   text: string | null;
+  /** Relay's watcher reported it, not the agent. */
+  auto: boolean;
 }
 
 /** A session working on a task. A session can move on to another task; the one it linked to last is its current one. */
@@ -122,6 +126,7 @@ interface TaskRow {
   finish_note: string | null;
   done_at: string | null;
   paused_at: string | null;
+  auto_reported_at: string | null;
 }
 
 const STAGE_CHECK = `CHECK (stage IN (${TASK_STAGES.map((stage) => `'${stage}'`).join(", ")}))`;
@@ -168,7 +173,8 @@ export function createTaskTables(db: Database): void {
     done_at TEXT,
     paused_at TEXT,
     model TEXT,
-    thinking_level TEXT
+    thinking_level TEXT,
+    auto_reported_at TEXT
   )`);
   // Tasks went straight to done before you checked them.
   const taskColumns = db.query<{ name: string }, []>("SELECT name FROM pragma_table_info('tasks')").all();
@@ -183,14 +189,19 @@ export function createTaskTables(db: Database): void {
     db.run("ALTER TABLE tasks ADD COLUMN model TEXT");
     db.run("ALTER TABLE tasks ADD COLUMN thinking_level TEXT");
   }
+  // Only agents reported on tasks before relay's watcher filled in for them.
+  if (!taskColumns.some((column) => column.name === "auto_reported_at")) db.run("ALTER TABLE tasks ADD COLUMN auto_reported_at TEXT");
   db.run(`CREATE TABLE IF NOT EXISTS task_events (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     task_id INTEGER NOT NULL,
     at TEXT NOT NULL,
     kind TEXT NOT NULL,
     stage TEXT NOT NULL,
-    text TEXT
+    text TEXT,
+    auto INTEGER NOT NULL DEFAULT 0
   )`);
+  const eventColumns = db.query<{ name: string }, []>("SELECT name FROM pragma_table_info('task_events')").all();
+  if (!eventColumns.some((column) => column.name === "auto")) db.run("ALTER TABLE task_events ADD COLUMN auto INTEGER NOT NULL DEFAULT 0");
   db.run(`CREATE TABLE IF NOT EXISTS task_sessions (
     task_id INTEGER NOT NULL,
     session_file TEXT NOT NULL,
@@ -237,11 +248,12 @@ function toTask(row: TaskRow): Task {
     finishNote: row.finish_note,
     doneAt: row.done_at,
     pausedAt: row.paused_at,
+    autoReportedAt: row.auto_reported_at,
   };
 }
 
-function addEvent(db: Database, taskId: number, at: string, kind: TaskEventKind, stage: TaskStage, text: string | null): void {
-  db.query("INSERT INTO task_events (task_id, at, kind, stage, text) VALUES (?, ?, ?, ?, ?)").run(taskId, at, kind, stage, text);
+function addEvent(db: Database, taskId: number, at: string, kind: TaskEventKind, stage: TaskStage, text: string | null, auto = false): void {
+  db.query("INSERT INTO task_events (task_id, at, kind, stage, text, auto) VALUES (?, ?, ?, ?, ?, ?)").run(taskId, at, kind, stage, text, auto ? 1 : 0);
 }
 
 export interface NewTask {
@@ -298,12 +310,15 @@ export function listTasks(db: Database): Task[] {
  * that names no blocker clears one: a block nobody repeats doesn't linger after it's resolved.
  * A report also means the task moved on from finished: more work, or done for good. Only shipping
  * or reopening it ends a pause; the agent reporting in doesn't take it off hold.
+ * `auto` marks a report relay's watcher made for an agent that forgot; the agent's next own report
+ * takes the mark off.
  */
 export interface TaskReport {
   stage?: TaskStage;
   status?: string;
   blocked: { on: BlockedOn; reason: string | null } | null;
   projectId?: number;
+  auto?: boolean;
   at: string;
 }
 
@@ -318,7 +333,7 @@ export function reportTask(db: Database, id: number, report: TaskReport): Task {
     db.query(
       `UPDATE tasks SET stage = $stage, status = $status, status_at = $statusAt, blocked_on = $blockedOn, blocked_reason = $blockedReason,
          blocked_at = $blockedAt, project_id = $projectId, updated_at = $at, finished_at = NULL, done_at = $doneAt,
-         paused_at = $pausedAt WHERE id = $id`,
+         paused_at = $pausedAt, auto_reported_at = $autoAt WHERE id = $id`,
     ).run({
       $id: id,
       $stage: stage,
@@ -331,34 +346,37 @@ export function reportTask(db: Database, id: number, report: TaskReport): Task {
       $at: report.at,
       $doneAt: stage === "done" ? (task.doneAt ?? report.at) : null,
       $pausedAt: stage === "done" || task.stage === "done" ? null : task.pausedAt,
+      $autoAt: report.auto ? report.at : null,
     });
-    if (stage !== task.stage) addEvent(db, id, report.at, stage === "done" ? "done" : task.stage === "done" ? "reopened" : "stage", stage, null);
-    if (report.status !== undefined) addEvent(db, id, report.at, "status", stage, report.status);
-    if (blocked && (task.blockedOn !== blocked.on || task.blockedReason !== blocked.reason)) addEvent(db, id, report.at, "blocked", stage, blocked.reason);
-    if (!blocked && task.blockedOn) addEvent(db, id, report.at, "unblocked", stage, null);
+    const auto = report.auto === true;
+    if (stage !== task.stage) addEvent(db, id, report.at, stage === "done" ? "done" : task.stage === "done" ? "reopened" : "stage", stage, null, auto);
+    if (report.status !== undefined) addEvent(db, id, report.at, "status", stage, report.status, auto);
+    if (blocked && (task.blockedOn !== blocked.on || task.blockedReason !== blocked.reason)) addEvent(db, id, report.at, "blocked", stage, blocked.reason, auto);
+    if (!blocked && task.blockedOn) addEvent(db, id, report.at, "unblocked", stage, null, auto);
     return getTask(db, id)!;
   })();
 }
 
 /**
  * Notes that the agent says the task is finished, and why. It isn't done until you ship it:
- * the board shows it to you to ship or send back, so it comes off pause.
+ * the board shows it to you to ship or send back, so it comes off pause. `auto` as for reports.
  */
-export function finishTask(db: Database, id: number, finish: { note: string | null; status?: string; at: string }): Task {
+export function finishTask(db: Database, id: number, finish: { note: string | null; status?: string; auto?: boolean; at: string }): Task {
   return db.transaction(() => {
     const task = getTask(db, id);
     if (!task) throw new Error(`no task T-${id}`);
     db.query(
       `UPDATE tasks SET finished_at = $at, finish_note = $note, status = $status, status_at = $statusAt,
-         blocked_on = NULL, blocked_reason = NULL, blocked_at = NULL, paused_at = NULL, updated_at = $at WHERE id = $id`,
+         blocked_on = NULL, blocked_reason = NULL, blocked_at = NULL, paused_at = NULL, updated_at = $at, auto_reported_at = $autoAt WHERE id = $id`,
     ).run({
       $id: id,
       $at: finish.at,
       $note: finish.note,
       $status: finish.status ?? task.status,
       $statusAt: finish.status !== undefined ? finish.at : task.statusAt,
+      $autoAt: finish.auto ? finish.at : null,
     });
-    addEvent(db, id, finish.at, "finished", task.stage, finish.status ?? null);
+    addEvent(db, id, finish.at, "finished", task.stage, finish.status ?? null, finish.auto === true);
     return getTask(db, id)!;
   })();
 }
@@ -444,12 +462,12 @@ export function deleteTask(db: Database, id: number): void {
 /** Each task's history, newest first, keyed by task id. */
 export function taskEvents(db: Database): Map<number, TaskEvent[]> {
   const rows = db
-    .query<{ task_id: number; at: string; kind: TaskEventKind; stage: TaskStage; text: string | null }, []>("SELECT * FROM task_events ORDER BY at DESC, id DESC")
+    .query<{ task_id: number; at: string; kind: TaskEventKind; stage: TaskStage; text: string | null; auto: number }, []>("SELECT * FROM task_events ORDER BY at DESC, id DESC")
     .all();
   const events = new Map<number, TaskEvent[]>();
   for (const row of rows) {
     const list = events.get(row.task_id) ?? [];
-    list.push({ taskId: row.task_id, at: row.at, kind: row.kind, stage: row.stage, text: row.text });
+    list.push({ taskId: row.task_id, at: row.at, kind: row.kind, stage: row.stage, text: row.text, auto: row.auto === 1 });
     events.set(row.task_id, list);
   }
   return events;

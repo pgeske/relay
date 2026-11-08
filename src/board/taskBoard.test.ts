@@ -30,6 +30,7 @@ function task(overrides: Partial<Task> = {}): Task {
     finishNote: null,
     doneAt: null,
     pausedAt: null,
+    autoReportedAt: null,
     ...overrides,
   };
 }

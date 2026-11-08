@@ -87,6 +87,8 @@ struct StageStep: Decodable, Sendable, Hashable {
 struct TaskStatus: Decodable, Sendable, Hashable {
     var text: String
     var ago: String
+    /// Relay's watcher reported it because the agent forgot.
+    var auto: Bool
 }
 
 struct Reason: Decodable, Sendable, Hashable {
@@ -141,6 +143,8 @@ struct HistoryItem: Decodable, Sendable, Hashable {
     var at: Date
     var text: String
     var stage: String
+    /// Relay's watcher reported it, not the agent.
+    var auto: Bool
 }
 
 struct UntrackedSession: Decodable, Sendable, Identifiable {

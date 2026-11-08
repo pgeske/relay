@@ -153,6 +153,11 @@ export async function adoptLoginShellEnv(): Promise<void> {
   await tmux(setEnvironmentArgs(env));
 }
 
+/** The environment relay's agents get: the user's login-shell one once it's known. */
+export function agentEnv(): Promise<NodeJS.ProcessEnv> {
+  return serverEnv;
+}
+
 /**
  * One tmux invocation that sets every variable in tmux's global environment. tmux reads
  * an argument ending in `;` as a command separator, and `\;` as a literal `;`.

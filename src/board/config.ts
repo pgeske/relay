@@ -26,18 +26,25 @@ export interface BoardConfig {
    * you by name. Empty means every team you are on, which can include busy admin teams.
    */
   reviewTeams: string[];
+  /** Relay's watcher, which reads a session when its agent stops (or goes quiet) and fixes the task's card if the agent didn't. */
+  autoStatus: {
+    enabled: boolean;
+    /** The omp model it asks: a `provider/id` (with an optional `:level`) or a role alias. Default: omp's fast `@smol` role. */
+    model: string;
+  };
 }
 
-const DEFAULTS: BoardConfig = { sources: [{}], gateChecks: [], mergedDays: 7, reviewTeams: [] };
+const DEFAULTS: BoardConfig = { sources: [{}], gateChecks: [], mergedDays: 7, reviewTeams: [], autoStatus: { enabled: true, model: "@smol" } };
 
 /** Reads ~/.config/relay/board.json; every field is optional. */
 export function loadBoardConfig(): BoardConfig {
   if (!existsSync(BOARD_CONFIG_PATH)) return DEFAULTS;
-  const raw = JSON.parse(readFileSync(BOARD_CONFIG_PATH, "utf8")) as Partial<BoardConfig>;
+  const raw = JSON.parse(readFileSync(BOARD_CONFIG_PATH, "utf8")) as Partial<Omit<BoardConfig, "autoStatus">> & { autoStatus?: Partial<BoardConfig["autoStatus"]> };
   return {
     sources: raw.sources?.length ? raw.sources : DEFAULTS.sources,
     gateChecks: raw.gateChecks ?? DEFAULTS.gateChecks,
     mergedDays: raw.mergedDays ?? DEFAULTS.mergedDays,
     reviewTeams: raw.reviewTeams ?? DEFAULTS.reviewTeams,
+    autoStatus: { ...DEFAULTS.autoStatus, ...raw.autoStatus },
   };
 }

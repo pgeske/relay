@@ -296,7 +296,7 @@ async function show(args: string[]): Promise<void> {
     // The section title often says the reason already ("Agent working").
     [lane.title, card.stageLabel, card.reason.text === lane.title ? null : `${card.reason.text}${card.reason.since ? ` (${card.reason.since})` : ""}`].filter(Boolean).join(" · "),
   ];
-  if (card.status) lines.push(`Status: ${card.status.text} (${card.status.ago})`);
+  if (card.status) lines.push(`Status: ${card.status.text} (${card.status.ago}${card.status.auto ? ", filled in by relay" : ""})`);
   if (card.plan) lines.push(`Plan: ${card.plan.awaiting ? "waiting for approval" : card.plan.approved ? "approved" : "recorded"}`);
   if (card.finish) lines.push(`Delivery note${card.finish.awaiting ? " (ready for the user to ship)" : ""}: ${card.finish.text ?? "none"}`);
   for (const pr of card.prs) lines.push(`PR ${pr.ref}: ${pr.state}`);

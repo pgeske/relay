@@ -38,10 +38,10 @@ test("the newest review of each PR wins, and re-reviewing a commit replaces its 
 
 test("the board remembers when it last sent each kind of request", () => {
   const db = openBoardStore(":memory:");
-  recordAgentRequest(db, "acme/api", 1, "review", "2026-10-30T01:00:00Z");
-  recordAgentRequest(db, "acme/api", 1, "fix-ci", "2026-10-30T02:00:00Z");
-  recordAgentRequest(db, "acme/api", 1, "review", "2026-10-30T03:00:00Z");
-  recordAgentRequest(db, "acme/api", 2, "merge", "2026-10-30T04:00:00Z");
+  recordAgentRequest(db, "acme/api", 1, "review", "2026-10-30T01:00:00Z", "abc123");
+  recordAgentRequest(db, "acme/api", 1, "fix-ci", "2026-10-30T02:00:00Z", null);
+  recordAgentRequest(db, "acme/api", 1, "review", "2026-10-30T03:00:00Z", "def456");
+  recordAgentRequest(db, "acme/api", 2, "merge", "2026-10-30T04:00:00Z", null);
   expect(agentRequests(db).get("acme/api#1")).toEqual({ review: "2026-10-30T03:00:00Z", "fix-ci": "2026-10-30T02:00:00Z" });
   expect(agentRequests(db).get("acme/api#2")).toEqual({ merge: "2026-10-30T04:00:00Z" });
 });

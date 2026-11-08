@@ -31,7 +31,7 @@ export const THINKING_LEVELS: Record<string, true> = {
 const MODELS_CACHE_MS = 5 * 60_000;
 const CONFIG_PATH = join(OMP_AGENT_DIR, "config.yml");
 /** launchd's PATH does not include ~/.local/bin, where the omp installer puts the binary. */
-const OMP_BINARY = [join(homedir(), ".local", "bin", "omp"), "/opt/homebrew/bin/omp", "/usr/local/bin/omp"].find((path) =>
+export const OMP_BINARY = [join(homedir(), ".local", "bin", "omp"), "/opt/homebrew/bin/omp", "/usr/local/bin/omp"].find((path) =>
   existsSync(path),
 ) ?? "omp";
 /** Dated snapshots (`claude-opus-4-20250514`) duplicate their alias and only clutter the picker. */
@@ -71,7 +71,7 @@ export async function listModels(): Promise<ModelOption[]> {
 }
 
 /** Splits `provider/id:level`, the role syntax config.yml uses, into its two halves. */
-function splitRoleSelector(raw: string): ModelState {
+export function splitRoleSelector(raw: string): ModelState {
   const colon = raw.lastIndexOf(":");
   const suffix = colon === -1 ? "" : raw.slice(colon + 1);
   if (THINKING_LEVELS[suffix] === true) return { model: raw.slice(0, colon), thinkingLevel: suffix };

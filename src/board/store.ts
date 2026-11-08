@@ -162,8 +162,12 @@ export function openBoardStore(path = BOARD_DB_PATH): Database {
     number INTEGER NOT NULL,
     action TEXT NOT NULL,
     requested_at TEXT NOT NULL,
+    head_sha TEXT,
     PRIMARY KEY (repo, number, action)
   )`);
+  // Requests didn't note the PR's head commit before relay's watcher recorded forgotten reviews.
+  const requestColumns = db.query<{ name: string }, []>("SELECT name FROM pragma_table_info('agent_requests')").all();
+  if (!requestColumns.some((column) => column.name === "head_sha")) db.run("ALTER TABLE agent_requests ADD COLUMN head_sha TEXT");
   // PRs the user said need no reviewer agent: they go straight to people, whatever commit they're at.
   db.run(`CREATE TABLE IF NOT EXISTS agent_review_skips (
     repo TEXT NOT NULL,
@@ -279,14 +283,23 @@ export function latestCiFixes(db: Database): Map<string, CiFix> {
   );
 }
 
-/** Notes that the board sent a PR's session a request; sending the same kind again moves it to `requestedAt`. */
-export function recordAgentRequest(db: Database, repo: string, number: number, action: AgentAction, requestedAt: string): void {
-  db.query("INSERT OR REPLACE INTO agent_requests (repo, number, action, requested_at) VALUES (?, ?, ?, ?)").run(
+/**
+ * Notes that the board sent a PR's session a request; sending the same kind again moves it to
+ * `requestedAt`. `headSha` is the PR's head commit then, null when GitHub couldn't be read.
+ */
+export function recordAgentRequest(db: Database, repo: string, number: number, action: AgentAction, requestedAt: string, headSha: string | null): void {
+  db.query("INSERT OR REPLACE INTO agent_requests (repo, number, action, requested_at, head_sha) VALUES (?, ?, ?, ?, ?)").run(
     repo,
     number,
     action,
     requestedAt,
+    headSha,
   );
+}
+
+/** The PR's head commit when the board last sent this request; null when unknown or never sent. */
+export function agentRequestHead(db: Database, repo: string, number: number, action: AgentAction): string | null {
+  return db.query<{ head_sha: string | null }, [string, number, string]>("SELECT head_sha FROM agent_requests WHERE repo = ? AND number = ? AND action = ?").get(repo, number, action)?.head_sha ?? null;
 }
 
 /** When the board last sent each request, keyed by "owner/repo#number", answered or not. */

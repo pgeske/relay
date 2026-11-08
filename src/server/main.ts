@@ -6,6 +6,7 @@ import { WebSocketServer } from "ws";
 import { ActionError, fetchBoardView, isLocalRequest, readActionBody, runBoardAction } from "../board/serve.ts";
 import { createChat, listChats, parseNewChat, readChatImage, readChatPage, runChatAction, type NewChatRequest } from "../board/chats.ts";
 import { createTaskFromBoard, parseNewTask, readJsonBody, runProjectAction, runTaskAction, type NewTaskRequest } from "../board/taskServe.ts";
+import { startWatcher } from "../board/watcher.ts";
 import { endLiveCall, recoverInterruptedCall, startLiveCall } from "./live.ts";
 import { askAnswerSteps, findPendingAsk, validateAskAnswers, type AskAnswer } from "./ask.ts";
 import { startSessionEvents } from "./events.ts";
@@ -630,6 +631,9 @@ export function runServer(): void {
   const checkForUpdate = () => void refreshUpdateNotice().catch(() => {});
   checkForUpdate();
   setInterval(checkForUpdate, UPDATE_CHECK_INTERVAL_MS).unref();
+
+  // Fixes task cards whose agents forget to report, as long as the server runs.
+  startWatcher();
 
   for (const signal of ["SIGINT", "SIGTERM"] as const) {
     process.on(signal, () => {

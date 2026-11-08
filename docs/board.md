@@ -18,6 +18,8 @@ Tasks sit in sections sorted by who moves next, with a gap between each group. Y
 
 Agents report through `relay task`, which the relay skill teaches them: they register a task when they start on one (`relay task new <title>`), report its stage, status, and what it's blocked on (`relay task update`), record their plan and wait for your approval (`relay task plan`), and say it's finished with a note on what they did and how they checked (`relay task done --summary`), which puts it in Ready to ship for you. PRs a task's session opens join the task on their own. `relay task` lists your tasks, and `relay task --json` gives agents the whole board. Tasks live in `~/.local/share/relay/board.db` with the rest of the board.
 
+Agents forget to report, or report minutes late, so relay's server watches each task's session and fills in for them. When an agent stops, or has worked three minutes without reporting, relay shows the end of its session to a small, fast model (omp's `@smol` role, asked through your own omp and its sign-in; relay holds no model keys) and corrects the card: the stage, a fresh status line, and once it stops, what it waits on: you (with the question), others (CI, reviewers, a deploy), or nothing because it says it's finished, which puts it in Ready to ship with its last message as the note. Whatever relay filled in reads **auto** on the card and in its history, and the agent's next own report replaces it. Relay leaves alone a paused, shipped, or delivered task, one whose plan waits for your approval, and a stop the agent's last step already explained (`relay task update --blocked-on …`). It does the same for a Review or Fix CI request whose session stopped without recording a result: it records the result from the session, its write-up quoting the agent's last message; a review only when no commits landed since the board asked for it. Each look is one model call of a few seconds, and only when an agent stops or goes quiet; turn it off, or pick the model, in the settings below.
+
 ## Chats
 
 **Chats** shows your omp sessions as conversations, like a chat app, so you can follow and talk to agents without switching to your terminal. The list on the left has every open session first (an amber spinner while it works, a green dot while it waits for you), then the closed ones from the last 30 days and every session a task has, grouped by day. Each row is the session's own icon and title, as omp names it, and how long ago it was active; hover for the task it's on. The search box filters by title, folder, or task.
@@ -70,7 +72,8 @@ The board reads GitHub through the [`gh`](https://cli.github.com) CLI. Settings 
   "sources": [{ "org": "my-org", "ghUser": "my-work-account" }],
   "gateChecks": ["merge-queue/gate"],
   "reviewTeams": ["my-org/my-team"],
-  "mergedDays": 7
+  "mergedDays": 7,
+  "autoStatus": { "enabled": true, "model": "@smol" }
 }
 ```
 
@@ -80,3 +83,4 @@ The board reads GitHub through the [`gh`](https://cli.github.com) CLI. Settings 
 | `gateChecks` | Checks that gate merging instead of testing code. They never count as CI running, and block the PR when they fail. |
 | `reviewTeams` | Teams whose review requests count as waiting on you. Default: every team you are on, which can include busy admin teams. |
 | `mergedDays` | How far back the Merged section goes. Default 7. |
+| `autoStatus` | Relay filling in task cards (and forgotten Review and Fix CI results) when agents don't report. `enabled` turns it on or off (default on); `model` is the omp model it asks, a `provider/id` with an optional `:level` or a role alias (default `@smol`, omp's fast role). |

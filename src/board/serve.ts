@@ -334,7 +334,7 @@ export async function runBoardAction(action: string, prRef: string): Promise<Boa
     const reopened = await promptSession(owner.sessionFile, card.live, name, REQUESTS[action].prompt(url, { approval, approvedBy: pr?.approvedBy ?? [] }));
     const store = openBoardStore();
     try {
-      recordAgentRequest(store, repo, number, action, new Date().toISOString());
+      recordAgentRequest(store, repo, number, action, new Date().toISOString(), pr?.headSha ?? null);
     } finally {
       store.close();
     }

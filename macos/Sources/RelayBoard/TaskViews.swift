@@ -307,16 +307,17 @@ private struct ReasonLine: View {
     }
 }
 
-/// The agent's latest report, in its words.
+/// The latest report, in the agent's words, or relay's when it filled in for an agent that forgot.
 private struct StatusText: View {
     let status: TaskStatus
 
     var body: some View {
-        Text("\(Text(status.text).foregroundStyle(.primary.opacity(0.85)))  \(Text(status.ago).foregroundStyle(.tertiary))")
+        Text("\(Text(status.text).foregroundStyle(.primary.opacity(0.85)))  \(Text(status.auto ? "\(status.ago) · auto" : status.ago).foregroundStyle(.tertiary))")
             .font(.zoomed(.subheadline))
             .lineLimit(3)
             .fixedSize(horizontal: false, vertical: true)
             .frame(maxWidth: .infinity, alignment: .leading)
+            .help(status.auto ? "Relay filled this in from the session because the agent didn't report it" : "")
     }
 }
 
@@ -643,6 +644,9 @@ private struct TaskDetailsPopover: View {
                                 .foregroundStyle(.tertiary)
                                 .frame(width: 64 * Zoom.shared.scale, alignment: .leading)
                             Text(item.text).fixedSize(horizontal: false, vertical: true)
+                            if item.auto {
+                                Text("auto").foregroundStyle(.tertiary).help("Relay filled this in from the session because the agent didn't report it")
+                            }
                             Spacer(minLength: 0)
                             Text(item.stage).foregroundStyle(.secondary)
                         }

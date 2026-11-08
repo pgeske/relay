@@ -144,6 +144,8 @@ export interface HistoryView {
   at: string;
   text: string;
   stage: string;
+  /** Relay's watcher reported it, not the agent. */
+  auto: boolean;
 }
 
 export interface TaskCardView {
@@ -158,8 +160,8 @@ export interface TaskCardView {
   stage: TaskStage;
   stageLabel: string;
   stages: StageView[];
-  /** The agent's latest report, and when. */
-  status: { text: string; ago: string } | null;
+  /** The latest report, and when; `auto` when relay's watcher made it because the agent forgot. */
+  status: { text: string; ago: string; auto: boolean } | null;
   reason: ReasonView;
   plan: PlanView | null;
   finish: FinishView | null;
@@ -461,7 +463,7 @@ function taskCard(task: Task, inputs: TaskInputs, places: Map<string, PrPlace>, 
     stage: task.stage,
     stageLabel: STAGE_LABELS[task.stage],
     stages: stagesView(task.stage),
-    status: task.status ? { text: task.status, ago: timeAgo(task.statusAt ?? task.updatedAt, now) } : null,
+    status: task.status ? { text: task.status, ago: timeAgo(task.statusAt ?? task.updatedAt, now), auto: task.autoReportedAt !== null } : null,
     reason: placement.reason,
     plan: task.plan
       ? {
@@ -501,7 +503,9 @@ function taskCard(task: Task, inputs: TaskInputs, places: Map<string, PrPlace>, 
       : null,
     steps,
     menu,
-    history: (inputs.events.get(task.id) ?? []).slice(0, HISTORY_SHOWN).map((event) => ({ at: event.at, text: EVENT_TEXT[event.kind](event), stage: STAGE_LABELS[event.stage] })),
+    history: (inputs.events.get(task.id) ?? [])
+      .slice(0, HISTORY_SHOWN)
+      .map((event) => ({ at: event.at, text: EVENT_TEXT[event.kind](event), stage: STAGE_LABELS[event.stage], auto: event.auto })),
     updatedAt: task.updatedAt,
     sortKey: placement.at,
   };
