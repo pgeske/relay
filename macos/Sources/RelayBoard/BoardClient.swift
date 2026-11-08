@@ -87,6 +87,15 @@ struct BoardClient: Sendable {
         try await post("api/board/tasks", body: try JSONEncoder().encode(task))
     }
 
+    /// Makes, renames, or deletes a project: `action` is create, rename, or delete.
+    func project(_ action: String, project: Int? = nil, name: String? = nil, parent: Int? = nil) async throws -> ActionResult {
+        var fields: [String: Any] = [:]
+        if let project { fields["project"] = project }
+        if let name { fields["name"] = name }
+        if let parent { fields["parent"] = parent }
+        return try await post("api/board/projects/\(action)", body: try JSONSerialization.data(withJSONObject: fields))
+    }
+
     /// The models omp can start a task's sessions on, and its default.
     func models() async throws -> ModelChoices {
         let (data, response) = try await send("api/models")

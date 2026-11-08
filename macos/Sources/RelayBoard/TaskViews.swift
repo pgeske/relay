@@ -38,13 +38,13 @@ struct TasksView: View {
         }
     }
 
-    /// The sections with only the project's tasks; sessions no task knows about belong to no project.
+    /// The sections with only the project's tasks and its subprojects'; sessions no task knows about belong to no project.
     private var shownLanes: [TaskLane] {
         guard let project else { return model.taskLanes }
         return model.taskLanes.compactMap { lane in
             guard lane.id != "untracked" else { return nil }
             var lane = lane
-            lane.cards = lane.cards.filter { $0.project?.id == project.id }
+            lane.cards = lane.cards.filter { card in card.project.map { project.ids.contains($0.id) } ?? false }
             return lane
         }
     }
@@ -189,7 +189,7 @@ struct TaskCardView: View {
                 .fontWeight(.medium)
                 .monospacedDigit()
                 .foregroundStyle(.secondary)
-            if let project = card.project { ProjectChip(name: project.name) }
+            if let project = card.project { ProjectChip(project: project) }
             Spacer(minLength: 4)
             Text(card.updatedAt, format: .relative(presentation: .numeric, unitsStyle: .narrow))
                 .foregroundStyle(.tertiary)
@@ -234,12 +234,12 @@ struct TaskChipView: View {
     }
 }
 
-/// The project a task belongs to, as a small muted chip.
+/// The project a task belongs to, as a small muted chip; hovering shows its full path.
 private struct ProjectChip: View {
-    let name: String
+    let project: ProjectRef
 
     var body: some View {
-        Label(name, systemImage: "folder")
+        Label(project.name, systemImage: "folder")
             .labelStyle(.titleAndIcon)
             .font(.zoomed(size: 9, weight: .semibold))
             .lineLimit(1)
@@ -247,7 +247,7 @@ private struct ProjectChip: View {
             .padding(.horizontal, 5)
             .padding(.vertical, 1.5)
             .background(Color.primary.opacity(0.07), in: .rect(cornerRadius: 4))
-            .help("Project: \(name)")
+            .help("Project: \(project.path)")
     }
 }
 
@@ -613,7 +613,7 @@ private struct TaskDetailsPopover: View {
         VStack(alignment: .leading, spacing: 10) {
             HStack(alignment: .firstTextBaseline, spacing: 6) {
                 Text(card.ref).foregroundStyle(.secondary).monospacedDigit()
-                if let project = card.project { ProjectChip(name: project.name) }
+                if let project = card.project { ProjectChip(project: project) }
                 Spacer()
                 Text(card.stageLabel).fontWeight(.semibold).foregroundStyle(taskColor(card.hue))
             }
@@ -741,7 +741,7 @@ private struct DoneRow: View {
             Circle().fill(taskColor(card.hue)).frame(width: 7 * Zoom.shared.scale)
             Text(card.ref).font(.zoomed(.caption)).monospacedDigit().foregroundStyle(.secondary).fixedSize()
             Text(card.title).font(.zoomed(.subheadline).weight(.medium)).truncationMode(.tail)
-            if let project = card.project { ProjectChip(name: project.name) }
+            if let project = card.project { ProjectChip(project: project) }
             Spacer(minLength: 8)
             Text(card.reason.text).font(.zoomed(.caption)).foregroundStyle(.tertiary).fixedSize()
             CardMenu { TaskMenuItems(card: card) }
@@ -824,7 +824,7 @@ struct NewTaskSheet: View {
         .font(.zoomed(.body))
         .frame(width: 640 * Zoom.shared.scale)
         .onAppear {
-            projectName = project?.name ?? ""
+            projectName = project?.path ?? ""
             focus = .title
         }
         .task { await model.loadModelChoices() }
@@ -882,10 +882,10 @@ struct NewTaskSheet: View {
     /// The project it goes under: pick one, none, or name a new one in place.
     @ViewBuilder private var projectChip: some View {
         if namingProject {
-            TextField("Project", text: $projectName, prompt: Text("New project"))
+            TextField("Project", text: $projectName, prompt: Text("New project, or Parent/Child"))
                 .textFieldStyle(.plain)
                 .focused($focus, equals: .projectName)
-                .frame(width: 140)
+                .frame(width: 190)
                 .modifier(Chip(on: true))
                 .onSubmit { namingProject = false }
                 .onChange(of: focus) { if focus != .projectName { namingProject = false } }
@@ -893,7 +893,7 @@ struct NewTaskSheet: View {
             Menu {
                 Button("None") { projectName = "" }
                 if !projects.isEmpty { Divider() }
-                ForEach(projects) { project in Button(project.name) { projectName = project.name } }
+                ForEach(projects) { project in Button(project.path) { projectName = project.path } }
                 Divider()
                 Button("New Project…") {
                     projectName = ""
@@ -974,7 +974,10 @@ struct NewTaskSheet: View {
         return "\(name) · \(ModelOption.levelLabel(level))"
     }
 
-    private var projects: [Project] { model.board?.tasks?.projects ?? [] }
+    /// Every project by its path, so subprojects sit right under their parents.
+    private var projects: [Project] {
+        (model.board?.tasks?.projects ?? []).sorted { $0.path.localizedStandardCompare($1.path) == .orderedAscending }
+    }
 
     private var ready: Bool { !title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && !model.isCreating }
 

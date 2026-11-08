@@ -14,9 +14,11 @@ export type TaskStage = (typeof TASK_STAGES)[number];
 export const BLOCKERS = ["me", "others"] as const;
 export type BlockedOn = (typeof BLOCKERS)[number];
 
+/** A named group of tasks. Projects nest: a subproject's `parentId` is the project it sits in. */
 export interface Project {
   id: number;
   name: string;
+  parentId: number | null;
   createdAt: string;
 }
 
@@ -127,9 +129,22 @@ const STAGE_CHECK = `CHECK (stage IN (${TASK_STAGES.map((stage) => `'${stage}'`)
 export function createTaskTables(db: Database): void {
   db.run(`CREATE TABLE IF NOT EXISTS projects (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
-    name TEXT NOT NULL UNIQUE COLLATE NOCASE,
+    name TEXT NOT NULL,
+    parent_id INTEGER,
     created_at TEXT NOT NULL
   )`);
+  // Projects were once one flat list, their names unique across it.
+  const projectColumns = db.query<{ name: string }, []>("SELECT name FROM pragma_table_info('projects')").all();
+  if (!projectColumns.some((column) => column.name === "parent_id")) {
+    db.transaction(() => {
+      db.run("ALTER TABLE projects RENAME TO flat_projects");
+      db.run("CREATE TABLE projects (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL, parent_id INTEGER, created_at TEXT NOT NULL)");
+      db.run("INSERT INTO projects (id, name, created_at) SELECT id, name, created_at FROM flat_projects");
+      db.run("DROP TABLE flat_projects");
+    })();
+  }
+  // Names are unique among a project's siblings, ignoring case.
+  db.run("CREATE UNIQUE INDEX IF NOT EXISTS projects_sibling_name ON projects (IFNULL(parent_id, 0), name COLLATE NOCASE)");
   db.run(`CREATE TABLE IF NOT EXISTS tasks (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     title TEXT NOT NULL,
@@ -440,18 +455,115 @@ export function taskEvents(db: Database): Map<number, TaskEvent[]> {
   return events;
 }
 
-/** The project named `name`, creating it if there's none yet; names ignore case. */
-export function ensureProject(db: Database, name: string, at: string): Project {
-  db.query("INSERT OR IGNORE INTO projects (name, created_at) VALUES (?, ?)").run(name, at);
-  const row = db.query<{ id: number; name: string; created_at: string }, [string]>("SELECT * FROM projects WHERE name = ?").get(name)!;
-  return { id: row.id, name: row.name, createdAt: row.created_at };
+interface ProjectRow {
+  id: number;
+  name: string;
+  parent_id: number | null;
+  created_at: string;
+}
+
+function toProject(row: ProjectRow): Project {
+  return { id: row.id, name: row.name, parentId: row.parent_id, createdAt: row.created_at };
+}
+
+/** Separates a project's name from its parents' in a path: "Relay/Sidebar" is Sidebar inside Relay. */
+export const PROJECT_PATH_SEPARATOR = "/";
+
+/** A project's name with its surrounding space trimmed; throws when it can't be one. */
+function projectName(name: string): string {
+  const trimmed = name.trim();
+  if (!trimmed) throw new Error("a project needs a name");
+  if (trimmed.includes(PROJECT_PATH_SEPARATOR)) throw new Error(`a project's name can't have a ${PROJECT_PATH_SEPARATOR} in it`);
+  return trimmed;
+}
+
+export function getProject(db: Database, id: number): Project | null {
+  const row = db.query<ProjectRow, [number]>("SELECT * FROM projects WHERE id = ?").get(id);
+  return row ? toProject(row) : null;
+}
+
+function findProject(db: Database, name: string, parentId: number | null): Project | null {
+  const row = db.query<ProjectRow, [string, number | null]>("SELECT * FROM projects WHERE name = ? COLLATE NOCASE AND parent_id IS ?").get(name, parentId);
+  return row ? toProject(row) : null;
+}
+
+/**
+ * The project at `path` ("Relay" or "Relay/Sidebar"), creating any of it there's none of yet.
+ * Names ignore case.
+ */
+export function ensureProject(db: Database, path: string, at: string): Project {
+  const names = path.split(PROJECT_PATH_SEPARATOR).map((name) => name.trim()).filter(Boolean);
+  if (names.length === 0) throw new Error("a project needs a name");
+  return db.transaction(() => {
+    let parentId: number | null = null;
+    let project: Project | undefined;
+    for (const name of names) {
+      project = findProject(db, name, parentId) ?? createProject(db, name, parentId, at);
+      parentId = project.id;
+    }
+    return project!;
+  })();
+}
+
+/** Makes a new project, inside `parentId` when it's a subproject; throws when its siblings have the name. */
+export function createProject(db: Database, name: string, parentId: number | null, at: string): Project {
+  const trimmed = projectName(name);
+  if (parentId !== null && !getProject(db, parentId)) throw new Error(`no project ${parentId}`);
+  if (findProject(db, trimmed, parentId)) throw new Error(`there's a project called ${trimmed} there already`);
+  const row = db
+    .query<ProjectRow, [string, number | null, string]>("INSERT INTO projects (name, parent_id, created_at) VALUES (?, ?, ?) RETURNING *")
+    .get(trimmed, parentId, at)!;
+  return toProject(row);
+}
+
+export function renameProject(db: Database, id: number, name: string): Project {
+  const trimmed = projectName(name);
+  const project = getProject(db, id);
+  if (!project) throw new Error(`no project ${id}`);
+  const clash = findProject(db, trimmed, project.parentId);
+  if (clash && clash.id !== id) throw new Error(`there's a project called ${trimmed} there already`);
+  db.query("UPDATE projects SET name = ? WHERE id = ?").run(trimmed, id);
+  return { ...project, name: trimmed };
+}
+
+/**
+ * Deletes a project, keeping everything in it: its tasks and subprojects move up into its parent
+ * (or out of any project, for a top-level one). Throws when a subproject would land next to a
+ * project with the same name, so nothing merges by surprise.
+ */
+export function deleteProject(db: Database, id: number): void {
+  db.transaction(() => {
+    const project = getProject(db, id);
+    if (!project) throw new Error(`no project ${id}`);
+    const children = db.query<ProjectRow, [number]>("SELECT * FROM projects WHERE parent_id = ?").all(id).map(toProject);
+    for (const child of children) {
+      const clash = findProject(db, child.name, project.parentId);
+      if (clash && clash.id !== id) throw new Error(`${project.name}'s ${child.name} would land next to another ${clash.name}; rename one of them first`);
+    }
+    db.query("UPDATE projects SET parent_id = ? WHERE parent_id = ?").run(project.parentId, id);
+    db.query("UPDATE tasks SET project_id = ? WHERE project_id = ?").run(project.parentId, id);
+    db.query("DELETE FROM projects WHERE id = ?").run(id);
+  })();
 }
 
 export function listProjects(db: Database): Project[] {
-  return db
-    .query<{ id: number; name: string; created_at: string }, []>("SELECT * FROM projects ORDER BY name COLLATE NOCASE")
-    .all()
-    .map((row) => ({ id: row.id, name: row.name, createdAt: row.created_at }));
+  return db.query<ProjectRow, []>("SELECT * FROM projects ORDER BY name COLLATE NOCASE").all().map(toProject);
+}
+
+/** Each project's path from the top ("Relay/Sidebar"), keyed by id. */
+export function projectPaths(projects: Project[]): Map<number, string> {
+  const byId = new Map(projects.map((project) => [project.id, project]));
+  const paths = new Map<number, string>();
+  const pathOf = (project: Project): string => {
+    const known = paths.get(project.id);
+    if (known !== undefined) return known;
+    const parent = project.parentId !== null ? byId.get(project.parentId) : undefined;
+    const path = parent ? `${pathOf(parent)}${PROJECT_PATH_SEPARATOR}${project.name}` : project.name;
+    paths.set(project.id, path);
+    return path;
+  };
+  for (const project of projects) pathOf(project);
+  return paths;
 }
 
 /** Puts a session on a task; linking it again makes the task its current one. */

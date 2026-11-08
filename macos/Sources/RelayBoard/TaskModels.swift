@@ -23,7 +23,13 @@ struct TaskLane: Decodable, Sendable, Identifiable {
 struct Project: Decodable, Sendable, Identifiable, Hashable {
     var id: Int
     var name: String
-    /// Its tasks not done yet, and how many of them need you.
+    /// From the top, like "Relay/Sidebar"; what the New Task sheet sends to put a task in it.
+    var path: String
+    /// The project it sits in; nil for a top-level one.
+    var parentId: Int?
+    /// It and every project under it, whose tasks it shows.
+    var ids: [Int]
+    /// Its tasks not done yet, and how many of them need you, counting its subprojects'.
     var open: Int
     var needsYou: Int
 }
@@ -61,6 +67,7 @@ struct TaskCard: Decodable, Sendable, Identifiable {
 struct ProjectRef: Decodable, Sendable, Hashable {
     var id: Int
     var name: String
+    var path: String
 }
 
 struct StageStep: Decodable, Sendable, Hashable {

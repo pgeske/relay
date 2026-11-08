@@ -153,3 +153,21 @@ describe("an untracked session", () => {
     expect(untracked("working").close.confirm).toMatchObject({ title: 'Close "Quick question"?', button: "Close Session", destructive: true });
   });
 });
+
+test("a project counts and shows its subprojects' tasks, and cards name their project's path", () => {
+  const at = minutesAgo(600);
+  const projects = [
+    { id: 1, name: "Relay", parentId: null, createdAt: at },
+    { id: 2, name: "Board", parentId: 1, createdAt: at },
+    { id: 3, name: "Sidebar", parentId: 2, createdAt: at },
+    { id: 4, name: "Docs", parentId: null, createdAt: at },
+  ];
+  const tasks = [task({ id: 1, projectId: 3 }), task({ id: 2, projectId: 1, blockedOn: "me", blockedAt: minutesAgo(5) })];
+  const view = taskBoardView({ tasks, projects, events: new Map(), sessions: [], sessionInfo: new Map(), prs: new Map(), board: null, dismissed: new Set(), now }, "/home");
+  const byName = new Map(view.projects.map((project) => [project.name, project]));
+  expect(byName.get("Relay")).toMatchObject({ path: "Relay", ids: [1, 2, 3], open: 2, needsYou: 1 });
+  expect(byName.get("Board")).toMatchObject({ path: "Relay/Board", parentId: 1, ids: [2, 3], open: 1, needsYou: 0 });
+  expect(byName.get("Docs")).toMatchObject({ ids: [4], open: 0 });
+  const card = view.lanes.flatMap((lane) => lane.cards).find((card) => card.id === 1)!;
+  expect(card.project).toEqual({ id: 3, name: "Sidebar", path: "Relay/Board/Sidebar" });
+});

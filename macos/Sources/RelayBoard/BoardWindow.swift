@@ -82,6 +82,13 @@ struct BoardWindow: View {
 private struct Sidebar: View {
     @Binding var selection: SidebarItem?
     @Environment(BoardModel.self) private var model
+    @State private var naming: ProjectNaming?
+    @State private var draftName = ""
+    @State private var deleting: Project?
+    /// Projects whose subprojects you folded away.
+    @State private var collapsed: Set<Int> = []
+    /// A project just made, to select once the board lists it.
+    @State private var selectingPath: String?
 
     var body: some View {
         List(selection: $selection) {
@@ -89,10 +96,9 @@ private struct Sidebar: View {
                 Label("All Tasks", systemImage: "checklist")
                     .badge(model.tasksWaitingOnYou)
                     .tag(SidebarItem.tasks)
-                ForEach(model.board?.tasks?.projects ?? []) { project in
-                    Label(project.name, systemImage: "folder")
-                        .badge(project.needsYou > 0 ? project.needsYou : project.open)
-                        .tag(SidebarItem.project(project.id))
+                    .contextMenu { Button("New Project…") { startNaming(.new(parent: nil)) } }
+                ForEach(projectLines) { line in
+                    ProjectRow(line: line, collapsed: $collapsed, naming: startNaming, deleting: $deleting)
                 }
             }
             Section("Pull Requests") {
@@ -118,6 +124,13 @@ private struct Sidebar: View {
                 if model.prsWaitingOnYou > 0 {
                     Label("\(model.prsWaitingOnYou) PR\(model.prsWaitingOnYou == 1 ? "" : "s") waiting on you", systemImage: "arrow.triangle.pull")
                 }
+                Button { startNaming(.new(parent: nil)) } label: {
+                    Label("New Project", systemImage: "plus.circle")
+                }
+                .buttonStyle(.borderless)
+                .foregroundStyle(.secondary)
+                .disabled(model.board?.tasks == nil)
+                .help("Group tasks in a new project. Right-click a project for a subproject inside it.")
             }
             .font(.zoomed(.callout).weight(.medium))
             .foregroundStyle(.secondary)
@@ -125,7 +138,164 @@ private struct Sidebar: View {
             .padding(.horizontal, 18)
             .padding(.bottom, 14)
         }
+        .alert(naming?.title ?? "", isPresented: namingBinding, presenting: naming) { naming in
+            TextField("Name", text: $draftName)
+            Button(naming.button) { save(naming) }
+                .keyboardShortcut(.defaultAction)
+                .disabled(draftName.trimmingCharacters(in: .whitespaces).isEmpty)
+            Button("Cancel", role: .cancel) {}
+        } message: { naming in
+            Text(naming.message)
+        }
+        .alert("Delete \u{201C}\(deleting?.name ?? "")\u{201D}?", isPresented: deletingBinding, presenting: deleting) { project in
+            Button("Delete Project", role: .destructive) { delete(project) }
+            Button("Cancel", role: .cancel) {}
+        } message: { project in
+            if let parent = projects.first(where: { $0.id == project.parentId }) {
+                Text("Its tasks and subprojects move up into \(parent.name). No task is deleted.")
+            } else {
+                Text("Its tasks leave it for no project, and its subprojects move to the top. No task is deleted.")
+            }
+        }
+        .onChange(of: projects) {
+            guard let path = selectingPath, let made = projects.first(where: { $0.path.caseInsensitiveCompare(path) == .orderedSame }) else { return }
+            selectingPath = nil
+            selection = .project(made.id)
+        }
     }
+
+    private var projects: [Project] { model.board?.tasks?.projects ?? [] }
+
+    /// The project rows to show, each parent followed by its subprojects unless you folded them away.
+    /// The server sends projects sorted by name.
+    private var projectLines: [ProjectLine] {
+        let tree = Dictionary(grouping: projects, by: \.parentId)
+        var lines: [ProjectLine] = []
+        func add(_ parentId: Int?, depth: Int) {
+            for project in tree[parentId] ?? [] {
+                lines.append(ProjectLine(project: project, depth: depth, hasSubprojects: tree[project.id] != nil))
+                if !collapsed.contains(project.id) { add(project.id, depth: depth + 1) }
+            }
+        }
+        add(nil, depth: 0)
+        return lines
+    }
+
+    private var namingBinding: Binding<Bool> {
+        Binding(get: { naming != nil }, set: { if !$0 { naming = nil } })
+    }
+
+    private var deletingBinding: Binding<Bool> {
+        Binding(get: { deleting != nil }, set: { if !$0 { deleting = nil } })
+    }
+
+    private func startNaming(_ what: ProjectNaming) {
+        if case .rename(let project) = what { draftName = project.name } else { draftName = "" }
+        naming = what
+    }
+
+    private func save(_ naming: ProjectNaming) {
+        let name = draftName.trimmingCharacters(in: .whitespaces)
+        Task {
+            switch naming {
+            case .new(let parent):
+                guard await model.project("create", name: name, parent: parent?.id) else { return }
+                if let parent { collapsed.remove(parent.id) }
+                selectingPath = parent.map { "\($0.path)/\(name)" } ?? name
+            case .rename(let project):
+                _ = await model.project("rename", project: project.id, name: name)
+            }
+        }
+    }
+
+    private func delete(_ project: Project) {
+        Task {
+            guard await model.project("delete", project: project.id) else { return }
+            if case .project(let id) = selection, project.ids.contains(id) {
+                selection = project.parentId.map { .project($0) } ?? .tasks
+            }
+        }
+    }
+}
+
+/// What the sidebar is asking you to name: a new project (inside `parent`, for a subproject), or one to rename.
+private enum ProjectNaming {
+    case new(parent: Project?)
+    case rename(Project)
+
+    var title: String {
+        switch self {
+        case .new(nil): "New Project"
+        case .new: "New Subproject"
+        case .rename: "Rename Project"
+        }
+    }
+
+    var message: String {
+        switch self {
+        case .new(nil): "A project groups related tasks. Right-click it later to add subprojects."
+        case .new(let parent?): "It goes inside \(parent.name)."
+        case .rename(let project): "Its tasks stay in it; only \(project.name)'s name changes."
+        }
+    }
+
+    var button: String {
+        switch self {
+        case .new: "Create"
+        case .rename: "Rename"
+        }
+    }
+}
+
+/// A project in the sidebar, indented under its parent, with a chevron that folds its subprojects.
+/// Drawn flat rather than with DisclosureGroup: the sidebar's outline ignores a disclosure's
+/// starting state, so a project that just gained a subproject showed folded.
+private struct ProjectRow: View {
+    let line: ProjectLine
+    @Binding var collapsed: Set<Int>
+    let naming: (ProjectNaming) -> Void
+    @Binding var deleting: Project?
+
+    var body: some View {
+        let project = line.project
+        HStack(spacing: 2) {
+            if line.hasSubprojects {
+                Button {
+                    if collapsed.contains(project.id) { collapsed.remove(project.id) } else { collapsed.insert(project.id) }
+                } label: {
+                    Image(systemName: "chevron.right")
+                        .font(.zoomed(size: 9, weight: .bold))
+                        .rotationEffect(.degrees(collapsed.contains(project.id) ? 0 : 90))
+                        .frame(width: 12)
+                        .contentShape(.rect)
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(.secondary)
+                .help(collapsed.contains(project.id) ? "Show its subprojects" : "Hide its subprojects")
+            } else {
+                Color.clear.frame(width: 12)
+            }
+            Label(project.name, systemImage: "folder")
+        }
+        .padding(.leading, CGFloat(line.depth) * 14)
+        .badge(project.needsYou > 0 ? project.needsYou : project.open)
+        .tag(SidebarItem.project(project.id))
+        .help(project.path)
+        .contextMenu {
+            Button("New Subproject…") { naming(.new(parent: project)) }
+            Button("Rename…") { naming(.rename(project)) }
+            Divider()
+            Button("Delete…", role: .destructive) { deleting = project }
+        }
+    }
+}
+
+/// One row of the sidebar's project tree.
+private struct ProjectLine: Identifiable {
+    var project: Project
+    var depth: Int
+    var hasSubprojects: Bool
+    var id: Int { project.id }
 }
 
 /// The board, or why there isn't one.

@@ -3,14 +3,20 @@ import { expect, test } from "bun:test";
 import { openBoardStore } from "./store.ts";
 import {
   approvePlan,
+  createProject,
   createTask,
   createTaskTables,
+  deleteProject,
+  ensureProject,
   finishTask,
   getTask,
   linkSession,
   linkSessionPrs,
+  listProjects,
   pauseTask,
+  projectPaths,
   recordPlan,
+  renameProject,
   reportTask,
   resumeTask,
   sendBack,
@@ -108,4 +114,49 @@ test("a board from before tasks were checked gains the columns, keeping its task
   db.run("INSERT INTO tasks (title, stage, approve_plan, created_at, updated_at) VALUES ('Old task', 'doing', 1, '2026-11-01T00:00:00Z', '2026-11-01T00:00:00Z')");
   createTaskTables(db);
   expect(finishTask(db, 1, { note: "Done at last", at: "2026-11-04T10:00:00Z" })).toMatchObject({ title: "Old task", finishedAt: "2026-11-04T10:00:00Z", finishNote: "Done at last" });
+});
+
+test("projects nest by path, and a name only has to be unique among its siblings", () => {
+  const db = openBoardStore(":memory:");
+  const at = "2026-11-07T10:00:00Z";
+  const sidebar = ensureProject(db, "Relay / Sidebar", at);
+  const relay = ensureProject(db, "relay", at);
+  expect(sidebar.parentId).toBe(relay.id);
+  // The same name inside another project is a different project.
+  const otherSidebar = ensureProject(db, "Docs/Sidebar", at);
+  expect(otherSidebar.id).not.toBe(sidebar.id);
+  expect(ensureProject(db, "Relay/sidebar", at).id).toBe(sidebar.id);
+  expect(projectPaths(listProjects(db)).get(sidebar.id)).toBe("Relay/Sidebar");
+
+  expect(() => createProject(db, "SIDEBAR", relay.id, at)).toThrow("already");
+  expect(() => createProject(db, "A/B", null, at)).toThrow("can't have a /");
+  expect(() => renameProject(db, otherSidebar.id, "  ")).toThrow("needs a name");
+});
+
+test("deleting a project moves its tasks and subprojects up, unless a subproject would clash", () => {
+  const db = openBoardStore(":memory:");
+  const at = "2026-11-07T10:00:00Z";
+  const relay = ensureProject(db, "Relay", at);
+  const board = ensureProject(db, "Relay/Board", at);
+  const sidebar = ensureProject(db, "Relay/Board/Sidebar", at);
+  const { id } = createTask(db, { ...base, projectId: board.id });
+
+  deleteProject(db, board.id);
+  expect(getTask(db, id)!.projectId).toBe(relay.id);
+  expect(listProjects(db).find((project) => project.id === sidebar.id)!.parentId).toBe(relay.id);
+
+  // Relay's Sidebar would land next to a top-level Sidebar.
+  ensureProject(db, "Sidebar", at);
+  expect(() => deleteProject(db, relay.id)).toThrow("rename one of them first");
+  expect(listProjects(db).map((project) => project.name)).toContain("Relay");
+});
+
+test("a board from before projects nested keeps its projects, and their tasks", () => {
+  const db = new Database(":memory:");
+  db.run("CREATE TABLE projects (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL UNIQUE COLLATE NOCASE, created_at TEXT NOT NULL)");
+  db.run("INSERT INTO projects (name, created_at) VALUES ('Relay', '2026-11-01T00:00:00Z')");
+  createTaskTables(db);
+  expect(listProjects(db)).toEqual([{ id: 1, name: "Relay", parentId: null, createdAt: "2026-11-01T00:00:00Z" }]);
+  // The old table's name-wide uniqueness is gone: a Relay inside another project is fine now.
+  expect(ensureProject(db, "Apps/Relay", "2026-11-07T10:00:00Z").id).not.toBe(1);
 });

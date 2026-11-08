@@ -59,6 +59,7 @@ Usage:
   relay task show [<task>] [--json]   A task, its sessions, PRs, and history
 
 <task> is its id (T-12 or 12); left out, it's the task this session is on.
+<name> is a project, made if there's none yet; Parent/Child names one inside another.
 <stage> is one of: ${TASK_STAGES.join(", ")}.`;
 
 function pathMtime(path: string): string | null {
@@ -291,7 +292,7 @@ async function show(args: string[]): Promise<void> {
     return;
   }
   const lines = [
-    `${card.ref}: ${card.title}${card.project ? `  [${card.project.name}]` : ""}`,
+    `${card.ref}: ${card.title}${card.project ? `  [${card.project.path}]` : ""}`,
     // The section title often says the reason already ("Agent working").
     [lane.title, card.stageLabel, card.reason.text === lane.title ? null : `${card.reason.text}${card.reason.since ? ` (${card.reason.since})` : ""}`].filter(Boolean).join(" · "),
   ];

@@ -1,6 +1,6 @@
 import type { PullRequest } from "./github.ts";
 import type { Board, Lane } from "./lanes.ts";
-import { TASK_STAGES, taskRef, type Project, type Task, type TaskEvent, type TaskPr, type TaskSession, type TaskStage } from "./taskStore.ts";
+import { TASK_STAGES, projectPaths, taskRef, type Project, type Task, type TaskEvent, type TaskPr, type TaskSession, type TaskStage } from "./taskStore.ts";
 import { timeAgo, type Confirm, type Tone } from "./view.ts";
 
 /**
@@ -150,7 +150,7 @@ export interface TaskCardView {
   ref: string;
   title: string;
   details: string | null;
-  project: { id: number; name: string } | null;
+  project: ProjectRefView | null;
   /** Its color, 0 to 7, so its card and its PRs on the PR board match. */
   hue: number;
   stage: TaskStage;
@@ -196,10 +196,19 @@ export interface TaskLaneView {
   sessions: UntrackedSessionView[];
 }
 
-export interface ProjectView {
+/** The project a task is in: its own name, and its path from the top ("Relay/Sidebar"). */
+export interface ProjectRefView {
   id: number;
   name: string;
-  /** Its tasks not done yet, and how many of them need you. */
+  path: string;
+}
+
+export interface ProjectView extends ProjectRefView {
+  /** The project it sits in; null for a top-level one. */
+  parentId: number | null;
+  /** It and every project under it, whose tasks it shows. */
+  ids: number[];
+  /** Its tasks not done yet, and how many of them need you, counting its subprojects'. */
   open: number;
   needsYou: number;
 }
@@ -382,7 +391,7 @@ const EVENT_TEXT: Record<TaskEvent["kind"], (event: TaskEvent) => string> = {
 /** How many history lines a card's details show. */
 const HISTORY_SHOWN = 30;
 
-function taskCard(task: Task, inputs: TaskInputs, places: Map<string, PrPlace>, sessions: TaskSessionLink[], projects: Map<number, Project>): { card: TaskCardView; lane: Placement["lane"] } {
+function taskCard(task: Task, inputs: TaskInputs, places: Map<string, PrPlace>, sessions: TaskSessionLink[], projects: Map<number, ProjectRefView>): { card: TaskCardView; lane: Placement["lane"] } {
   const { now } = inputs;
   const linked = [...inputs.prs.values()].filter((pr) => pr.taskId === task.id).map((pr) => `${pr.repo}#${pr.number}`);
   const prs = linked.map((ref) => ({ ref, place: places.get(ref) ?? null }));
@@ -438,7 +447,7 @@ function taskCard(task: Task, inputs: TaskInputs, places: Map<string, PrPlace>, 
     ref,
     title: task.title,
     details: task.details,
-    project: project ? { id: project.id, name: project.name } : null,
+    project: project ?? null,
     hue: taskHue(task.id),
     stage: task.stage,
     stageLabel: STAGE_LABELS[task.stage],
@@ -492,7 +501,8 @@ function taskCard(task: Task, inputs: TaskInputs, places: Map<string, PrPlace>, 
 export function taskBoardView(inputs: TaskInputs, home: string): TaskBoardView {
   const { now } = inputs;
   const places = prPlaces(inputs.board);
-  const projects = new Map(inputs.projects.map((project) => [project.id, project]));
+  const paths = projectPaths(inputs.projects);
+  const projects = new Map(inputs.projects.map((project) => [project.id, { id: project.id, name: project.name, path: paths.get(project.id)! }]));
   const sessionsOf = sessionsByTask(inputs.sessions, inputs.sessionInfo);
 
   const byLane = new Map<TaskLane, TaskCardView[]>(LANES.map((lane) => [lane.id, []]));
@@ -540,14 +550,27 @@ export function taskBoardView(inputs: TaskInputs, home: string): TaskBoardView {
 
   return {
     lanes,
-    projects: inputs.projects.map((project) => ({
-      id: project.id,
-      name: project.name,
-      open: open.filter((card) => card.project?.id === project.id).length,
-      needsYou: needsYou.filter((card) => card.project?.id === project.id).length,
-    })),
+    projects: inputs.projects.map((project) => {
+      const ids = projectSubtree(project.id, inputs.projects);
+      return {
+        ...projects.get(project.id)!,
+        parentId: project.parentId,
+        ids,
+        open: open.filter((card) => card.project !== null && ids.includes(card.project.id)).length,
+        needsYou: needsYou.filter((card) => card.project !== null && ids.includes(card.project.id)).length,
+      };
+    }),
     needsYou: needsYou.length,
   };
+}
+
+/** A project's id and those of every project under it, at any depth. */
+function projectSubtree(id: number, projects: Project[]): number[] {
+  const ids = [id];
+  for (let i = 0; i < ids.length; i++) {
+    for (const project of projects) if (project.parentId === ids[i]) ids.push(project.id);
+  }
+  return ids;
 }
 
 /** The task each PR is part of, as PR cards name it, keyed by "owner/repo#number". */

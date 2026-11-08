@@ -14,15 +14,19 @@ import { SESSION_ACTIONS, TASK_ACTIONS, primarySession, sessionsByTask, type Ses
 import { readSessionInfo } from "./taskCommand.ts";
 import {
   approvePlan,
+  createProject,
   createTask,
+  deleteProject,
   deleteTask,
   dismissSession,
   ensureProject,
+  getProject,
   getTask,
   linkSession,
   markStarted,
   pauseTask,
   reportTask,
+  renameProject,
   resumeTask,
   sendBack,
   taskRef,
@@ -339,6 +343,43 @@ export async function createTaskFromBoard(request: NewTaskRequest): Promise<Boar
     // The task stays as an idea, so Start can try again.
     const why = error instanceof Error ? error.message : String(error);
     return { status: error instanceof ActionError ? error.status : 500, message: `Saved ${taskRef(task.id)}, but couldn't start it: ${why}`, task: task.id };
+  }
+}
+
+/** What the board's sidebar asks of projects: `POST /api/board/projects/<action>`. */
+export const PROJECT_ACTIONS = ["create", "rename", "delete"] as const;
+
+/** The body of a project control: the project to act on, its new name, and where a new one goes. */
+export interface ProjectActionRequest {
+  project?: number;
+  name?: string;
+  /** A new project's parent; left out for a top-level one. */
+  parent?: number;
+}
+
+/** Makes, renames, or deletes a project from the board's sidebar. */
+export function runProjectAction(action: string, request: ProjectActionRequest): BoardActionResult {
+  if (!(PROJECT_ACTIONS as readonly string[]).includes(action)) return { status: 404, message: `no project action ${action}` };
+  const db = openBoardStore();
+  try {
+    if (action === "create") {
+      const project = createProject(db, request.name ?? "", request.parent ?? null, new Date().toISOString());
+      const parent = project.parentId !== null ? getProject(db, project.parentId) : null;
+      return { status: 200, message: parent ? `Made ${project.name} inside ${parent.name}` : `Made ${project.name}` };
+    }
+    if (request.project === undefined) return { status: 400, message: "which project?" };
+    const project = getProject(db, request.project);
+    if (!project) return { status: 404, message: `no project ${request.project}` };
+    if (action === "rename") {
+      const renamed = renameProject(db, project.id, request.name ?? "");
+      return { status: 200, message: `Renamed ${project.name} to ${renamed.name}` };
+    }
+    deleteProject(db, project.id);
+    return { status: 200, message: `Deleted ${project.name}; what was in it moved up` };
+  } catch (error) {
+    return { status: 400, message: error instanceof Error ? error.message : String(error) };
+  } finally {
+    db.close();
   }
 }
 

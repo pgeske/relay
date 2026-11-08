@@ -9,7 +9,7 @@ The Relay Board app has two views: **Tasks**, what the user is getting done, and
 
 ## Tasks
 
-A task is one thing the user wants done: a fix, a rollout, an investigation, getting another team to do something. It can take several sessions and PRs, or none. Tasks can belong to a project (a named group of tasks).
+A task is one thing the user wants done: a fix, a rollout, an investigation, getting another team to do something. It can take several sessions and PRs, or none. Tasks can belong to a project (a named group of tasks); projects can nest inside other projects.
 
 **Register the task when you start one** in a relay session, unless this session is already on a task (the user started it from the board, or you registered it earlier). Skip it for quick questions and one-off answers.
 
@@ -20,7 +20,7 @@ relay task new "Roll out the new cache to staging" --project "Faster search" --s
 
 - The title says the outcome in a few plain words. `--details -` takes a longer description on stdin.
 - By default the user approves your plan before you carry it out (below). Add `--skip-plan` when there's nothing to plan, or the user already told you exactly what to do.
-- `--project` names a project, creating it if needed. Reuse an existing name (`relay task --json` lists projects) rather than inventing a near-duplicate.
+- `--project` names a project, creating it if needed; `Parent/Child` names a subproject inside another (`--project "Relay/Sidebar"`). Reuse an existing one (`relay task --json` lists projects, each with its `path`) rather than inventing a near-duplicate.
 
 **Keep it current.** Every time the task moves, report it; commands without a task id act on this session's task:
 

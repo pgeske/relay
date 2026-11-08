@@ -4,7 +4,7 @@ import { homedir } from "node:os";
 import { setTimeout as sleep } from "node:timers/promises";
 import { WebSocketServer } from "ws";
 import { fetchBoardView, isLocalRequest, readActionBody, runBoardAction } from "../board/serve.ts";
-import { createTaskFromBoard, parseNewTask, readJsonBody, runTaskAction, type NewTaskRequest } from "../board/taskServe.ts";
+import { createTaskFromBoard, parseNewTask, readJsonBody, runProjectAction, runTaskAction, type NewTaskRequest } from "../board/taskServe.ts";
 import { endLiveCall, recoverInterruptedCall, startLiveCall } from "./live.ts";
 import { askAnswerSteps, findPendingAsk, validateAskAnswers, type AskAnswer } from "./ask.ts";
 import { startSessionEvents } from "./events.ts";
@@ -319,6 +319,8 @@ async function handleImage(
  * `POST /api/board/actions/<action>` with `{ "pr": "owner/repo#12" }` runs one of a card's controls.
  * `POST /api/board/tasks` creates a task, and `POST /api/board/tasks/actions/<action>` with
  * `{ "task": 12 }` (or `{ "session": "<file>" }`) runs one of a task card's controls.
+ * `POST /api/board/projects/<create|rename|delete>` with `{ "project": 3, "name": "…", "parent": 1 }`
+ * manages the sidebar's projects.
  */
 async function routeBoard(req: IncomingMessage, res: ServerResponse, rest: string[]): Promise<void> {
   if (rest.length === 0) {
@@ -328,6 +330,22 @@ async function routeBoard(req: IncomingMessage, res: ServerResponse, rest: strin
   }
   if (rest[0] === "tasks") {
     await routeTasks(req, res, rest.slice(1));
+    return;
+  }
+  if (rest[0] === "projects" && rest.length === 2) {
+    if (req.method !== "POST") throw new HttpError(405, "method not allowed");
+    let body: Record<string, unknown>;
+    try {
+      body = await readJsonBody(req);
+    } catch (error) {
+      throw new HttpError(400, error instanceof Error ? error.message : "bad request");
+    }
+    const result = runProjectAction(rest[1], {
+      project: typeof body.project === "number" ? body.project : undefined,
+      name: typeof body.name === "string" ? body.name : undefined,
+      parent: typeof body.parent === "number" ? body.parent : undefined,
+    });
+    sendJson(res, result.status, result.status < 300 ? { message: result.message } : { error: result.message });
     return;
   }
   if (rest.length !== 2 || rest[0] !== "actions") {

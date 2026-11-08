@@ -135,6 +135,19 @@ final class BoardModel {
 
     var isCreating: Bool { sending.contains("new-task") }
 
+    /// Makes, renames, or deletes a project from the sidebar; true once the server did it.
+    func project(_ action: String, project: Int? = nil, name: String? = nil, parent: Int? = nil) async -> Bool {
+        do {
+            let result = try await client.project(action, project: project, name: name, parent: parent)
+            toast = Toast(message: result.message, failed: !result.ok)
+            if result.ok { schedule(after: .zero) }
+            return result.ok
+        } catch {
+            report(error)
+            return false
+        }
+    }
+
     /// Asks omp which models it has, once: the list only changes when you add a provider.
     func loadModelChoices() async {
         guard modelChoices == nil else { return }
