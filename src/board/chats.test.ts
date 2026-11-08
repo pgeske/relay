@@ -39,7 +39,7 @@ describe("chatsView", () => {
   test("lists open, task, and recent sessions once each, newest first", () => {
     const old = savedSession("old", "Old investigation", 600);
     const open = savedSession("open", "Cache rollout", 5);
-    const onTask = savedSession("task", "Fix the login bug", 60);
+    const onTask = savedSession("task", "\u{F0B79} Fix the login bug", 60);
     const live = new Map([[open, pane("π ⠋ Cache rollout")]]);
     const tasks = new Map([[onTask, { id: 7, ref: "T-7", title: "Login bug", hue: 5 }]]);
 
@@ -51,7 +51,8 @@ describe("chatsView", () => {
       ["Old investigation", "closed"],
     ]);
     expect(chats[0].paneId).toBe("%3");
-    expect(chats[1].task?.ref).toBe("T-7");
+    expect(chats[1]).toMatchObject({ icon: "\u{F0B79}", task: { ref: "T-7" } });
+    expect(chats[0].icon).toBeNull();
     expect(chats[2].folder).toBe("~/src/api");
   });
 

@@ -25,6 +25,8 @@ import { getTask, linkSession, listTasks, taskRef, taskSessions } from "./taskSt
 export interface ChatView {
   sessionFile: string;
   title: string;
+  /** The Nerd Font icon omp puts in front of the title, if it has one. */
+  icon: string | null;
   /** Where it runs, with ~ for your home. */
   folder: string | null;
   state: "working" | "idle" | "closed";
@@ -108,6 +110,9 @@ function currentTasks(): Map<string, TaskChipView> {
   }
 }
 
+/** A Nerd Font glyph: a character in one of Unicode's private use areas. */
+const TITLE_ICON = /[\uE000-\uF8FF]|[\u{F0000}-\u{10FFFF}]/u;
+
 /** Builds the Chats list from what's open, what tasks know, and what omp saved lately. Newest first. */
 export function chatsView(live: Map<string, Pane>, tasks: Map<string, TaskChipView>, recent: string[], now: number): ChatView[] {
   const home = homedir();
@@ -120,9 +125,11 @@ export function chatsView(live: Map<string, Pane>, tasks: Map<string, TaskChipVi
     if (mtimeMs === null && !pane) continue;
     const saved = mtimeMs === null ? { title: "", cwd: null } : header(sessionFile, mtimeMs);
     const paneState = pane ? parsePaneTitle(pane.title, pane.cwd) : null;
+    const rawTitle = paneState?.title || saved.title;
     chats.push({
       sessionFile,
-      title: sessionTitle(paneState?.title || saved.title),
+      title: sessionTitle(rawTitle),
+      icon: TITLE_ICON.exec(rawTitle)?.[0] ?? null,
       folder: displayFolder(pane?.cwd ?? saved.cwd, home),
       state: paneState?.status ?? "closed",
       paneId: pane?.paneId ?? null,

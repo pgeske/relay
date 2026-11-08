@@ -16,6 +16,8 @@ struct Chat: Decodable, Sendable, Identifiable, Hashable {
 
     var sessionFile: String
     var title: String
+    /// The Nerd Font icon omp puts in front of the title; nil when it has none.
+    var icon: String?
     var folder: String?
     var state: State
     /// Its relay tab's pane while it's open.

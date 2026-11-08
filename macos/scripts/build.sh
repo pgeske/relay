@@ -41,6 +41,9 @@ rm -rf "$iconset"
 swift "$macos/scripts/make-icon.swift" "$repo/ios/Relay/Resources/Assets.xcassets/AppIcon.appiconset/AppIcon.png" "$iconset"
 iconutil -c icns "$iconset" -o "$app/Contents/Resources/AppIcon.icns"
 
+# The icons omp puts in front of session titles are Nerd Font glyphs; the iPhone app ships the same font.
+cp "$repo/ios/Relay/Resources/Fonts/SymbolsNerdFont-Regular.ttf" "$app/Contents/Resources/"
+
 # Ad-hoc signed, like relay's own binary: Apple Silicon runs nothing unsigned.
 codesign --force --sign - "$app"
 

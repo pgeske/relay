@@ -20,7 +20,7 @@ Agents report through `relay task`, which the relay skill teaches them: they reg
 
 ## Chats
 
-**Chats** shows your omp sessions as conversations, like a chat app, so you can follow and talk to agents without switching to your terminal. The list on the left has every open session first (an amber dot while it works, green while it waits for you), then the closed ones from the last 30 days and every session a task has, grouped by day, each with its task's color and id. The search box filters by title, folder, or task.
+**Chats** shows your omp sessions as conversations, like a chat app, so you can follow and talk to agents without switching to your terminal. The list on the left has every open session first (an amber spinner while it works, a green dot while it waits for you), then the closed ones from the last 30 days and every session a task has, grouped by day. Each row is the session's own icon and title, as omp names it, and how long ago it was active; hover for the task it's on. The search box filters by title, folder, or task.
 
 Pick one to read it live as it works: your messages on the right, the agent's replies in Markdown, and its thinking and tool calls between two replies folded into one line (**Ran 6 tools**) that opens to each step, its arguments, and what it returned. Type below it: ↩ sends, ⇧↩ starts a new line, and screenshots pasted or dropped in go along as files the agent can read. While it works, an empty box's button is **Stop** (Esc in its terminal). When the agent asks a question with its `ask` tool, the choices show as buttons above the box. The model chip switches its model or thinking level, as omp's `/switch` and `/effort` do. Typing into a closed chat reopens it in a background relay tab and sends your message there.
 

@@ -124,30 +124,21 @@ private struct ChatRow: View {
     let chat: Chat
 
     var body: some View {
-        HStack(alignment: .top, spacing: 8) {
-            StateDot(state: chat.state).padding(.top, 5)
-            VStack(alignment: .leading, spacing: 2) {
-                Text(chat.title)
-                    .font(.zoomed(.body).weight(chat.state == .closed ? .regular : .medium))
-                    .lineLimit(1)
-                    .truncationMode(.tail)
-                HStack(spacing: 5) {
-                    if let task = chat.task {
-                        Circle().fill(taskColor(task.hue)).frame(width: 6, height: 6)
-                        Text(task.ref).monospacedDigit()
-                    } else if let folder = chat.folder {
-                        Text(folder).truncationMode(.head)
-                    }
-                    Spacer(minLength: 4)
-                    Text(Self.age(chat.updatedAt)).monospacedDigit()
-                }
-                .font(.zoomed(.caption))
-                .foregroundStyle(.secondary)
+        HStack(spacing: 7) {
+            StateIndicator(state: chat.state)
+            SessionIcon(icon: chat.icon)
+            Text(chat.title)
+                .font(.zoomed(.body).weight(chat.state == .closed ? .regular : .medium))
                 .lineLimit(1)
-            }
+                .truncationMode(.tail)
+            Spacer(minLength: 4)
+            Text(Self.age(chat.updatedAt))
+                .font(.zoomed(.caption))
+                .monospacedDigit()
+                .foregroundStyle(.tertiary)
         }
         .padding(.vertical, 3)
-        .help(chat.task.map { "\($0.ref): \($0.title)" } ?? chat.folder ?? "")
+        .help(chat.task.map { "\(chat.title)\nOn \($0.ref): \($0.title)" } ?? chat.title)
     }
 
     /// "now", "12m", "3h", "Tue", "Oct 28": how long ago, as short as a list row needs.
@@ -161,17 +152,44 @@ private struct ChatRow: View {
     }
 }
 
-/// Working (a pulsing amber dot), open and idle (green), or closed (no dot).
-private struct StateDot: View {
+/// Working (an amber spinner), open and waiting for you (a green dot), or closed (nothing).
+private struct StateIndicator: View {
     let state: Chat.State
 
     var body: some View {
-        Circle()
-            .fill(state == .working ? Color.boardAmber : state == .idle ? Color.boardGreen : .clear)
-            .frame(width: 7, height: 7)
-            .symbolEffect(.pulse, isActive: state == .working)
-            .opacity(state == .working ? 0.9 : 1)
-            .help(state == .working ? "Working" : state == .idle ? "Open, waiting for you" : "Closed; sending a message reopens it")
+        let size = 14 * Zoom.shared.scale
+        Group {
+            switch state {
+            case .working:
+                Image(systemName: "progress.indicator")
+                    .font(.system(size: size - 1, weight: .bold))
+                    .foregroundStyle(Color.boardAmber)
+                    .symbolEffect(.variableColor.iterative, options: .repeat(.continuous))
+            case .idle: Circle().fill(Color.boardGreen).frame(width: 7, height: 7)
+            case .closed: Color.clear
+            }
+        }
+        .frame(width: size, height: size)
+        .help(state == .working ? "Working" : state == .idle ? "Open, waiting for you" : "Closed; sending a message reopens it")
+    }
+}
+
+/// The icon omp put in front of the session's title, a Nerd Font glyph; a plain bubble when it has none.
+struct SessionIcon: View {
+    let icon: String?
+    var size: CGFloat = 13
+
+    var body: some View {
+        let scaled = size * Zoom.shared.scale
+        Group {
+            if let icon {
+                Text(icon).font(.custom("SymbolsNF", fixedSize: scaled))
+            } else {
+                Image(systemName: "bubble.left").font(.system(size: scaled - 2))
+            }
+        }
+        .foregroundStyle(.secondary)
+        .frame(width: scaled + 3)
     }
 }
 
@@ -272,20 +290,15 @@ private struct ConversationHeader: View {
 
     var body: some View {
         HStack(spacing: 10) {
+            SessionIcon(icon: chat?.icon, size: 17)
             VStack(alignment: .leading, spacing: 2) {
                 Text(title)
                     .font(.zoomed(.title3).weight(.semibold))
                     .lineLimit(1)
-                HStack(spacing: 6) {
-                    Text(stateText).foregroundStyle(conversation.working ? Color.boardAmber : .secondary)
-                    if let folder = chat?.folder {
-                        Text("·").foregroundStyle(.tertiary)
-                        Text(folder).truncationMode(.head)
-                    }
-                }
-                .font(.zoomed(.caption))
-                .foregroundStyle(.secondary)
-                .lineLimit(1)
+                Text(stateText)
+                    .font(.zoomed(.caption))
+                    .foregroundStyle(conversation.working ? Color.boardAmber : .secondary)
+                    .lineLimit(1)
             }
             Spacer(minLength: 12)
             if let task = chat?.task {

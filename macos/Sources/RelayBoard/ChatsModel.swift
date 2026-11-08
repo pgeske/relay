@@ -106,7 +106,7 @@ final class ChatsModel {
             // Listed at once, titled by its first line, until the next refresh brings the server's.
             if !chats.contains(where: { $0.sessionFile == started.sessionFile }) {
                 let title = String(chat.text.split(separator: "\n").first?.prefix(60) ?? "New chat")
-                chats.insert(Chat(sessionFile: started.sessionFile, title: title, folder: "/tmp", state: .working, paneId: started.paneId, updatedAt: .now, task: nil), at: 0)
+                chats.insert(Chat(sessionFile: started.sessionFile, title: title, icon: nil, folder: "/tmp", state: .working, paneId: started.paneId, updatedAt: .now, task: nil), at: 0)
             }
             select(.chat(started.sessionFile))
             conversation?.showSent(chat.text, imageCount: chat.images.count)
