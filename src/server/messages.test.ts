@@ -2,7 +2,7 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { BranchTracker, readMessagePage } from "./messages.ts";
+import { BranchTracker, paneImageUrl, readMessagePage } from "./messages.ts";
 
 type Entry = Record<string, unknown>;
 
@@ -28,7 +28,7 @@ function sessionFile(entries: Entry[]): string {
 }
 
 async function pageIds(entries: Entry[], options: { before?: string; limit: number } = { limit: 50 }): Promise<string[]> {
-  const page = await readMessagePage(sessionFile(entries), "%1", options);
+  const page = await readMessagePage(sessionFile(entries), paneImageUrl("%1"), options);
   return page.messages.map((entry) => entry.id);
 }
 

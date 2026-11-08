@@ -18,6 +18,7 @@ Five agents going at once is easy. Remembering which one is waiting on you is no
 
 | | |
 |---|---|
+| 💬 **[Chats](#-chats)** | Every agent session as a conversation on your Mac: read it live, type to it, or start a new one. |
 | 🗂️ **[Tasks](#️-tasks)** | Everything you're getting done, sorted by what it needs from you. Your agents keep it up to date. |
 | 🔀 **[Pull requests](#-pull-requests)** | Every open PR on its way from draft to merged, with one button for its next step. |
 | 🖥️ **[Terminal](#️-terminal)** | One agent per tab. A spinner while it works, a green dot when it finished while you were away. |
@@ -48,6 +49,12 @@ relay board             # open Relay Board (or prefix B inside relay)
 ```
 
 You need [tmux](https://github.com/tmux/tmux) and omp on your `PATH`. relay runs on macOS and Linux; Relay Board needs macOS 26 or newer. The installer puts `relay` in `~/.local/bin` (`RELAY_INSTALL_DIR` changes that) and Relay Board in `~/Applications`.
+
+## 💬 Chats
+
+Relay Board's **Chats** view lists your sessions like a chat app: open ones first, then the rest by day, each wearing its task's color. Pick one to read it live, type to it (↩ sends, screenshots paste right in), stop it, answer its questions with a click, or switch its model. Typing into a closed chat reopens it. **Live** turns on omp's `/live` voice mode on your Mac's mic and speakers.
+
+**New Chat** (⇧⌘N) starts a fresh omp session from your first message. Its **…** menu adds it to a task anytime, and clicking a task's session opens it here.
 
 ## 🗂️ Tasks
 

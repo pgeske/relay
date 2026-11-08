@@ -56,8 +56,12 @@ export function parseJsonEntry(line: string): Record<string, unknown> | null {
   }
 }
 
-function imageUrl(paneId: string, entryId: string, index: number): string {
-  return `/api/sessions/${encodeURIComponent(paneId)}/images/${encodeURIComponent(entryId)}/${index}`;
+/** Where the app fetches the nth image of an entry; phone and board serve images at different paths. */
+export type ImageUrl = (entryId: string, index: number) => string;
+
+/** Images of a session open in a pane, as the phone's session endpoints serve them. */
+export function paneImageUrl(paneId: string): ImageUrl {
+  return (entryId, index) => `/api/sessions/${encodeURIComponent(paneId)}/images/${encodeURIComponent(entryId)}/${index}`;
 }
 
 function entryTimestamp(entry: Record<string, unknown>): string {
@@ -96,7 +100,7 @@ function toolCallArgsJson(args: unknown): string {
 }
 
 /** Converts one jsonl entry into a Message, or null for non-chat entries. */
-export function normalizeEntry(entry: Record<string, unknown>, paneId: string): Message | null {
+export function normalizeEntry(entry: Record<string, unknown>, imageUrl: ImageUrl): Message | null {
   const message = asRecord(entry.message);
   if (!message) return null;
   const id = typeof entry.id === "string" ? entry.id : "";
@@ -120,7 +124,7 @@ export function normalizeEntry(entry: Record<string, unknown>, paneId: string): 
         if (block.type === "text" && typeof block.text === "string" && block.text.trim()) {
           blocks.push({ type: "text", text: block.text });
         } else if (block.type === "image") {
-          blocks.push({ type: "image", url: imageUrl(paneId, id, imageIndex) });
+          blocks.push({ type: "image", url: imageUrl(id, imageIndex) });
           imageIndex += 1;
         }
       }
@@ -152,7 +156,7 @@ export function normalizeEntry(entry: Record<string, unknown>, paneId: string): 
             ...(ask ? { ask } : {}),
           });
         } else if (block.type === "image") {
-          blocks.push({ type: "image", url: imageUrl(paneId, id, imageIndex) });
+          blocks.push({ type: "image", url: imageUrl(id, imageIndex) });
           imageIndex += 1;
         }
       }
@@ -171,7 +175,7 @@ export function normalizeEntry(entry: Record<string, unknown>, paneId: string): 
       if (!block) continue;
       if (block.type === "text" && typeof block.text === "string") texts.push(block.text);
       else if (block.type === "image") {
-        blocks.push({ type: "image", url: imageUrl(paneId, id, imageIndex) });
+        blocks.push({ type: "image", url: imageUrl(id, imageIndex) });
         imageIndex += 1;
       }
     }
@@ -312,7 +316,7 @@ export type MessagePage = { messages: Message[]; hasMore: boolean; beforeFound: 
 /** Reads up to `limit` active-branch messages ending just before `before` (or at the tip). */
 export async function readMessagePage(
   filePath: string,
-  paneId: string,
+  imageUrl: ImageUrl,
   options: { before?: string; limit: number },
 ): Promise<MessagePage> {
   const newestFirst: Message[] = [];
@@ -332,7 +336,7 @@ export async function readMessagePage(
       hasMore = true;
       return false;
     }
-    const message = normalizeEntry(entry, paneId);
+    const message = normalizeEntry(entry, imageUrl);
     if (message) newestFirst.push(message);
     return true;
   });

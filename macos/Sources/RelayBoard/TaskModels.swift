@@ -128,6 +128,8 @@ struct TaskPR: Decodable, Sendable, Hashable, Identifiable {
 }
 
 struct TaskSession: Decodable, Sendable, Hashable {
+    /// Which session it is, to open it in Chats; nil from a relay too old to say.
+    var sessionFile: String?
     var title: String
     var state: Session.State
     var open: BoardAction

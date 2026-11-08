@@ -48,8 +48,26 @@ final class BoardModel {
     private var removed: Set<String> = []
 
     let client = BoardClient(server: .fromEnvironment())
+    /// The Chats view: your sessions as conversations.
+    let chats = ChatsModel(client: BoardClient(server: .fromEnvironment()))
+    /// The sidebar's pick: which view the window shows.
+    var section: SidebarItem? = .tasks
     private var loop: Task<Void, Never>?
     private var refreshes = 0
+
+    init() {
+        chats.onToast = { [weak self] toast in self?.toast = toast }
+    }
+
+    /// Shows a session in Chats, to read it and type into it.
+    func openChat(_ sessionFile: String) {
+        section = .chats
+        chats.select(.chat(sessionFile))
+    }
+
+    func showTasks() {
+        section = .tasks
+    }
 
     /// The lanes as the window shows them: the server's, with the requests and closes it hasn't caught up with.
     var lanes: [Lane] {
@@ -83,7 +101,10 @@ final class BoardModel {
     var tasksWaitingOnYou: Int { taskLanes.filter(\.hot).reduce(0) { $0 + $1.cards.count } }
 
     func start() {
-        if loop == nil { schedule(after: .zero) }
+        if loop == nil {
+            schedule(after: .zero)
+            chats.startRefreshing()
+        }
     }
 
     func refreshNow() {

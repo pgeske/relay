@@ -44,7 +44,7 @@ struct ActionResult: Sendable {
 struct BoardClient: Sendable {
     var server: RelayServer
 
-    private static let session = URLSession(configuration: .ephemeral)
+    static let session = URLSession(configuration: .ephemeral)
 
     func board() async throws -> Board {
         let (data, response) = try await send("api/board")
@@ -105,14 +105,26 @@ struct BoardClient: Sendable {
         return try JSONDecoder().decode(ModelChoices.self, from: data)
     }
 
-    private func post(_ path: String, body: Data) async throws -> ActionResult {
+    func post(_ path: String, body: Data) async throws -> ActionResult {
         let (data, response) = try await send(path, method: "POST", body: body)
         let ok = (200..<300).contains(response.statusCode)
         let fallback = ok ? "Done" : "Something went wrong (HTTP \(response.statusCode))"
         return ActionResult(ok: ok, status: response.statusCode, message: Self.message(in: data) ?? fallback)
     }
 
-    private func send(_ path: String, method: String = "GET", body: Data? = nil) async throws -> (Data, HTTPURLResponse) {
+    func send(_ path: String, method: String = "GET", body: Data? = nil) async throws -> (Data, HTTPURLResponse) {
+        let request = try request(path, method: method, body: body)
+        do {
+            let (data, response) = try await Self.session.data(for: request)
+            guard let http = response as? HTTPURLResponse else { throw BoardError.server(status: 0, message: "relay's server sent no HTTP response") }
+            return (data, http)
+        } catch let error as URLError where [.cannotConnectToHost, .cannotFindHost, .networkConnectionLost].contains(error.code) {
+            throw BoardError.serverNotRunning
+        }
+    }
+
+    /// A signed-in request to relay's server; `path` may carry a query.
+    func request(_ path: String, method: String = "GET", body: Data? = nil) throws -> URLRequest {
         let token: String
         do {
             token = try String(contentsOf: server.tokenFile, encoding: .utf8).trimmingCharacters(in: .whitespacesAndNewlines)
@@ -129,23 +141,18 @@ struct BoardClient: Sendable {
             request.httpBody = body
             request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         }
-        do {
-            let (data, response) = try await Self.session.data(for: request)
-            guard let http = response as? HTTPURLResponse else { throw BoardError.server(status: 0, message: "relay's server sent no HTTP response") }
-            return (data, http)
-        } catch let error as URLError where [.cannotConnectToHost, .cannotFindHost, .networkConnectionLost].contains(error.code) {
-            throw BoardError.serverNotRunning
-        }
+        return request
     }
 
-    /// The `message` or `error` sentence of a server reply.
-    private static func message(in data: Data) -> String? {
-        let body = try? JSONDecoder().decode([String: String].self, from: data)
-        return body?["message"] ?? body?["error"]
+    /// The `message` or `error` sentence of a server reply, whatever else it carries.
+    static func message(in data: Data) -> String? {
+        struct Reply: Decodable { let message: String?; let error: String? }
+        let reply = try? JSONDecoder().decode(Reply.self, from: data)
+        return reply?.message ?? reply?.error
     }
 
     /// Dates arrive as ISO 8601, with fractional seconds from relay and without from GitHub.
-    private static func decoder() -> JSONDecoder {
+    static func decoder() -> JSONDecoder {
         let decoder = JSONDecoder()
         decoder.dateDecodingStrategy = .custom { decoder in
             let text = try decoder.singleValueContainer().decode(String.self)

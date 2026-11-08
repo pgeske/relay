@@ -2,6 +2,7 @@ import AppKit
 import SwiftUI
 
 enum SidebarItem: Hashable {
+    case chats
     case tasks
     case project(Int)
     case all
@@ -10,15 +11,14 @@ enum SidebarItem: Hashable {
 
 struct BoardWindow: View {
     @Environment(BoardModel.self) private var model
-    @State private var selection: SidebarItem? = .tasks
 
     var body: some View {
         @Bindable var model = model
         NavigationSplitView {
-            Sidebar(selection: $selection)
+            Sidebar(selection: $model.section)
                 .navigationSplitViewColumnWidth(min: 190 * zoom, ideal: 215 * zoom, max: 280 * zoom)
         } detail: {
-            BoardContent(selection: selection ?? .tasks)
+            BoardContent(selection: model.section ?? .tasks)
                 // Centered under the board you're looking at, not the whole window with its sidebar.
                 .overlay(alignment: .bottom) { ToastView() }
         }
@@ -62,7 +62,7 @@ struct BoardWindow: View {
 
     /// The project the sidebar shows, which a new task starts in.
     private var selectedProject: Project? {
-        guard case .project(let id) = selection else { return nil }
+        guard case .project(let id) = model.section else { return nil }
         return model.board?.tasks?.projects.first { $0.id == id }
     }
 
@@ -92,6 +92,10 @@ private struct Sidebar: View {
 
     var body: some View {
         List(selection: $selection) {
+            Label("Chats", systemImage: "bubble.left.and.bubble.right")
+                .badge(model.chats.chats.filter { $0.state == .working }.count)
+                .tag(SidebarItem.chats)
+                .help("Your sessions as conversations: read them, type into them, start new ones")
             Section("Tasks") {
                 Label("All Tasks", systemImage: "checklist")
                     .badge(model.tasksWaitingOnYou)
@@ -386,6 +390,8 @@ private struct BoardContent: View {
 
     var body: some View {
         switch selection {
+        case .chats:
+            ChatsView()
         case .tasks, .project:
             tasksContent
         case .all, .lane:

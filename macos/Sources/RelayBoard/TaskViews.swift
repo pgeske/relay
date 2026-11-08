@@ -519,7 +519,8 @@ private struct PRLine: View {
     }
 }
 
-/// The task's session, on a row of its own: clicking it opens the session.
+/// The task's session, on a row of its own: clicking it opens the session in Chats (or, from a
+/// relay too old to say which session it is, in your terminal).
 private struct TaskSessionLine: View {
     let card: TaskCard
     let session: TaskSession
@@ -529,12 +530,14 @@ private struct TaskSessionLine: View {
 
     var body: some View {
         let sending = model.isSending(session.open, on: .task(card.id))
-        Button { model.request(session.open, on: .task(card.id)) } label: {
+        Button {
+            if let file = session.sessionFile { model.openChat(file) } else { model.request(session.open, on: .task(card.id)) }
+        } label: {
             HStack(spacing: 6) {
                 if sending {
                     ProgressView().controlSize(.mini)
                 } else {
-                    Image(systemName: "terminal").imageScale(.medium).foregroundStyle(.secondary)
+                    Image(systemName: session.sessionFile == nil ? "terminal" : "bubble.left.and.text.bubble.right").imageScale(.medium).foregroundStyle(.secondary)
                 }
                 Text(session.title).lineLimit(1).truncationMode(.tail)
                 if session.others > 0 {
@@ -556,7 +559,7 @@ private struct TaskSessionLine: View {
         }
         .buttonStyle(.plain)
         .onHover { hovering = $0 }
-        .help(session.open.hint)
+        .help(session.sessionFile == nil ? session.open.hint : "Open this session in Chats")
         .disabled(sending)
     }
 }
@@ -589,6 +592,9 @@ struct TaskMenuItems: View {
 
     var body: some View {
         if let session = card.session {
+            if let file = session.sessionFile {
+                Button("Open in Chats", systemImage: "bubble.left.and.text.bubble.right") { model.openChat(file) }
+            }
             Button(session.open.label, systemImage: "terminal") { model.request(session.open, on: .task(card.id)) }
         }
         ForEach(card.steps.filter { $0.action != "open" }, id: \.self) { step in
@@ -686,7 +692,7 @@ private struct UntrackedRow: View {
     var body: some View {
         let target = ActionTarget.session(session.sessionFile)
         HStack(alignment: .firstTextBaseline, spacing: 8) {
-            Image(systemName: "terminal").foregroundStyle(.secondary)
+            Image(systemName: "bubble.left.and.text.bubble.right").foregroundStyle(.secondary)
             Text(session.title)
                 .font(.zoomed(.subheadline).weight(.medium))
                 .truncationMode(.tail)
@@ -713,13 +719,14 @@ private struct UntrackedRow: View {
         .padding(.vertical, 8)
         .background(Color.primary.opacity(hovering ? 0.05 : 0))
         .contentShape(.rect)
-        .onTapGesture { model.request(session.open, on: target) }
+        .onTapGesture { model.openChat(session.sessionFile) }
         .contextMenu { menuItems(target) }
         .onHover { hovering = $0 }
-        .help(session.open.hint)
+        .help("Open this session in Chats")
     }
 
     @ViewBuilder private func menuItems(_ target: ActionTarget) -> some View {
+        Button("Open in Chats", systemImage: "bubble.left.and.text.bubble.right") { model.openChat(session.sessionFile) }
         Button(session.open.label, systemImage: "terminal") { model.request(session.open, on: target) }
         Button(session.dismiss.label, systemImage: session.dismiss.symbol) { model.request(session.dismiss, on: target) }
         if let close = session.close {
@@ -913,65 +920,11 @@ struct NewTaskSheet: View {
         }
     }
 
-    /// The model and thinking level its sessions start on, picked like omp's `/switch` and `/effort`.
-    /// Untinted while it's omp's default, so a choice you made stands out.
+    /// The model and thinking level its sessions start on.
     @ViewBuilder private var modelChip: some View {
         if let choices = model.modelChoices {
-            Menu {
-                let levels = choices.option(chosenModel ?? choices.defaults.model)?.thinkingLevels ?? []
-                if !levels.isEmpty {
-                    Section("Thinking") {
-                        checkmarkButton("Default", selected: chosenLevel == nil) { chosenLevel = nil }
-                        ForEach(levels, id: \.self) { level in
-                            checkmarkButton(ModelOption.levelLabel(level), selected: chosenLevel == level) { chosenLevel = level }
-                        }
-                    }
-                }
-                Section("Model") {
-                    checkmarkButton("Default", selected: chosenModel == nil) { pick(model: nil, in: choices) }
-                    ForEach(choices.providers, id: \.self) { provider in
-                        Menu(provider) {
-                            ForEach(choices.models.filter { $0.provider == provider }) { option in
-                                checkmarkButton(option.name, selected: chosenModel == option.selector) { pick(model: option.selector, in: choices) }
-                            }
-                        }
-                    }
-                }
-            } label: {
-                Label(modelLabel(choices), systemImage: "cpu")
-                    .lineLimit(1)
-                    .modifier(Chip(on: chosenModel != nil || chosenLevel != nil))
-            }
-            .menuStyle(.button)
-            .buttonStyle(.plain)
-            .menuIndicator(.hidden)
-            .menuOrder(.fixed)
-            .fixedSize()
-            .help("The model and thinking level its sessions start on")
+            ModelChip(choices: choices, model: $chosenModel, level: $chosenLevel, help: "The model and thinking level its sessions start on")
         }
-    }
-
-    private func checkmarkButton(_ title: String, selected: Bool, action: @escaping () -> Void) -> some View {
-        Button(action: action) {
-            if selected { Label(title, systemImage: "checkmark") } else { Text(title) }
-        }
-    }
-
-    /// Switching models drops a thinking level the new one doesn't take, like omp's `/switch` would.
-    private func pick(model selector: String?, in choices: ModelChoices) {
-        chosenModel = selector
-        let levels = choices.option(selector ?? choices.defaults.model)?.thinkingLevels ?? []
-        if let level = chosenLevel, !levels.contains(level) { chosenLevel = nil }
-    }
-
-    /// "Opus 5.5 · Medium": what it'll start on, defaults filled in.
-    private func modelLabel(_ choices: ModelChoices) -> String {
-        let selector = chosenModel ?? choices.defaults.model
-        let option = choices.option(selector)
-        let name = option?.shortName ?? selector?.split(separator: "/").last.map(String.init) ?? "Default model"
-        let level = chosenLevel ?? choices.defaults.thinkingLevel
-        guard let level, option?.thinkingLevels.isEmpty == false else { return name }
-        return "\(name) · \(ModelOption.levelLabel(level))"
     }
 
     /// Every project by its path, so subprojects sit right under their parents.
@@ -1015,6 +968,74 @@ struct NewTaskSheet: View {
             }
         }
         .scrollIndicators(.never)
+    }
+}
+
+/// A session's model and thinking level, picked like omp's `/switch` and `/effort`. For a session
+/// yet to start, `offersDefault` adds omp's own default (nil) to both lists, and the chip stays
+/// untinted while it's on them, so a choice you made stands out. For one already running, it shows
+/// what it runs on and switches it.
+struct ModelChip: View {
+    let choices: ModelChoices
+    @Binding var model: String?
+    @Binding var level: String?
+    var offersDefault = true
+    let help: String
+
+    var body: some View {
+        Menu {
+            let levels = choices.option(model ?? choices.defaults.model)?.thinkingLevels ?? []
+            if !levels.isEmpty {
+                Section("Thinking") {
+                    if offersDefault { checkmarkButton("Default", selected: level == nil) { level = nil } }
+                    ForEach(levels, id: \.self) { option in
+                        checkmarkButton(ModelOption.levelLabel(option), selected: level == option) { level = option }
+                    }
+                }
+            }
+            Section("Model") {
+                if offersDefault { checkmarkButton("Default", selected: model == nil) { pick(nil) } }
+                ForEach(choices.providers, id: \.self) { provider in
+                    Menu(provider) {
+                        ForEach(choices.models.filter { $0.provider == provider }) { option in
+                            checkmarkButton(option.name, selected: model == option.selector) { pick(option.selector) }
+                        }
+                    }
+                }
+            }
+        } label: {
+            Label(label, systemImage: "cpu")
+                .lineLimit(1)
+                .modifier(Chip(on: offersDefault && (model != nil || level != nil)))
+        }
+        .menuStyle(.button)
+        .buttonStyle(.plain)
+        .menuIndicator(.hidden)
+        .menuOrder(.fixed)
+        .fixedSize()
+        .help(help)
+    }
+
+    private func checkmarkButton(_ title: String, selected: Bool, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            if selected { Label(title, systemImage: "checkmark") } else { Text(title) }
+        }
+    }
+
+    /// Switching models drops a thinking level the new one doesn't take, like omp's `/switch` would.
+    private func pick(_ selector: String?) {
+        model = selector
+        let levels = choices.option(selector ?? choices.defaults.model)?.thinkingLevels ?? []
+        if offersDefault, let chosen = level, !levels.contains(chosen) { level = nil }
+    }
+
+    /// "Opus 5.5 · Medium": what it runs on, defaults filled in.
+    private var label: String {
+        let selector = model ?? choices.defaults.model
+        let option = choices.option(selector)
+        let name = option?.shortName ?? selector?.split(separator: "/").last.map(String.init) ?? "Default model"
+        guard let level = level ?? choices.defaults.thinkingLevel, option?.thinkingLevels.isEmpty == false else { return name }
+        return "\(name) · \(ModelOption.levelLabel(level))"
     }
 }
 

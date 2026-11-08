@@ -2,13 +2,12 @@ import { existsSync } from "node:fs";
 import type { IncomingMessage } from "node:http";
 import { homedir } from "node:os";
 import { THINKING_LEVELS, listModels } from "../server/modelState.ts";
-import { resolveSessionFile } from "../server/sessionFile.ts";
 import { parsePaneTitle } from "../server/sessions.ts";
 import { parseUploadedImages, saveUploadedImages, type UploadedImage } from "../server/uploads.ts";
-import { killWindow, listOmpPanes, mainSessionName, newWindow, pasteText, type Pane } from "../tmux.ts";
+import { killWindow, pasteText, type Pane } from "../tmux.ts";
 import { liveSessions } from "./command.ts";
 import { readSessionHeader } from "./owners.ts";
-import { ActionError, promptSession, showSession, waitUntilReady, type BoardActionResult } from "./serve.ts";
+import { ActionError, modelArgs, openAgentTab, promptSession, showSession, type BoardActionResult } from "./serve.ts";
 import { openBoardStore } from "./store.ts";
 import { SESSION_ACTIONS, TASK_ACTIONS, primarySession, sessionsByTask, type SessionAction, type TaskAction, type TaskSessionLink } from "./taskBoard.ts";
 import { readSessionInfo } from "./taskCommand.ts";
@@ -136,15 +135,8 @@ async function completeTask(id: number): Promise<string> {
  * session file, then handed the task.
  */
 async function startTask(task: Task): Promise<string> {
-  const tmuxSession = await mainSessionName();
-  if (!tmuxSession) throw new ActionError(409, "relay isn't running; open it with `relay` first");
   const cwd = task.cwd && existsSync(task.cwd) ? task.cwd : homedir();
-  const startedAt = Date.now();
-  const agentArgs = [...(task.model ? ["--model", task.model] : []), ...(task.thinkingLevel ? ["--thinking", task.thinkingLevel] : [])];
-  const paneId = await newWindow(tmuxSession, cwd, agentArgs);
-  await waitUntilReady(paneId);
-  const pane = (await listOmpPanes()).find((candidate) => candidate.paneId === paneId);
-  const sessionFile = pane ? await resolveSessionFile(pane, { pointerWrittenAfter: startedAt }) : null;
+  const { paneId, sessionFile } = await openAgentTab(cwd, modelArgs(task.model, task.thinkingLevel));
   const at = new Date().toISOString();
   const db = openBoardStore();
   try {

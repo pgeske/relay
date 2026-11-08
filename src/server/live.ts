@@ -72,7 +72,7 @@ export function livePhaseOnScreen(screen: string): string | null {
   return LIVE_BORDER.exec(screen)?.[1] ?? null;
 }
 
-async function livePhase(paneId: string): Promise<string | null> {
+export async function livePhase(paneId: string): Promise<string | null> {
   return livePhaseOnScreen(await capturePane(paneId));
 }
 
@@ -93,7 +93,7 @@ async function waitForLivePanel(paneId: string, shown: boolean, timeoutMs: numbe
  * that, so with no panel in sight press Ctrl+L, which toggles live mode from the message
  * box, and if that started a new live session instead, end it again with Esc.
  */
-async function stopLiveMode(paneId: string): Promise<void> {
+export async function stopLiveMode(paneId: string): Promise<void> {
   if (!(await livePhase(paneId))) {
     console.log(`live: no live panel on ${paneId}; pressing Ctrl+L in case live mode is hidden`);
     await sendKeys(paneId, ["C-l"]);
@@ -103,6 +103,19 @@ async function stopLiveMode(paneId: string): Promise<void> {
   await sendKeys(paneId, ["Escape"]);
   if (!(await waitForLivePanel(paneId, false, STOP_TIMEOUT_MS))) {
     console.error(`live: omp's live mode on ${paneId} did not end after Esc`);
+  }
+}
+
+/**
+ * Turns on omp's live mode in the pane for someone at this Mac: omp then listens on the Mac's own
+ * microphone and talks through its speakers, so unlike a phone call nothing gets rerouted.
+ */
+export async function startLiveMode(paneId: string): Promise<void> {
+  if (await livePhase(paneId)) return;
+  // Ctrl+L toggles live mode, so only press it when the pane isn't live already.
+  await sendKeys(paneId, ["C-l"]);
+  if (!(await waitForLivePanel(paneId, true, START_TIMEOUT_MS))) {
+    throw new Error("omp didn't start live mode. Check the session in your terminal for an error.");
   }
 }
 

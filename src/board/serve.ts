@@ -2,6 +2,7 @@ import { existsSync } from "node:fs";
 import type { IncomingMessage } from "node:http";
 import { homedir } from "node:os";
 import { setTimeout as sleep } from "node:timers/promises";
+import { resolveSessionFile } from "../server/sessionFile.ts";
 import { parsePaneTitle } from "../server/sessions.ts";
 import { listOmpPanes, mainSessionName, newWindow, pasteText, selectWindow } from "../tmux.ts";
 import { assembleBoard, describeOwner, liveSessions, parsePrRef, sourceFor } from "./command.ts";
@@ -200,6 +201,26 @@ export async function reopen(sessionFile: string, focus: boolean): Promise<strin
   const paneId = await newWindow(tmuxSession, readSessionHeader(sessionFile).cwd ?? homedir(), ["--resume", sessionFile]);
   if (focus) await selectWindow(paneId);
   return paneId;
+}
+
+/**
+ * Starts omp (with `agentArgs`, like `--model`) in a new background relay tab and waits until it
+ * takes input. Returns its pane and the session file it'll write, or null when omp didn't say yet.
+ */
+export async function openAgentTab(cwd: string, agentArgs: string[]): Promise<{ paneId: string; sessionFile: string | null }> {
+  const tmuxSession = await mainSessionName();
+  if (!tmuxSession) throw new ActionError(409, "relay isn't running; open it with `relay` first");
+  const startedAt = Date.now();
+  const paneId = await newWindow(tmuxSession, cwd, agentArgs);
+  await waitUntilReady(paneId);
+  const pane = (await listOmpPanes()).find((candidate) => candidate.paneId === paneId);
+  const sessionFile = pane ? await resolveSessionFile(pane, { pointerWrittenAfter: startedAt }) : null;
+  return { paneId, sessionFile };
+}
+
+/** omp's flags for starting on a model and thinking level; none for omp's defaults. */
+export function modelArgs(model: string | null | undefined, thinkingLevel: string | null | undefined): string[] {
+  return [...(model ? ["--model", model] : []), ...(thinkingLevel ? ["--thinking", thinkingLevel] : [])];
 }
 
 /**

@@ -112,6 +112,8 @@ export interface TaskPrView {
 }
 
 export interface TaskSessionView {
+  /** Which session it is, for opening it in the board's Chats. */
+  sessionFile: string;
   title: string;
   state: "open" | "working" | "closed";
   open: TaskActionView;
@@ -363,8 +365,15 @@ function action(name: TaskAction | SessionAction, label: string, hint: string, e
 /** omp starts session titles with a nerd-font icon, which no system font draws. */
 const PRIVATE_USE = /[\uE000-\uF8FF]|[\u{F0000}-\u{10FFFF}]/gu;
 
-function sessionTitle(title: string): string {
+export function sessionTitle(title: string): string {
   return title.replace(PRIVATE_USE, "").trim() || "Untitled session";
+}
+
+/** A folder with ~ for your home, as you'd type it. */
+export function displayFolder(cwd: string | null, home: string): string | null {
+  if (cwd === null) return null;
+  if (cwd === home) return "~";
+  return cwd.startsWith(`${home}/`) ? `~${cwd.slice(home.length)}` : cwd;
 }
 
 function openAction(session: TaskSessionInfo): TaskActionView {
@@ -482,6 +491,7 @@ function taskCard(task: Task, inputs: TaskInputs, places: Map<string, PrPlace>, 
       }),
     session: primary
       ? {
+          sessionFile: primary.sessionFile,
           title: sessionTitle(primary.title),
           // A session working on another task isn't working on this one.
           state: primary.live ? (primary.live.status === "working" && primary.onTask ? "working" : "open") : "closed",
@@ -524,8 +534,7 @@ export function taskBoardView(inputs: TaskInputs, home: string): TaskBoardView {
       (session): UntrackedSessionView => ({
         sessionFile: session.sessionFile,
         title: sessionTitle(session.title),
-        // Its folder with ~ for your home, as you'd type it.
-        folder: session.cwd === null ? null : session.cwd === home ? "~" : session.cwd.startsWith(`${home}/`) ? `~${session.cwd.slice(home.length)}` : session.cwd,
+        folder: displayFolder(session.cwd, home),
         state: session.live!.status,
         activeAgo: session.activeAt ? timeAgo(session.activeAt, now) : null,
         open: action("open-session", "Open Session", "Show this session in your terminal"),

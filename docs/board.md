@@ -1,6 +1,6 @@
 # Relay Board
 
-The full reference for **Relay Board**, relay's macOS app for your tasks and pull requests. The [README](../README.md) has the short version.
+The full reference for **Relay Board**, relay's macOS app for your chats, tasks, and pull requests. The [README](../README.md) has the short version.
 
 ```sh
 relay board          # or prefix B inside relay
@@ -17,6 +17,16 @@ Tasks sit in sections sorted by who moves next, with a gap between each group. Y
 **New Task** (⌘N) jots one down: what you want done, optional details (paste or drop screenshots into them too; the agent gets each one's saved path), a project, and whether you approve its plan before the agent starts. **Start** (⌘↩) opens a new relay tab with an agent on it, in `/tmp`; **Save as Idea** keeps it for later. Projects group tasks in the sidebar.
 
 Agents report through `relay task`, which the relay skill teaches them: they register a task when they start on one (`relay task new <title>`), report its stage, status, and what it's blocked on (`relay task update`), record their plan and wait for your approval (`relay task plan`), and say it's finished with a note on what they did and how they checked (`relay task done --summary`), which puts it in Ready to ship for you. PRs a task's session opens join the task on their own. `relay task` lists your tasks, and `relay task --json` gives agents the whole board. Tasks live in `~/.local/share/relay/board.db` with the rest of the board.
+
+## Chats
+
+**Chats** shows your omp sessions as conversations, like a chat app, so you can follow and talk to agents without switching to your terminal. The list on the left has every open session first (an amber dot while it works, green while it waits for you), then the closed ones from the last 30 days and every session a task has, grouped by day, each with its task's color and id. The search box filters by title, folder, or task.
+
+Pick one to read it live as it works: your messages on the right, the agent's replies in Markdown, and its thinking and tool calls between two replies folded into one line (**Ran 6 tools**) that opens to each step, its arguments, and what it returned. Type below it: ↩ sends, ⇧↩ starts a new line, and screenshots pasted or dropped in go along as files the agent can read. While it works, an empty box's button is **Stop** (Esc in its terminal). When the agent asks a question with its `ask` tool, the choices show as buttons above the box. The model chip switches its model or thinking level, as omp's `/switch` and `/effort` do. Typing into a closed chat reopens it in a background relay tab and sends your message there.
+
+**Live** turns on omp's own live voice mode (`/live`, Ctrl+L) in that session: it listens on this Mac's microphone and answers through its speakers, and the bar above the box shows what it's doing, with **Mute** and **End**.
+
+**New Chat** (⇧⌘N) opens an empty page: your first message starts a new omp session in `/tmp`, on the model and thinking level its chip picks. A chat's **…** menu adds it to a task (**Add to Task**, which also tells an open session so it keeps the task current), asks it to register a new task (**Make a Task from This Chat**), opens it in your terminal, or closes its tab. Clicking a task's session line, or a row under **Not tracked**, opens that session in Chats; their menus still offer the terminal.
 
 ## Pull requests
 
@@ -40,7 +50,7 @@ A Fix CI result is kept the same way, tied to the head commit when it was record
 
 Cards in **Human review** move on through Slack. **Ask for Approval** asks the session to draft a Slack message asking each reviewer the PR still waits on (the people and teams GitHub still has review requests out to) for a review: the PR's link and a sentence on what it does and why, written like your earlier review requests, in the channel where that team or person takes review requests (it asks you when that's unclear). Before drafting, it searches Slack (private channels too) for an ask already sent, say one you wrote yourself, by the PR's URL and `<repo>#<number>`. One that asks a reviewer in their channel, or clearly asks their team elsewhere, is linked instead of drafted again, counting as asked when it was sent; when it can't tell whether a message counts, it asks you. It tells you which asks it found and which it drafted. Reviewers who share a channel share one message. When GitHub lists nobody but approvals are still missing, the session works out who from the PR's required reviewers or CODEOWNERS. Each ask is recorded for its reviewer, so pressing the button again only asks reviewers no ask went to yet. Once every reviewer has an ask, the button becomes **Bump**: for each ask whose reviewer hasn't approved, the session finds the message you sent (or tells you if you never sent the draft) and drafts a short bump in its thread; a found ask is already that message. Both only ever create drafts; you send them. The card's Slack row has a line per ask (**#payments-eng · asked 20m ago**, **#infra · bumped 1d ago**), each opening it in Slack; a found ask reads the same, its tooltip saying it was found. An ask whose reviewer approved is checked off and dimmed. With three or more, two show and the rest fold into **+N more**, which lists them all. Both confirm first, and follow a request like the other steps (**Agent drafting approval ask…**, **Agent drafting bump…**, or **Ask for Approval Again** / **Bump Again** if the session stopped before recording every draft).
 
-The board's buttons type into your sessions, so its endpoints (`GET /api/board`, `POST /api/board/actions/<action>`, and the tasks' `POST /api/board/tasks` and `POST /api/board/tasks/actions/<action>`) answer only this computer: a request must come over loopback and name `localhost`, and it must carry the bearer token in `~/.config/relay/token`, a mode-600 file the app reads and a web page can't. A page that rebinds its domain to 127.0.0.1 fails the first check, and no page can read the token.
+The board's buttons type into your sessions, so its endpoints (`GET /api/board`, `POST /api/board/actions/<action>`, the tasks' `POST /api/board/tasks` and `POST /api/board/tasks/actions/<action>`, and the chats' `/api/board/chats`) answer only this computer: a request must come over loopback and name `localhost`, and it must carry the bearer token in `~/.config/relay/token`, a mode-600 file the app reads and a web page can't. A page that rebinds its domain to 127.0.0.1 fails the first check, and no page can read the token. An open chat's live stream, Stop, answers, and model switches use the same `/api/sessions/<pane>` endpoints as the iPhone app.
 
 ```sh
 relay board review <pr-url> --passed --summary "Found nothing to change."

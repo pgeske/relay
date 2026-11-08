@@ -3,12 +3,13 @@ import type { Duplex } from "node:stream";
 import { homedir } from "node:os";
 import { setTimeout as sleep } from "node:timers/promises";
 import { WebSocketServer } from "ws";
-import { fetchBoardView, isLocalRequest, readActionBody, runBoardAction } from "../board/serve.ts";
+import { ActionError, fetchBoardView, isLocalRequest, readActionBody, runBoardAction } from "../board/serve.ts";
+import { createChat, listChats, parseNewChat, readChatImage, readChatPage, runChatAction, type NewChatRequest } from "../board/chats.ts";
 import { createTaskFromBoard, parseNewTask, readJsonBody, runProjectAction, runTaskAction, type NewTaskRequest } from "../board/taskServe.ts";
 import { endLiveCall, recoverInterruptedCall, startLiveCall } from "./live.ts";
 import { askAnswerSteps, findPendingAsk, validateAskAnswers, type AskAnswer } from "./ask.ts";
 import { startSessionEvents } from "./events.ts";
-import { readEntryImage, readMessagePage } from "./messages.ts";
+import { paneImageUrl, readEntryImage, readMessagePage } from "./messages.ts";
 import { isVoiceEnabled } from "../voice.ts";
 import { findSessionPane, listSessions, toSession, type Session } from "./sessions.ts";
 import { THINKING_LEVELS, configuredDefaults, listModels, rememberChoice } from "./modelState.ts";
@@ -273,7 +274,7 @@ async function handleMessages(
 
   const before = url.searchParams.get("before") ?? undefined;
   try {
-    const page = await readMessagePage(sessionFile, pane.paneId, {
+    const page = await readMessagePage(sessionFile, paneImageUrl(pane.paneId), {
       before,
       limit: pageLimit(url.searchParams.get("limit")),
     });
@@ -303,9 +304,11 @@ async function handleImage(
   const sessionFile = await resolveSessionFile(pane);
   if (!sessionFile) throw new HttpError(404, "image not found");
 
-  const image = await readEntryImage(sessionFile, entryId, index);
-  if (!image) throw new HttpError(404, "image not found");
+  sendImage(res, await readEntryImage(sessionFile, entryId, index));
+}
 
+function sendImage(res: ServerResponse, image: { bytes: Buffer; contentType: string } | null): void {
+  if (!image) throw new HttpError(404, "image not found");
   res.writeHead(200, {
     "Content-Type": image.contentType,
     "Content-Length": String(image.bytes.length),
@@ -321,8 +324,9 @@ async function handleImage(
  * `{ "task": 12 }` (or `{ "session": "<file>" }`) runs one of a task card's controls.
  * `POST /api/board/projects/<create|rename|delete>` with `{ "project": 3, "name": "…", "parent": 1 }`
  * manages the sidebar's projects.
+ * `/api/board/chats` is the Chats view's (see `routeChats`).
  */
-async function routeBoard(req: IncomingMessage, res: ServerResponse, rest: string[]): Promise<void> {
+async function routeBoard(req: IncomingMessage, res: ServerResponse, url: URL, rest: string[]): Promise<void> {
   if (rest.length === 0) {
     if (req.method !== "GET") throw new HttpError(405, "method not allowed");
     sendJson(res, 200, await fetchBoardView());
@@ -346,6 +350,10 @@ async function routeBoard(req: IncomingMessage, res: ServerResponse, rest: strin
       parent: typeof body.parent === "number" ? body.parent : undefined,
     });
     sendJson(res, result.status, result.status < 300 ? { message: result.message } : { error: result.message });
+    return;
+  }
+  if (rest[0] === "chats") {
+    await routeChats(req, res, url, rest.slice(1));
     return;
   }
   if (rest.length !== 2 || rest[0] !== "actions") {
@@ -388,6 +396,46 @@ async function routeTasks(req: IncomingMessage, res: ServerResponse, rest: strin
   sendJson(res, result.status, result.status < 300 ? { message: result.message } : { error: result.message });
 }
 
+/**
+ * The Chats view's endpoints, each naming a conversation by its session file: `GET chats` lists
+ * them, `POST chats` starts one with `{ text, images?, model?, thinkingLevel? }`, `GET
+ * chats/messages?session=&before=&limit=` pages one's conversation (open or closed), `GET
+ * chats/images?session=&entry=&index=` serves its images, and `POST chats/actions/<action>` with
+ * `{ "session": "<file>", ... }` runs one of its controls. An open chat's live stream, Stop,
+ * answers, and model switches use the phone's `/api/sessions/<pane>` endpoints.
+ */
+async function routeChats(req: IncomingMessage, res: ServerResponse, url: URL, rest: string[]): Promise<void> {
+  const route = `${req.method} ${rest.join("/")}`;
+  try {
+    if (route === "GET ") {
+      sendJson(res, 200, { chats: await listChats() });
+    } else if (route === "GET messages") {
+      const page = await readChatPage(url.searchParams.get("session"), url.searchParams.get("before") ?? undefined, pageLimit(url.searchParams.get("limit")));
+      sendJson(res, 200, page);
+    } else if (route === "GET images") {
+      const index = Number.parseInt(url.searchParams.get("index") ?? "", 10);
+      if (!Number.isFinite(index) || index < 0) throw new HttpError(400, "invalid image index");
+      sendImage(res, await readChatImage(url.searchParams.get("session"), url.searchParams.get("entry") ?? "", index));
+    } else if (route === "POST " || (req.method === "POST" && rest.length === 2 && rest[0] === "actions")) {
+      let body: Record<string, unknown>;
+      let request: NewChatRequest | null = null;
+      try {
+        body = await readJsonBody(req);
+        if (rest.length === 0) request = parseNewChat(body);
+      } catch (error) {
+        throw new HttpError(400, error instanceof Error ? error.message : "bad request");
+      }
+      const { status, message, ...extra } = request ? await createChat(request) : await runChatAction(rest[1], body);
+      sendJson(res, status, status < 300 ? { message, ...extra } : { error: message });
+    } else {
+      sendJson(res, 404, { error: "not found" });
+    }
+  } catch (error) {
+    if (error instanceof ActionError) throw new HttpError(error.status, error.message);
+    throw error;
+  }
+}
+
 async function route(
   req: IncomingMessage,
   res: ServerResponse,
@@ -396,7 +444,7 @@ async function route(
 ): Promise<void> {
   const [, resource, rawId, action, ...rest] = segments;
   if (resource === "board") {
-    await routeBoard(req, res, segments.slice(2));
+    await routeBoard(req, res, url, segments.slice(2));
     return;
   }
   if (resource === "models" && !rawId) {
