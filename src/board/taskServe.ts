@@ -48,20 +48,20 @@ function startPrompt(task: Task): string {
   return (
     `I started ${taskRef(task.id)} from the relay board: ${task.title}\n\n` +
     (task.details ? `${task.details}\n\n` : "") +
-    `This session is on it already. Keep it current on the board as you go, following the Tasks section of the relay skill: ` +
-    `report with \`relay task update\` as it moves through research, plan, doing, and rollout, and say whenever it's blocked on me or on others. ` +
+    `This session is on it already. Follow the Tasks section of the relay skill: relay keeps the card's stage and status current on its own, ` +
+    `and whenever you stop to wait on me or on others, say so first with \`relay task update --blocked-on me\` or \`--blocked-on others\`. ` +
     `${plan} ${FINISH_ASK}`
   );
 }
 
 function approvePrompt(task: Task): string {
-  return `I approved your plan for ${taskRef(task.id)} on the relay board. Go ahead and carry it out, reporting progress with \`relay task update\`. ${FINISH_ASK}`;
+  return `I approved your plan for ${taskRef(task.id)} on the relay board. Go ahead and carry it out; whenever you stop to wait on me or on others, say so first with \`relay task update --blocked-on me\` or \`--blocked-on others\`. ${FINISH_ASK}`;
 }
 
 const TRACK_PROMPT =
   "I pressed Track on the relay board for this session. If it's working on a task (anything we'd keep going at until it's done), register it: " +
   '`relay task new "<short title>" --stage <stage> --status "<where it stands>"`, adding `--skip-plan` when I already gave you the go-ahead or there\'s nothing to plan. ' +
-  "From then on, keep it current as the relay skill's Tasks section says. If this session isn't working on a task, just tell me so.";
+  "From then on, report as the relay skill's Tasks section says. If this session isn't working on a task, just tell me so.";
 
 interface SessionPlace {
   sessionFile: string;

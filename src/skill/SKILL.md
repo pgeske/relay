@@ -1,17 +1,19 @@
 ---
 name: relay
-description: Relay's board of the user's tasks and PRs. Use at the start of any multi-step task in a relay session (anything taking more than a few minutes, code or not, like a change, a rollout, an investigation, or asking a team for something) to register it, and while working on it to keep its stage and status current; when asked to track this in relay; when asked where tasks or pull requests stand, what's ready to merge, or what's waiting on review; right after a reviewer agent finishes reviewing a pull request, after finishing a Fix CI request from the board, or after drafting a Slack approval ask or bump for a pull request, to record it; and when taking over a pull request another session opened.
+description: Relay's board of the user's tasks and PRs. Use at the start of any multi-step task in a relay session (anything taking more than a few minutes, code or not, like a change, a rollout, an investigation, or asking a team for something) to register it, and while working on it to record its plan, say what it waits on before stopping, and say when it's done; when asked to track this in relay; when asked where tasks or pull requests stand, what's ready to merge, or what's waiting on review; right after a reviewer agent finishes reviewing a pull request, after finishing a Fix CI request from the board, or after drafting a Slack approval ask or bump for a pull request, to record it; and when taking over a pull request another session opened.
 ---
 
 # relay board
 
-The Relay Board app has two views: **Tasks**, what the user is getting done, and **Pull Requests**. The user juggles several tasks at once, and attention is the bottleneck: the Tasks view exists so a task never gets forgotten while they look at another. It only works if you keep your task current.
+The Relay Board app has two views: **Tasks**, what the user is getting done, and **Pull Requests**. The user juggles several tasks at once, and attention is the bottleneck: the Tasks view exists so a task never gets forgotten while they look at another.
 
 ## Tasks
 
 A task is one thing the user wants done: a fix, a rollout, an investigation, getting another team to do something. It can take several sessions and PRs, or none. Tasks can belong to a project (a named group of tasks); projects can nest inside other projects.
 
-**Register the task when you start one** in a relay session, unless this session is already on a task (the user started it from the board, or you registered it earlier). Skip it for quick questions and one-off answers.
+You report at four moments: when you start, when you have a plan, before you stop, and when it's done. In between, relay keeps the card current on its own: when you stop, or after a few minutes of work without a report, it reads the end of this session and refreshes the task's stage and status line, marked **auto**. You don't need to report each step; commands without a task id act on this session's task.
+
+**1. Register the task when you start one** in a relay session, unless this session is already on a task (the user started it from the board, or you registered it earlier). Skip it for quick questions and one-off answers.
 
 ```sh
 relay task new "Roll out the new cache to staging" --project "Faster search" --status "Reading the rollout runbook"
@@ -22,23 +24,7 @@ relay task new "Roll out the new cache to staging" --project "Faster search" --s
 - By default the user approves your plan before you carry it out (below). Add `--skip-plan` when there's nothing to plan, or the user already told you exactly what to do.
 - `--project` names a project, creating it if needed; `Parent/Child` names a subproject inside another (`--project "Relay/Sidebar"`). Reuse an existing one (`relay task --json` lists projects, each with its `path`) rather than inventing a near-duplicate.
 
-**Keep it current.** Every time the task moves, report it; commands without a task id act on this session's task:
-
-```sh
-relay task update --stage doing --status "Opened the PR; waiting for CI"
-relay task update --blocked-on me --reason "Which datacenter should go first?"
-relay task update --blocked-on others --reason "Waiting on the storage team to approve the config change"
-relay task update --pr https://github.com/acme/api/pull/12   # a PR this session didn't open
-```
-
-- Stages, in order: `research`, `plan`, `doing`, `rollout` (rolling out or verifying). Move it on when the work does; skipping a stage is fine. Only the user moves a task to `done` (below).
-- `--status` is one short line the user reads at a glance: where it stands now, not what you did ten steps ago.
-- **Before ending your turn**, make sure the board says what the task waits on. Waiting for the user's answer or decision: `--blocked-on me`. Waiting for anyone else (a team, a reviewer, a deploy, a long job): `--blocked-on others`. Any update without `--blocked-on` clears the block, so repeat it while it holds. When that update is your last step before you stop, relay takes your word for it.
-- When you forget, relay fills in: as you stop, or after a few quiet minutes of work, it reads the end of this session and corrects the card, marked **auto**. That's a fallback that guesses from your words, so keep reporting yourself; your next report replaces it.
-- The user can **pause** a task on the board to set it aside. It stays in Paused while you keep reporting, until they resume it or you finish it.
-- PRs this session opens join the task on their own.
-
-**Plans.** Unless the task skips plan approval, record your plan and then stop until the user approves it on the board (they press **Approve Plan**, which tells you to go ahead):
+**2. Plans.** Unless the task skips plan approval, record your plan and then stop until the user approves it on the board (they press **Approve Plan**, which tells you to go ahead):
 
 ```sh
 relay task plan --summary - <<'EOF'
@@ -49,13 +35,30 @@ EOF
 
 A plan recorded again (revised) needs approving again. On a task that skips approval, recording a plan is optional and just informs.
 
-**Finishing.** When the work is finished by the task's own bar (merged, rolled out, verified, answered), say so with a note on what you did and how you checked it. The board shows that note on the task's card, so write it for the user to verify at a glance: the outcome first, then the evidence. The task waits in the board's **Ready to ship** section until the user looks: **Ship It** moves it to Shipped and closes its idle sessions' tabs; **Not Yet** sends it back and shows them this session, to tell you what's missing. Any `relay task update` after that takes it out of Ready to ship again, so report as you pick the work back up, and run `relay task done` again once it's finished.
+**3. Before ending your turn**, say what the task waits on. It decides whether the task lands in front of the user, and relay can only guess it from your last words:
+
+```sh
+relay task update --blocked-on me --reason "Which datacenter should go first?"
+relay task update --blocked-on others --reason "Waiting on the storage team to approve the config change"
+```
+
+- Waiting for the user's answer or decision: `--blocked-on me`. Waiting for anyone else (a team, a reviewer, a deploy, a long job): `--blocked-on others`. When that update is your last step before you stop, relay takes your word for it.
+- Any update without `--blocked-on` clears the block, so repeat it while it holds.
+- Stopping because the work is finished? Run `relay task done` instead (below). Stopping after `relay task plan` needs nothing more.
+
+**4. Finishing.** When the work is finished by the task's own bar (merged, rolled out, verified, answered), say so with a note on what you did and how you checked it. The board shows that note on the task's card, so write it for the user to verify at a glance: the outcome first, then the evidence. The task waits in the board's **Ready to ship** section until the user looks: **Ship It** moves it to Shipped and closes its idle sessions' tabs; **Not Yet** sends it back and shows them this session, to tell you what's missing. Any `relay task update` after that takes it out of Ready to ship again; pick the work back up, and run `relay task done` again once it's finished.
 
 ```sh
 relay task done --status "Rolled out to every staging datacenter" --summary - <<'EOF'
 Rolled the cache out to all 6 staging datacenters. Search p99 stayed under 120ms in each (dashboard checked after every one); no errors in the logs.
 EOF
 ```
+
+**Also worth knowing:**
+
+- `relay task update --pr <url>` adds a PR this session didn't open; PRs it opens join the task on their own.
+- `relay task update --stage <stage> --status "<line>"` is there when the auto status is wrong or you want to say something specific. Stages, in order: `research`, `plan`, `doing`, `rollout` (rolling out or verifying). Only the user moves a task to `done`.
+- The user can **pause** a task on the board to set it aside. It stays in Paused until they resume it or you finish it.
 
 **When the board hands you a task** ("I started T-12 from the relay board"), this session is already on it: don't register it again. When the board asks you to track a session, register what it's working on with `relay task new`, or say it isn't a task. `relay task link <task>` puts this session on an existing task (say, a second session on the same work). `relay task show` prints this session's task; `relay task --json` lists them all, by section: `ship`, `needs-you`, `working`, `waiting`, `paused`, `ideas`, `untracked`, `done`.
 

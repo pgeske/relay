@@ -74,7 +74,7 @@ flowchart LR
   ship -- "Ship it" --> done["🚀 Shipped"]
 ```
 
-- **You never chase an agent.** It reports its stage, its status, and what it's blocked on. When it forgets, relay reads the end of its session with a small, fast model and fixes the card itself, marked **auto**.
+- **You never chase an agent.** Relay keeps each card's stage and status current by reading the end of the agent's session with a small, fast model, marked **auto**. The agent itself only speaks up at the moments that matter: when it starts, when it has a plan, when it stops waiting on you or others, and when it's done.
 - **Nothing ships without you.** A finished task lands in **Ready to ship** with a note on what the agent did and how it checked. One click on **Ship It** and it's shipped.
 - **Plans wait for you,** unless you say the task can skip that step.
 - **Park what can wait.** **Pause** a task from its menu and it sits in **Paused**, folded away, until you press **Resume**.
@@ -129,9 +129,8 @@ relay installs an omp skill (`~/.omp/agent/skills/relay`) that teaches agents to
 
 ```sh
 relay task new "Roll out the cache"     # register a task; this session is on it
-relay task update --stage doing --status "PR open, waiting on CI"
-relay task update --blocked-on me --reason "Which region goes first?"
 relay task plan --summary - < plan.md   # waits for approval on the board
+relay task update --blocked-on me --reason "Which region goes first?"
 relay task done --summary - < done.md   # waits in Ready to ship for you
 relay task --json                       # every task, by section
 relay board --json                      # every PR, by lane
