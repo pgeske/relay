@@ -84,7 +84,7 @@ private struct TaskSection: View {
         } else {
             let zoom = Zoom.shared.scale
             CardGrid(minimum: 260 * zoom, maximum: 380 * zoom, spacing: 10) {
-                ForEach(lane.cards) { TaskCardView(card: $0) }
+                ForEach(lane.cards) { TaskCardView(card: $0, sectionTitle: lane.title) }
             }
         }
     }
@@ -94,6 +94,8 @@ private struct TaskSection: View {
 /// plan and PRs, then its session and its one step forward. Clicking it shows its details and history.
 struct TaskCardView: View {
     let card: TaskCard
+    /// The title of the section the card sits in, so the card doesn't repeat it ("Agent working").
+    let sectionTitle: String
 
     @State private var hovering = false
     @State private var showingDetails = false
@@ -114,7 +116,7 @@ struct TaskCardView: View {
                 StageBar(card: card)
                 if let finish = card.finish, finish.awaiting {
                     DeliveryNote(card: card, finish: finish)
-                } else {
+                } else if card.reason.text != sectionTitle {
                     ReasonLine(reason: card.reason)
                 }
                 if let status = card.status {
