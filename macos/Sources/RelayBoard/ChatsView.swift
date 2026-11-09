@@ -358,7 +358,7 @@ private struct ConversationHeader: View {
 
     /// Tasks not shipped yet, newest first, to put this chat on.
     private var openTasks: [TaskCard] {
-        model.taskLanes.filter { $0.id != "done" }.flatMap(\.cards).sorted { $0.id > $1.id }
+        model.taskColumns.filter { $0.id != "done" }.flatMap(\.cards).sorted { $0.id > $1.id }
     }
 
     private var trackAction: BoardAction {

@@ -46,28 +46,35 @@ function session(status: "working" | "idle" | null, activeMinutesAgo = 5, onTask
   };
 }
 
-describe("where a task goes", () => {
+/** The board for these tasks, each `sessions` entry linking a session to a task. */
+function boardOf(tasks: Task[], sessions: { taskId: number; info: TaskSessionInfo }[] = []) {
+  const links = sessions.map(({ taskId, info }) => ({ taskId, sessionFile: info.sessionFile, linkedAt: minutesAgo(60) }));
+  const sessionInfo = new Map(sessions.map(({ info }) => [info.sessionFile, info]));
+  return taskBoardView({ tasks, projects: [], events: new Map(), sessions: links, sessionInfo, prs: new Map(), board: null, dismissed: new Set(), now }, "/home");
+}
+
+describe("whose move a task waits on", () => {
   test("a working agent needs nothing from you, even with a block it hasn't cleared yet", () => {
-    expect(placeTask(task({ blockedOn: "me", blockedAt: minutesAgo(30) }), [session("working")], [], now).lane).toBe("working");
+    expect(placeTask(task({ blockedOn: "me", blockedAt: minutesAgo(30) }), [session("working")], [], now).turn).toBe("agent");
   });
 
   test("a plan waiting for approval needs you, and says for how long", () => {
     const placed = placeTask(task({ stage: "plan", plan: "1. Turn it on", planAt: minutesAgo(12) }), [session("idle")], [], now);
-    expect(placed).toMatchObject({ lane: "needs-you", reason: { text: "Plan ready for your approval", since: "12m" } });
+    expect(placed).toMatchObject({ turn: "you", reason: "Plan ready for your approval", since: "12m" });
   });
 
   test("a plan on a task that skips approval doesn't wait for you", () => {
     const placed = placeTask(task({ approvePlan: false, plan: "1. Turn it on", planAt: minutesAgo(12), blockedOn: "others", blockedAt: minutesAgo(10) }), [session("idle")], [], now);
-    expect(placed.lane).toBe("waiting");
+    expect(placed.turn).toBe("others");
   });
 
   test("a PR ready to merge needs you even while the agent says it waits on others", () => {
     const placed = placeTask(task({ blockedOn: "others", blockedAt: minutesAgo(10) }), [session("idle")], [{ ref: "acme/api#1", lane: "ready" }], now);
-    expect(placed).toMatchObject({ lane: "needs-you", reason: { text: "api#1 is ready to merge" } });
+    expect(placed).toMatchObject({ turn: "you", reason: "api#1 is ready to merge" });
   });
 
   test("a PR in human review is waiting on others, not on you", () => {
-    expect(placeTask(task(), [session("idle")], [{ ref: "acme/api#1", lane: "human-review" }], now).lane).toBe("waiting");
+    expect(placeTask(task(), [session("idle")], [{ ref: "acme/api#1", lane: "human-review" }], now).turn).toBe("others");
   });
 
   test("a PR waiting for your click beats another waiting on reviewers", () => {
@@ -75,26 +82,26 @@ describe("where a task goes", () => {
       { ref: "acme/api#1", lane: "human-review" as const },
       { ref: "acme/api#2", lane: "agent-review" as const },
     ];
-    expect(placeTask(task(), [session("idle")], prs, now)).toMatchObject({ lane: "needs-you", reason: { text: "api#2 needs an agent review" } });
+    expect(placeTask(task(), [session("idle")], prs, now)).toMatchObject({ turn: "you", reason: "api#2 needs an agent review" });
   });
 
   test("a session that moved on to another task doesn't count as working on this one", () => {
-    expect(placeTask(task(), [session("working", 1, false)], [], now)).toMatchObject({ lane: "paused", reason: { text: "Its session moved on to another task" } });
+    expect(placeTask(task(), [session("working", 1, false)], [], now)).toMatchObject({ turn: "idle", reason: "Its session moved on to another task" });
   });
 
   test("a task you paused stays paused, even with its agent working or a PR ready, and offers Resume", () => {
     const paused = task({ pausedAt: minutesAgo(20), blockedOn: "me", blockedAt: minutesAgo(30) });
-    expect(placeTask(paused, [session("working")], [{ ref: "acme/api#1", lane: "ready" }], now)).toMatchObject({ lane: "paused", reason: { text: "You paused it", since: "20m" } });
+    expect(placeTask(paused, [session("working")], [{ ref: "acme/api#1", lane: "ready" }], now)).toMatchObject({ turn: "paused", since: "20m" });
 
-    const view = taskBoardView({ tasks: [paused], projects: [], events: new Map(), sessions: [], sessionInfo: new Map(), prs: new Map(), board: null, dismissed: new Set(), now }, "/home");
-    const card = view.lanes.find((lane) => lane.id === "paused")!.cards[0];
+    const card = boardOf([paused]).columns.flatMap((column) => column.cards)[0];
+    expect(card.turn).toMatchObject({ id: "paused", label: "Paused" });
     expect(card.steps.map((step) => step.action)).toEqual(["resume"]);
     expect(card.menu.map((item) => item.action)).toContain("unpause");
     expect(card.menu.map((item) => item.action)).not.toContain("pause");
   });
 
   test("any task in play can be paused, but not one shipped, delivered, or not started", () => {
-    const menuOf = (t: Task) => taskBoardView({ tasks: [t], projects: [], events: new Map(), sessions: [], sessionInfo: new Map(), prs: new Map(), board: null, dismissed: new Set(), now }, "/home").lanes.flatMap((lane) => lane.cards)[0].menu.map((item) => item.action);
+    const menuOf = (t: Task) => boardOf([t]).columns.flatMap((column) => column.cards)[0].menu.map((item) => item.action);
     expect(menuOf(task({ blockedOn: "others", blockedAt: minutesAgo(5) }))).toContain("pause");
     expect(menuOf(task({ stage: "done", doneAt: minutesAgo(5) }))).not.toContain("pause");
     expect(menuOf(task({ finishedAt: minutesAgo(5) }))).not.toContain("pause");
@@ -103,29 +110,26 @@ describe("where a task goes", () => {
 
   test("an agent that stopped without saying anything is your turn", () => {
     const placed = placeTask(task(), [session("idle", 7)], [{ ref: "acme/api#1", lane: "merged" }], now);
-    expect(placed).toMatchObject({ lane: "needs-you", reason: { text: "Agent stopped: your turn", since: "7m" } });
+    expect(placed).toMatchObject({ turn: "you", reason: "The agent stopped", since: "7m" });
   });
 
-  test("a task with only closed sessions is paused; one never started is an idea", () => {
-    expect(placeTask(task(), [session(null)], [], now).lane).toBe("paused");
-    expect(placeTask(task({ stage: "idea" }), [], [], now).lane).toBe("ideas");
-    // Started and moved on, but its session is gone: paused, not an idea.
-    expect(placeTask(task({ stage: "research" }), [], [], now).lane).toBe("paused");
+  test("a task with only closed sessions is idle; one never started is an idea", () => {
+    expect(placeTask(task(), [session(null)], [], now).turn).toBe("idle");
+    expect(placeTask(task({ stage: "idea" }), [], [], now).turn).toBe("idea");
+    // Started and moved on, but its session is gone: idle, not an idea.
+    expect(placeTask(task({ stage: "research" }), [], [], now).turn).toBe("idle");
   });
 
   test("a task its agent delivered waits for you to ship it, ahead of everything but a working agent", () => {
     const finished = task({ finishedAt: minutesAgo(3), finishNote: "Shipped it", blockedOn: "me", blockedAt: minutesAgo(30) });
-    expect(placeTask(finished, [session("idle")], [{ ref: "acme/api#1", lane: "ready" }], now)).toMatchObject({ lane: "ship", reason: { text: "Delivered", since: "3m" } });
+    expect(placeTask(finished, [session("idle")], [{ ref: "acme/api#1", lane: "ready" }], now)).toMatchObject({ turn: "you", delivered: true, since: "3m" });
     // Still writing its last reply: it's working until it stops.
-    expect(placeTask(finished, [session("working")], [], now).lane).toBe("working");
+    expect(placeTask(finished, [session("working")], [], now)).toMatchObject({ turn: "agent", delivered: false });
   });
 
   test("a delivered task counts as needing you, and offers shipping it or sending it back instead of Mark Shipped", () => {
-    const view = taskBoardView(
-      { tasks: [task({ finishedAt: minutesAgo(3), finishNote: "Shipped it" })], projects: [], events: new Map(), sessions: [], sessionInfo: new Map(), prs: new Map(), board: null, dismissed: new Set(), now },
-      "/home",
-    );
-    const card = view.lanes.find((lane) => lane.id === "ship")!.cards[0];
+    const view = boardOf([task({ stage: "rollout", finishedAt: minutesAgo(3), finishNote: "Shipped it" })]);
+    const card = view.columns.find((column) => column.id === "ship")!.cards[0];
     expect(view.needsYou).toBe(1);
     expect(card.steps.map((step) => step.action)).toEqual(["ship", "send-back"]);
     expect(card.menu.map((item) => item.action)).not.toContain("done");
@@ -133,10 +137,39 @@ describe("where a task goes", () => {
   });
 });
 
-test("sections run by who moves next: your move first, quickest to clear on top; then in motion, parked, untracked, shipped", () => {
-  const view = taskBoardView({ tasks: [], projects: [], events: new Map(), sessions: [], sessionInfo: new Map(), prs: new Map(), board: null, dismissed: new Set(), now }, "/home");
-  expect(view.lanes.map((lane) => lane.id)).toEqual(["ship", "needs-you", "working", "waiting", "paused", "ideas", "untracked", "done"]);
-  expect(view.lanes.filter((lane) => lane.hot).map((lane) => lane.id)).toEqual(["ship", "needs-you"]);
+describe("the columns", () => {
+  test("run left to right in the order work moves, ending with Ready to ship and Shipped", () => {
+    expect(boardOf([]).columns.map((column) => column.id)).toEqual(["idea", "research", "plan", "doing", "rollout", "ship", "done"]);
+  });
+
+  test("hold each task in its stage's column, whoever's move it is", () => {
+    const tasks = [
+      task({ id: 1, stage: "idea" }),
+      task({ id: 2, stage: "research", pausedAt: minutesAgo(5) }),
+      task({ id: 3, stage: "doing", blockedOn: "others", blockedAt: minutesAgo(5) }),
+      task({ id: 4, stage: "rollout", blockedOn: "me", blockedAt: minutesAgo(5) }),
+      task({ id: 5, stage: "done", doneAt: minutesAgo(5) }),
+    ];
+    const where = new Map(boardOf(tasks).columns.flatMap((column) => column.cards.map((card) => [card.id, column.id])));
+    expect(Object.fromEntries(where)).toEqual({ 1: "idea", 2: "research", 3: "doing", 4: "rollout", 5: "done" });
+  });
+
+  test("put your move on top, then the agent's, then others', then what's parked", () => {
+    const tasks = [
+      task({ id: 1, pausedAt: minutesAgo(5) }),
+      task({ id: 2, blockedOn: "others", blockedAt: minutesAgo(5) }),
+      task({ id: 3, blockedOn: "me", blockedAt: minutesAgo(5) }),
+      task({ id: 4 }),
+    ];
+    const view = boardOf(tasks, [{ taskId: 4, info: { ...session("working"), sessionFile: "/sessions/4.jsonl" } }]);
+    const doing = view.columns.find((column) => column.id === "doing")!;
+    expect(doing.cards.map((card) => [card.id, card.turn.id])).toEqual([
+      [3, "you"],
+      [4, "agent"],
+      [2, "others"],
+      [1, "paused"],
+    ]);
+  });
 });
 
 describe("an untracked session", () => {
@@ -146,7 +179,7 @@ describe("an untracked session", () => {
       { tasks: [], projects: [], events: new Map(), sessions: [], sessionInfo: new Map([[info.sessionFile, info]]), prs: new Map(), board: null, dismissed: new Set(), now },
       "/home",
     );
-    return view.lanes.find((lane) => lane.id === "untracked")!.sessions[0];
+    return view.untracked[0];
   }
 
   test("closes right away while idle, but asks first while it's working", () => {
@@ -169,6 +202,6 @@ test("a project counts and shows its subprojects' tasks, and cards name their pr
   expect(byName.get("Relay")).toMatchObject({ path: "Relay", ids: [1, 2, 3], open: 2, needsYou: 1 });
   expect(byName.get("Board")).toMatchObject({ path: "Relay/Board", parentId: 1, ids: [2, 3], open: 1, needsYou: 0 });
   expect(byName.get("Docs")).toMatchObject({ ids: [4], open: 0 });
-  const card = view.lanes.flatMap((lane) => lane.cards).find((card) => card.id === 1)!;
+  const card = view.columns.flatMap((column) => column.cards).find((card) => card.id === 1)!;
   expect(card.project).toEqual({ id: 3, name: "Sidebar", path: "Relay/Board/Sidebar" });
 });

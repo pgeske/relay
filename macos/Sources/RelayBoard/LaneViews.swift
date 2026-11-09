@@ -38,7 +38,7 @@ private struct LaneSection: View {
     }
 }
 
-/// What a section's header shows: a lane of PRs, or a section of tasks.
+/// What a lane's header shows.
 struct SectionInfo {
     var title: String
     var hint: String

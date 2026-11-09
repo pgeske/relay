@@ -8,7 +8,7 @@ import { loadBoardConfig } from "./config.ts";
 import type { Board } from "./lanes.ts";
 import { readSessionHeader } from "./owners.ts";
 import { openBoardStore } from "./store.ts";
-import { STAGE_LABELS, taskBoardView, taskChips, type TaskBoardView, type TaskChipView, type TaskSessionInfo } from "./taskBoard.ts";
+import { STAGE_LABELS, taskBoardView, taskChips, type TaskBoardView, type TaskChipView, type TaskSessionInfo, type TurnView } from "./taskBoard.ts";
 import {
   BLOCKERS,
   TASK_STAGES,
@@ -280,22 +280,18 @@ async function show(args: string[]): Promise<void> {
     db.close();
   }
   const board = await loadTaskBoard();
-  const lane = board.lanes.find((candidate) => candidate.cards.some((card) => card.id === task.id));
-  const card = lane?.cards.find((candidate) => candidate.id === task.id);
+  const column = board.columns.find((candidate) => candidate.cards.some((card) => card.id === task.id));
+  const card = column?.cards.find((candidate) => candidate.id === task.id);
   // Done long enough ago, it's off the board: what the store has says it all.
-  if (!lane || !card) {
+  if (!column || !card) {
     console.log(args.includes("--json") ? JSON.stringify(task, null, 2) : `${taskRef(task.id)}: ${task.title}\nDone${task.doneAt ? ` ${task.doneAt.slice(0, 10)}` : ""}`);
     return;
   }
   if (args.includes("--json")) {
-    console.log(JSON.stringify({ lane: lane.id, ...card }, null, 2));
+    console.log(JSON.stringify({ column: column.id, ...card }, null, 2));
     return;
   }
-  const lines = [
-    `${card.ref}: ${card.title}${card.project ? `  [${card.project.path}]` : ""}`,
-    // The section title often says the reason already ("Agent working").
-    [lane.title, card.stageLabel, card.reason.text === lane.title ? null : `${card.reason.text}${card.reason.since ? ` (${card.reason.since})` : ""}`].filter(Boolean).join(" · "),
-  ];
+  const lines = [`${card.ref}: ${card.title}${card.project ? `  [${card.project.path}]` : ""}`, `${column.title} · ${turnText(card.turn)}`];
   if (card.status) lines.push(`Status: ${card.status.text} (${card.status.ago}${card.status.auto ? ", filled in by relay" : ""})`);
   if (card.plan) lines.push(`Plan: ${card.plan.awaiting ? "waiting for approval" : card.plan.approved ? "approved" : "recorded"}`);
   if (card.finish) lines.push(`Delivery note${card.finish.awaiting ? " (ready for the user to ship)" : ""}: ${card.finish.text ?? "none"}`);
@@ -311,13 +307,21 @@ async function list(args: string[]): Promise<void> {
     return;
   }
   const lines: string[] = [];
-  for (const lane of board.lanes) {
-    if (lane.cards.length === 0 && lane.sessions.length === 0) continue;
-    lines.push(`${lane.title}:`);
-    for (const card of lane.cards) lines.push(`  ${card.ref}  ${card.title} · ${card.stageLabel} · ${card.reason.text}`);
-    for (const session of lane.sessions) lines.push(`  ${session.title} (${session.state})`);
+  for (const column of board.columns) {
+    if (column.cards.length === 0) continue;
+    lines.push(`${column.title}:`);
+    for (const card of column.cards) lines.push(`  ${card.ref}  ${card.title} · ${turnText(card.turn)}`);
+  }
+  if (board.untracked.length) {
+    lines.push("Not tracked:");
+    for (const session of board.untracked) lines.push(`  ${session.title} (${session.state})`);
   }
   console.log(lines.length ? lines.join("\n") : "No tasks yet. Register one with: relay task new <title>");
+}
+
+/** "Needs you: Plan ready for your approval (12m)", or just "Agent working". */
+function turnText(turn: TurnView): string {
+  return `${turn.label}${turn.reason ? `: ${turn.reason}` : ""}${turn.since ? ` (${turn.since})` : ""}`;
 }
 
 export async function taskCommand(args: string[]): Promise<void> {

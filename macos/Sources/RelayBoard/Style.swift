@@ -119,30 +119,52 @@ extension BoardAction {
     }
 }
 
-extension TaskLane {
+extension TaskColumn {
     var symbol: String {
         switch id {
-        case "needs-you": "bell.badge.fill"
+        case "idea": "lightbulb"
+        case "research": "magnifyingglass"
+        case "plan": "list.number"
+        case "doing": "hammer"
+        case "rollout": "paperplane"
         case "ship": "shippingbox.fill"
-        case "working": "sparkles"
-        case "waiting": "hourglass"
-        case "paused": "pause.circle.fill"
-        case "untracked": "questionmark.circle"
-        case "ideas": "lightbulb.fill"
         case "done": "checkmark.seal.fill"
-        default: "circle.fill"
+        default: "circle"
         }
     }
 
+    /// Ready to ship and Shipped wear green: that's where work ends up. The rest stay neutral, so
+    /// the cards' own colors (whose move it is) stand out.
     var tint: Color {
         switch id {
-        case "needs-you": .boardOrange
-        case "ship": .boardGreen
-        case "working": .boardPurple
-        case "waiting": .boardBlue
-        case "ideas": .boardAmber
+        case "ship", "done": .boardGreen
+        default: .secondary
+        }
+    }
+}
+
+extension Turn {
+    /// Orange when it's your move, purple while the agent works, blue while others have it, gray while nobody does.
+    var tint: Color {
+        switch id {
+        case "you": .boardOrange
+        case "agent": .boardPurple
+        case "others": .boardBlue
         case "done": .boardGreen
-        default: .gray
+        default: .secondary
+        }
+    }
+
+    var symbol: String {
+        switch id {
+        case "you": "hand.raised.fill"
+        case "agent": "sparkles"
+        case "others": "hourglass"
+        case "paused": "pause.fill"
+        case "idle": "moon.zzz.fill"
+        case "idea": "lightbulb.fill"
+        case "done": "checkmark"
+        default: "circle.fill"
         }
     }
 }

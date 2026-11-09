@@ -78,27 +78,31 @@ final class BoardModel {
         }
     }
 
-    /// The task sections as the window shows them, with what the server hasn't caught up with.
-    var taskLanes: [TaskLane] {
-        (board?.tasks?.lanes ?? []).map { lane in
-            var lane = lane
-            lane.cards = lane.cards.filter { !removed.contains(ActionTarget.task($0.id).key) }.map { card in
+    /// The task columns as the window shows them, with what the server hasn't caught up with.
+    var taskColumns: [TaskColumn] {
+        (board?.tasks?.columns ?? []).map { column in
+            var column = column
+            column.cards = column.cards.filter { !removed.contains(ActionTarget.task($0.id).key) }.map { card in
                 guard let running = startedTasks[card.id] else { return card }
                 var card = card
                 card.running = running
                 card.steps = []
                 return card
             }
-            lane.sessions = lane.sessions.filter { !removed.contains(ActionTarget.session($0.sessionFile).key) }
-            return lane
+            return column
         }
+    }
+
+    /// Open sessions no task knows about, without the ones the window just closed or dismissed.
+    var untrackedSessions: [UntrackedSession] {
+        (board?.tasks?.untracked ?? []).filter { !removed.contains(ActionTarget.session($0.sessionFile).key) }
     }
 
     /// PR cards waiting on you, in the lanes that are.
     var prsWaitingOnYou: Int { lanes.filter(\.hot).reduce(0) { $0 + $1.cards.count } }
 
     /// Tasks waiting on you.
-    var tasksWaitingOnYou: Int { taskLanes.filter(\.hot).reduce(0) { $0 + $1.cards.count } }
+    var tasksWaitingOnYou: Int { taskColumns.reduce(0) { $0 + $1.cards.count { $0.turn.needsYou } } }
 
     func start() {
         if loop == nil {
@@ -234,7 +238,7 @@ final class BoardModel {
             // Approving names the plan on screen; refreshes hold off while a control is confirmed or sent, so it's the one you read.
             var plan: String?
             if action.action == "approve-plan", case .task(let id) = target {
-                plan = taskLanes.lazy.flatMap(\.cards).first { $0.id == id }?.plan?.revision
+                plan = taskColumns.lazy.flatMap(\.cards).first { $0.id == id }?.plan?.revision
             }
             let result = try await client.perform(action.action, on: target, plan: plan)
             toast = Toast(message: result.message, failed: !result.ok)
@@ -251,7 +255,7 @@ final class BoardModel {
             if result.ok, ["close", "delete", "dismiss", "close-session", "ship", "done"].contains(action.action) { removed.insert(target.key) }
             // The session took a step on, a menu control moved the card (skipping its agent review), or the
             // card was out of date (the PR merged, or its session is already on a request): show what's true now.
-            // Task controls change the task's section, so they show soon too.
+            // Task controls change whose move it is, or the task's column, so they show soon too.
             let isTask = if case .pr = target { false } else { true }
             let movedCard = result.ok && ["skip-review", "require-review"].contains(action.action)
             if (result.ok && (action.running != nil || isTask)) || movedCard || result.status == 409 { schedule(after: .milliseconds(1200)) }

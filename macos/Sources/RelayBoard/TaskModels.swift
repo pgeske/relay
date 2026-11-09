@@ -4,20 +4,20 @@ import Foundation
 // src/board/taskBoard.ts. As with PRs, the server decides what each card says and offers.
 
 struct TaskBoard: Decodable, Sendable {
-    var lanes: [TaskLane]
+    /// Left to right in the order work moves, from Ideas to Shipped.
+    var columns: [TaskColumn]
+    /// Open sessions no task knows about.
+    var untracked: [UntrackedSession]
     var projects: [Project]
     var needsYou: Int
 }
 
-struct TaskLane: Decodable, Sendable, Identifiable {
+struct TaskColumn: Decodable, Sendable, Identifiable {
     var id: String
     var title: String
     var hint: String
-    /// Waiting on you to act.
-    var hot: Bool
+    /// Your move on top, then the agent's, then others', then what's parked.
     var cards: [TaskCard]
-    /// Open sessions no task knows about; only the Not tracked section has them.
-    var sessions: [UntrackedSession]
 }
 
 struct Project: Decodable, Sendable, Identifiable, Hashable {
@@ -45,11 +45,10 @@ struct TaskCard: Decodable, Sendable, Identifiable {
     var hue: Int
     var stage: String
     var stageLabel: String
-    var stages: [StageStep]
+    /// Whose move it is.
+    var turn: Turn
     /// The agent's latest report.
     var status: TaskStatus?
-    /// Why it's in its section.
-    var reason: Reason
     var plan: Plan?
     /// Why its agent says it's done, once it said so.
     var finish: Finish?
@@ -70,20 +69,6 @@ struct ProjectRef: Decodable, Sendable, Hashable {
     var path: String
 }
 
-struct StageStep: Decodable, Sendable, Hashable {
-    enum State: String, Decodable, Sendable {
-        case done, current, todo
-
-        init(from decoder: any Decoder) throws {
-            self = State(rawValue: try decoder.singleValueContainer().decode(String.self)) ?? .todo
-        }
-    }
-
-    var id: String
-    var label: String
-    var state: State
-}
-
 struct TaskStatus: Decodable, Sendable, Hashable {
     var text: String
     var ago: String
@@ -91,11 +76,17 @@ struct TaskStatus: Decodable, Sendable, Hashable {
     var auto: Bool
 }
 
-struct Reason: Decodable, Sendable, Hashable {
-    var text: String
-    var tone: Tone
+struct Turn: Decodable, Sendable, Hashable {
+    /// "you", "agent", "others", "paused", "idle", "idea", or "done".
+    var id: String
+    /// "Needs you", "Agent working".
+    var label: String
+    /// What exactly it waits on, when the label doesn't say it all.
+    var reason: String?
     /// How long it's been so, like "12m".
     var since: String?
+
+    var needsYou: Bool { id == "you" }
 }
 
 struct Plan: Decodable, Sendable, Hashable {

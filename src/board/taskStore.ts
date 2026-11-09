@@ -391,7 +391,7 @@ export function sendBack(db: Database, id: number, at: string): void {
   })();
 }
 
-/** You set a task aside on the board: it waits in Paused, whatever its sessions do, until you resume it. */
+/** You set a task aside on the board: its card says Paused, whatever its sessions do, until you resume it. */
 export function pauseTask(db: Database, id: number, at: string): void {
   db.transaction(() => {
     const task = getTask(db, id);

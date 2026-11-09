@@ -46,7 +46,7 @@ relay task update --blocked-on others --reason "Waiting on the storage team to a
 - Any update without `--blocked-on` clears the block, so repeat it while it holds.
 - Stopping because the work is finished? Run `relay task done` instead (below). Stopping after `relay task plan` needs nothing more.
 
-**4. Finishing.** When the work is finished by the task's own bar (merged, rolled out, verified, answered), say so with a note on what you did and how you checked it. The board shows that note on the task's card, so write it for the user to verify at a glance: the outcome first, then the evidence. The task waits in the board's **Ready to ship** section until the user looks: **Ship It** moves it to Shipped and closes its idle sessions' tabs; **Not Yet** sends it back and shows them this session, to tell you what's missing. Any `relay task update` after that takes it out of Ready to ship again; pick the work back up, and run `relay task done` again once it's finished.
+**4. Finishing.** When the work is finished by the task's own bar (merged, rolled out, verified, answered), say so with a note on what you did and how you checked it. The board shows that note on the task's card, so write it for the user to verify at a glance: the outcome first, then the evidence. The task waits in the board's **Ready to ship** column until the user looks: **Ship It** moves it to Shipped and closes its idle sessions' tabs; **Not Yet** sends it back and shows them this session, to tell you what's missing. Any `relay task update` after that takes it out of Ready to ship again; pick the work back up, and run `relay task done` again once it's finished.
 
 ```sh
 relay task done --status "Rolled out to every staging datacenter" --summary - <<'EOF'
@@ -58,9 +58,9 @@ EOF
 
 - `relay task update --pr <url>` adds a PR this session didn't open; PRs it opens join the task on their own.
 - `relay task update --stage <stage> --status "<line>"` is there when the auto status is wrong or you want to say something specific. Stages, in order: `research`, `plan`, `doing`, `rollout` (rolling out or verifying). Only the user moves a task to `done`.
-- The user can **pause** a task on the board to set it aside. It stays in Paused until they resume it or you finish it.
+- The user can **pause** a task on the board to set it aside. It stays paused until they resume it or you finish it.
 
-**When the board hands you a task** ("I started T-12 from the relay board"), this session is already on it: don't register it again. When the board asks you to track a session, register what it's working on with `relay task new`, or say it isn't a task. `relay task link <task>` puts this session on an existing task (say, a second session on the same work). `relay task show` prints this session's task; `relay task --json` lists them all, by section: `ship`, `needs-you`, `working`, `waiting`, `paused`, `ideas`, `untracked`, `done`.
+**When the board hands you a task** ("I started T-12 from the relay board"), this session is already on it: don't register it again. When the board asks you to track a session, register what it's working on with `relay task new`, or say it isn't a task. `relay task link <task>` puts this session on an existing task (say, a second session on the same work). `relay task show` prints this session's task; `relay task --json` lists them all, in a column per stage (`idea`, `research`, `plan`, `doing`, `rollout`, `ship`, `done`), each card's `turn` saying whose move it is (`you`, `agent`, `others`, `paused`, `idle`, `idea`, `done`), then `untracked` sessions.
 
 ## Pull requests
 

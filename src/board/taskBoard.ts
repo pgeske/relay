@@ -1,30 +1,49 @@
 import type { PullRequest } from "./github.ts";
 import type { Board, Lane } from "./lanes.ts";
-import { TASK_STAGES, projectPaths, taskRef, type Project, type Task, type TaskEvent, type TaskPr, type TaskSession, type TaskStage } from "./taskStore.ts";
+import { projectPaths, taskRef, type Project, type Task, type TaskEvent, type TaskPr, type TaskSession, type TaskStage } from "./taskStore.ts";
 import { timeAgo, type Confirm, type Tone } from "./view.ts";
 
 /**
- * The Tasks board: every task you have in flight, sorted by what it needs, so a glance says which
- * ones are waiting on you right now. Like the PR board, everything a card says and offers is decided
- * here; the app only lays it out.
+ * The Tasks board: every task you have in flight, in a column per stage, so a glance says how close
+ * each one is to done, and each card says whose move it is. Like the PR board, everything a card says
+ * and offers is decided here; the app only lays it out.
  */
 
 /**
- * Sections top to bottom, by who moves next: your move (`hot`: what you can clear fastest first),
- * then what's in motion without you, then what's parked, then sessions no task knows about and what shipped.
+ * Columns left to right, in the order work moves: a task sits in its stage's column until its agent
+ * delivers (Ready to ship), then in Shipped once you ship it.
  */
-export type TaskLane = "ship" | "needs-you" | "working" | "waiting" | "paused" | "ideas" | "untracked" | "done";
+export type TaskColumn = "idea" | "research" | "plan" | "doing" | "rollout" | "ship" | "done";
 
-const LANES: { id: TaskLane; title: string; hint: string; hot: boolean }[] = [
-  { id: "ship", title: "Ready to ship", hint: "Its agent delivered: look it over, then ship it", hot: true },
-  { id: "needs-you", title: "Needs you", hint: "A plan to approve, a question, or a PR to move along", hot: true },
-  { id: "working", title: "Agent working", hint: "A session is on it right now", hot: false },
-  { id: "waiting", title: "Waiting on others", hint: "A team, a review, a deploy", hot: false },
-  { id: "paused", title: "Paused", hint: "Set aside, or no session open", hot: false },
-  { id: "ideas", title: "Ideas", hint: "Not started yet", hot: false },
-  { id: "untracked", title: "Not tracked", hint: "Open sessions no task knows about", hot: false },
-  { id: "done", title: "Shipped", hint: "Shipped in the last two weeks", hot: false },
+const COLUMNS: { id: TaskColumn; title: string; hint: string }[] = [
+  { id: "idea", title: "Ideas", hint: "Not started yet" },
+  { id: "research", title: "Research", hint: "Finding out what it takes" },
+  { id: "plan", title: "Plan", hint: "Deciding how to do it" },
+  { id: "doing", title: "Doing", hint: "Making the change" },
+  { id: "rollout", title: "Rollout", hint: "Rolling it out or verifying it" },
+  { id: "ship", title: "Ready to ship", hint: "Its agent delivered: look it over, then ship it" },
+  { id: "done", title: "Shipped", hint: "Shipped in the last two weeks" },
 ];
+
+/**
+ * Whose move a task waits on, said at the top of its card: you (a plan to approve, a question, a PR
+ * to move along, an agent that stopped, a delivery to ship), its agent while it works, anyone else (a
+ * team, reviewers), or nobody: you paused it, no session is open, or it hasn't started.
+ */
+export type Turn = "you" | "agent" | "others" | "paused" | "idle" | "idea" | "done";
+
+const TURN_LABELS: Record<Turn, string> = {
+  you: "Needs you",
+  agent: "Agent working",
+  others: "Waiting on others",
+  paused: "Paused",
+  idle: "Idle",
+  idea: "Not started",
+  done: "Shipped",
+};
+
+/** A column's cards, top to bottom: your move first, then the agent's, then others', then what's parked. */
+const TURN_ORDER: Turn[] = ["you", "agent", "others", "paused", "idle", "idea", "done"];
 
 const DONE_SHOWN_MS = 14 * 24 * 60 * 60 * 1000;
 
@@ -34,9 +53,6 @@ export type TaskAction = (typeof TASK_ACTIONS)[number];
 /** What an untracked session's controls ask: the same endpoint, with the session's `sessionFile`. */
 export const SESSION_ACTIONS = ["open-session", "track", "dismiss", "close-session"] as const;
 export type SessionAction = (typeof SESSION_ACTIONS)[number];
-
-/** The stages a card's progress bar shows; `idea` is before the first. */
-const SHOWN_STAGES = TASK_STAGES.filter((stage) => stage !== "idea");
 
 export const STAGE_LABELS: Record<TaskStage, string> = { idea: "Idea", research: "Research", plan: "Plan", doing: "Doing", rollout: "Rollout", done: "Shipped" };
 
@@ -86,16 +102,13 @@ export interface TaskActionView {
   stalled: boolean;
 }
 
-export interface StageView {
-  id: TaskStage;
+/** Whose move it is, at the top of a card. */
+export interface TurnView {
+  id: Turn;
+  /** "Needs you", "Agent working". */
   label: string;
-  state: "done" | "current" | "todo";
-}
-
-/** Why a card is in its section, said under its title. */
-export interface ReasonView {
-  text: string;
-  tone: Tone;
+  /** What exactly it waits on, when the label doesn't say it all, like "Plan ready for your approval". */
+  reason: string | null;
   /** How long it's been so, like "12m"; null when that says nothing. */
   since: string | null;
 }
@@ -159,10 +172,9 @@ export interface TaskCardView {
   hue: number;
   stage: TaskStage;
   stageLabel: string;
-  stages: StageView[];
+  turn: TurnView;
   /** The latest report, and when; `auto` when relay's watcher made it because the agent forgot. */
   status: { text: string; ago: string; auto: boolean } | null;
-  reason: ReasonView;
   plan: PlanView | null;
   finish: FinishView | null;
   prs: TaskPrView[];
@@ -173,7 +185,7 @@ export interface TaskCardView {
   menu: TaskActionView[];
   history: HistoryView[];
   updatedAt: string;
-  /** For sorting a section: how long it's been waiting (oldest first in Needs you and Waiting), else most recent first. */
+  /** For sorting a column: how long it's been waiting (oldest first while it waits on someone), else most recent first. */
   sortKey: string;
 }
 
@@ -190,14 +202,11 @@ export interface UntrackedSessionView {
   close: TaskActionView;
 }
 
-export interface TaskLaneView {
-  id: TaskLane;
+export interface TaskColumnView {
+  id: TaskColumn;
   title: string;
   hint: string;
-  hot: boolean;
   cards: TaskCardView[];
-  /** Only the Not tracked section has these. */
-  sessions: UntrackedSessionView[];
 }
 
 /** The project a task is in: its own name, and its path from the top ("Relay/Sidebar"). */
@@ -218,7 +227,9 @@ export interface ProjectView extends ProjectRefView {
 }
 
 export interface TaskBoardView {
-  lanes: TaskLaneView[];
+  columns: TaskColumnView[];
+  /** Open sessions no task knows about, most recent first. */
+  untracked: UntrackedSessionView[];
   projects: ProjectView[];
   needsYou: number;
 }
@@ -236,14 +247,6 @@ const HUES = 8;
 export function taskHue(id: number): number {
   // Neighboring ids land far apart on the color wheel.
   return (id * 3) % HUES;
-}
-
-function stagesView(stage: TaskStage): StageView[] {
-  const index = TASK_STAGES.indexOf(stage);
-  return SHOWN_STAGES.map((id) => {
-    const at = TASK_STAGES.indexOf(id);
-    return { id, label: STAGE_LABELS[id], state: stage === "done" || at < index ? "done" : at === index ? "current" : "todo" };
-  });
 }
 
 /** Where a PR is on the PR board. */
@@ -273,14 +276,18 @@ function since(iso: string | null, now: Date): string | null {
 }
 
 interface Placement {
-  lane: Exclude<TaskLane, "untracked">;
-  reason: ReasonView;
+  turn: Turn;
+  /** What exactly it waits on, when the turn's label doesn't say it all. */
+  reason: string | null;
+  since: string | null;
+  /** Its agent delivered, and it waits for you to ship it or send it back. */
+  delivered: boolean;
   /** Since when it's been so, for sorting. */
   at: string;
 }
 
 /**
- * Which section a task goes in. One you paused stays paused, whatever its sessions do, until you
+ * Whose move a task waits on. One you paused stays paused, whatever its sessions do, until you
  * resume it. Otherwise a working agent needs nothing from you yet, so that comes first.
  * Then a task its agent delivered, for you to look over and ship. Then what the agent
  * said it's waiting on (your approval of its plan, your answer), then PRs that
@@ -294,43 +301,38 @@ export function placeTask(
   now: Date,
 ): Placement {
   const ago = (iso: string | null) => since(iso, now);
-  if (task.stage === "done") return { lane: "done", reason: { text: `Shipped ${timeAgo(task.doneAt ?? task.updatedAt, now)}`, tone: "ok", since: null }, at: task.doneAt ?? task.updatedAt };
-  if (task.pausedAt) return { lane: "paused", reason: { text: "You paused it", tone: "muted", since: ago(task.pausedAt) }, at: task.pausedAt };
+  const place = (turn: Turn, reason: string | null, at: string, sinceAt: string | null = null): Placement => ({ turn, reason, since: ago(sinceAt), delivered: false, at });
+  if (task.stage === "done") return place("done", timeAgo(task.doneAt ?? task.updatedAt, now), task.doneAt ?? task.updatedAt);
+  if (task.pausedAt) return place("paused", null, task.pausedAt, task.pausedAt);
 
   // What a session that moved on to another task is doing now is that task's business.
   const onTask = sessions.filter((session) => session.onTask);
   const working = onTask.find((session) => session.live?.status === "working");
-  if (working) return { lane: "working", reason: { text: "Agent working", tone: "wait", since: null }, at: working.activeAt ?? task.updatedAt };
+  if (working) return place("agent", null, working.activeAt ?? task.updatedAt);
   // Its agent delivered: nothing else matters until you ship it or send it back.
-  if (task.finishedAt) return { lane: "ship", reason: { text: "Delivered", tone: "ok", since: ago(task.finishedAt) }, at: task.finishedAt };
+  if (task.finishedAt) return { ...place("you", "Look it over, then ship it", task.finishedAt, task.finishedAt), delivered: true };
 
-  if (task.approvePlan && task.plan && !task.planApprovedAt) {
-    return { lane: "needs-you", reason: { text: "Plan ready for your approval", tone: "warn", since: ago(task.planAt) }, at: task.planAt ?? task.updatedAt };
-  }
-  if (task.blockedOn === "me") {
-    return { lane: "needs-you", reason: { text: task.blockedReason ?? "Needs your input", tone: "warn", since: ago(task.blockedAt) }, at: task.blockedAt ?? task.updatedAt };
-  }
+  if (task.approvePlan && task.plan && !task.planApprovedAt) return place("you", "Plan ready for your approval", task.planAt ?? task.updatedAt, task.planAt);
+  if (task.blockedOn === "me") return place("you", task.blockedReason, task.blockedAt ?? task.updatedAt, task.blockedAt);
   const open = prs.filter((pr) => pr.lane !== null && pr.lane !== "merged");
   const ready = open.find((pr) => pr.lane === "ready");
-  if (ready) return { lane: "needs-you", reason: { text: `${short(ready.ref)} is ready to merge`, tone: "ok", since: null }, at: task.updatedAt };
+  if (ready) return place("you", `${short(ready.ref)} is ready to merge`, task.updatedAt);
   const blockedPr = open.find((pr) => pr.lane === "approved-blocked");
-  if (blockedPr) return { lane: "needs-you", reason: { text: `${short(blockedPr.ref)} is approved but blocked`, tone: "warn", since: null }, at: task.updatedAt };
-  if (task.blockedOn === "others") {
-    return { lane: "waiting", reason: { text: task.blockedReason ?? "Waiting on others", tone: "wait", since: ago(task.blockedAt) }, at: task.blockedAt ?? task.updatedAt };
-  }
+  if (blockedPr) return place("you", `${short(blockedPr.ref)} is approved but blocked`, task.updatedAt);
+  if (task.blockedOn === "others") return place("others", task.blockedReason, task.blockedAt ?? task.updatedAt, task.blockedAt);
   // A PR waiting for a click from you comes before one waiting on reviewers.
   const needsReview = open.find((pr) => pr.lane === "agent-review");
-  if (needsReview) return { lane: "needs-you", reason: { text: `${short(needsReview.ref)} needs an agent review`, tone: "link", since: null }, at: task.updatedAt };
+  if (needsReview) return place("you", `${short(needsReview.ref)} needs an agent review`, task.updatedAt);
   const inReview = open.find((pr) => pr.lane === "human-review");
-  if (inReview) return { lane: "waiting", reason: { text: `${short(inReview.ref)} is waiting on reviewers`, tone: "wait", since: null }, at: task.updatedAt };
+  if (inReview) return place("others", `${short(inReview.ref)} is waiting on reviewers`, task.updatedAt);
 
   const idle = onTask.filter((session) => session.live?.status === "idle").toSorted((a, b) => (b.activeAt ?? "").localeCompare(a.activeAt ?? ""))[0];
-  if (idle) return { lane: "needs-you", reason: { text: "Agent stopped: your turn", tone: "warn", since: ago(idle.activeAt) }, at: idle.activeAt ?? task.updatedAt };
+  if (idle) return place("you", "The agent stopped", idle.activeAt ?? task.updatedAt, idle.activeAt);
 
-  if (sessions.length === 0 && task.stage === "idea") return { lane: "ideas", reason: { text: "Not started", tone: "muted", since: null }, at: task.createdAt };
+  if (sessions.length === 0 && task.stage === "idea") return place("idea", null, task.createdAt);
   const last = sessions.map((session) => session.activeAt ?? "").toSorted().at(-1) || task.updatedAt;
   const why = onTask.length < sessions.length && sessions.some((session) => session.live) ? "Its session moved on to another task" : sessions.length ? "No session open" : "No session yet";
-  return { lane: "paused", reason: { text: why, tone: "muted", since: ago(last) }, at: last };
+  return place("idle", why, last, last);
 }
 
 /** A session of a task's, and whether the task is still the one it's on. */
@@ -402,7 +404,7 @@ const EVENT_TEXT: Record<TaskEvent["kind"], (event: TaskEvent) => string> = {
 /** How many history lines a card's details show. */
 const HISTORY_SHOWN = 30;
 
-function taskCard(task: Task, inputs: TaskInputs, places: Map<string, PrPlace>, sessions: TaskSessionLink[], projects: Map<number, ProjectRefView>): { card: TaskCardView; lane: Placement["lane"] } {
+function taskCard(task: Task, inputs: TaskInputs, places: Map<string, PrPlace>, sessions: TaskSessionLink[], projects: Map<number, ProjectRefView>): { card: TaskCardView; column: TaskColumn } {
   const { now } = inputs;
   const linked = [...inputs.prs.values()].filter((pr) => pr.taskId === task.id).map((pr) => `${pr.repo}#${pr.number}`);
   const prs = linked.map((ref) => ({ ref, place: places.get(ref) ?? null }));
@@ -418,35 +420,35 @@ function taskCard(task: Task, inputs: TaskInputs, places: Map<string, PrPlace>, 
         running: primary ? null : "Starting…",
       }),
     );
-    // A working task's section says the agent is on it, so its footer stays free for a step forward.
-  } else if (task.approvePlan && task.plan && !task.planApprovedAt && task.stage !== "done" && placement.lane !== "working") {
+    // While the agent works, the card says so, so its footer stays free for a step forward.
+  } else if (task.approvePlan && task.plan && !task.planApprovedAt && task.stage !== "done" && placement.turn !== "agent") {
     steps.push(
       action("approve-plan", "Approve Plan", "Tell the task's session to carry out its plan", {
         confirm: { title: `Approve the plan for ${ref}?`, message: "Tells the task's session to go ahead and carry it out.", button: "Approve", destructive: false },
         running: "Agent working…",
       }),
     );
-  } else if (placement.lane === "ship") {
+  } else if (placement.delivered) {
     // No confirm: Reopen undoes it, and omp keeps the closed sessions' conversations.
     steps.push(
       action("ship", "Ship It", "Move it to Shipped and close its idle session tabs; omp keeps their conversations"),
       action("send-back", "Not Yet", "Put it back in progress and show its session, so you can tell the agent what's missing"),
     );
-  } else if (placement.lane === "ideas") {
+  } else if (placement.turn === "idea") {
     steps.push(action("start", "Start", `Open a new session${task.cwd ? ` in ${task.cwd}` : ""} and hand it this task`, { running: "Starting…" }));
-  } else if (placement.lane === "needs-you" && primary) {
+  } else if (placement.turn === "you" && primary) {
     steps.push({ ...openAction(primary), label: primary.live ? "Go to Session" : "Reopen Session" });
-  } else if (placement.lane === "paused" && primary) {
+  } else if (placement.turn === "idle" && primary) {
     steps.push({ ...openAction(primary), label: "Resume", hint: "Reopen its latest session in a new relay tab" });
-  } else if (placement.lane === "paused") {
+  } else if (placement.turn === "idle") {
     steps.push(action("start", "Start", `Open a new session${task.cwd ? ` in ${task.cwd}` : ""} and hand it this task`, { running: "Starting…" }));
   }
 
   const menu: TaskActionView[] = [];
   if (task.stage === "done") menu.push(action("reopen", "Reopen Task", "Put it back in progress"));
-  else if (placement.lane !== "ship") menu.push(action("done", "Mark Shipped", "Move it to Shipped and close its idle sessions"));
+  else if (!placement.delivered) menu.push(action("done", "Mark Shipped", "Move it to Shipped and close its idle sessions"));
   if (task.pausedAt) menu.push(action("unpause", "Unpause", "Take it off hold without opening a session"));
-  else if (placement.lane !== "done" && placement.lane !== "ship" && placement.lane !== "ideas") menu.push(action("pause", "Pause", "Set it aside in Paused until you resume it"));
+  else if (placement.turn !== "done" && placement.turn !== "idea" && !placement.delivered) menu.push(action("pause", "Pause", "Set it aside until you resume it"));
   menu.push(
     action("delete", "Delete Task…", "Forget the task; its sessions and PRs stay", {
       confirm: { title: `Delete ${ref}?`, message: "The board forgets the task and its history. Its sessions and pull requests stay.", button: "Delete", destructive: true },
@@ -462,9 +464,8 @@ function taskCard(task: Task, inputs: TaskInputs, places: Map<string, PrPlace>, 
     hue: taskHue(task.id),
     stage: task.stage,
     stageLabel: STAGE_LABELS[task.stage],
-    stages: stagesView(task.stage),
+    turn: { id: placement.turn, label: TURN_LABELS[placement.turn], reason: placement.reason, since: placement.since },
     status: task.status ? { text: task.status, ago: timeAgo(task.statusAt ?? task.updatedAt, now), auto: task.autoReportedAt !== null } : null,
-    reason: placement.reason,
     plan: task.plan
       ? {
           text: task.plan,
@@ -474,7 +475,7 @@ function taskCard(task: Task, inputs: TaskInputs, places: Map<string, PrPlace>, 
           approved: task.planApprovedAt !== null,
         }
       : null,
-    finish: task.finishNote || task.finishedAt ? { text: task.finishNote, at: task.finishedAt ?? task.doneAt ?? task.updatedAt, awaiting: placement.lane === "ship" } : null,
+    finish: task.finishNote || task.finishedAt ? { text: task.finishNote, at: task.finishedAt ?? task.doneAt ?? task.updatedAt, awaiting: placement.delivered } : null,
     prs: prs
       // Merged and closed PRs older than the PR board's Merged section drop off; while GitHub can't be read, every PR shows.
       .filter(({ place }) => place !== null || inputs.board === null)
@@ -509,7 +510,7 @@ function taskCard(task: Task, inputs: TaskInputs, places: Map<string, PrPlace>, 
     updatedAt: task.updatedAt,
     sortKey: placement.at,
   };
-  return { card, lane: placement.lane };
+  return { card, column: placement.delivered ? "ship" : task.stage };
 }
 
 export function taskBoardView(inputs: TaskInputs, home: string): TaskBoardView {
@@ -519,15 +520,20 @@ export function taskBoardView(inputs: TaskInputs, home: string): TaskBoardView {
   const projects = new Map(inputs.projects.map((project) => [project.id, { id: project.id, name: project.name, path: paths.get(project.id)! }]));
   const sessionsOf = sessionsByTask(inputs.sessions, inputs.sessionInfo);
 
-  const byLane = new Map<TaskLane, TaskCardView[]>(LANES.map((lane) => [lane.id, []]));
+  const byColumn = new Map<TaskColumn, TaskCardView[]>(COLUMNS.map((column) => [column.id, []]));
   for (const task of inputs.tasks) {
     if (task.stage === "done" && now.getTime() - new Date(task.doneAt ?? task.updatedAt).getTime() > DONE_SHOWN_MS) continue;
-    const { card, lane } = taskCard(task, inputs, places, sessionsOf.get(task.id) ?? [], projects);
-    byLane.get(lane)!.push(card);
+    const { card, column } = taskCard(task, inputs, places, sessionsOf.get(task.id) ?? [], projects);
+    byColumn.get(column)!.push(card);
   }
-  // Waiting the longest first where something waits; else the most recent first.
-  for (const [lane, cards] of byLane) {
-    cards.sort(lane === "needs-you" || lane === "ship" || lane === "waiting" ? (a, b) => a.sortKey.localeCompare(b.sortKey) : (a, b) => b.sortKey.localeCompare(a.sortKey));
+  // Your move on top, then the agent's, then others', then what's parked. Within each, the one
+  // waiting longest first where it waits on someone; else the most recent first.
+  for (const cards of byColumn.values()) {
+    cards.sort((a, b) => {
+      const byTurn = TURN_ORDER.indexOf(a.turn.id) - TURN_ORDER.indexOf(b.turn.id);
+      if (byTurn !== 0) return byTurn;
+      return a.turn.id === "you" || a.turn.id === "others" ? a.sortKey.localeCompare(b.sortKey) : b.sortKey.localeCompare(a.sortKey);
+    });
   }
 
   const tracked = new Set(inputs.sessions.map((link) => link.sessionFile));
@@ -557,12 +563,13 @@ export function taskBoardView(inputs: TaskInputs, home: string): TaskBoardView {
       }),
     );
 
-  const lanes = LANES.map(({ id, title, hint, hot }) => ({ id, title, hint, hot, cards: byLane.get(id)!, sessions: id === "untracked" ? untracked : [] }));
-  const open = lanes.filter((lane) => lane.id !== "done").flatMap((lane) => lane.cards);
-  const needsYou = lanes.filter((lane) => lane.hot).flatMap((lane) => lane.cards);
+  const columns = COLUMNS.map(({ id, title, hint }) => ({ id, title, hint, cards: byColumn.get(id)! }));
+  const open = columns.filter((column) => column.id !== "done").flatMap((column) => column.cards);
+  const needsYou = open.filter((card) => card.turn.id === "you");
 
   return {
-    lanes,
+    columns,
+    untracked,
     projects: inputs.projects.map((project) => {
       const ids = projectSubtree(project.id, inputs.projects);
       return {

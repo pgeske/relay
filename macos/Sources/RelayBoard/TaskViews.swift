@@ -1,18 +1,20 @@
 import AppKit
 import SwiftUI
 
-/// Your tasks, section by section in the order the server sends, grouped by who moves next: your
-/// move (ready to ship, needs you), in motion (agent working, waiting on others), parked (paused,
-/// ideas), then sessions no task knows about, then what shipped. A gap sets each group apart.
-/// `project` narrows it to one project's tasks.
+/// Your tasks as a Kanban board: a column per stage, left to right in the order work moves, from
+/// Ideas to Shipped, so how close each task is to done reads at a glance. Each card says whose move
+/// it is. Open sessions no task knows about sit in a strip above the columns. `project` narrows it
+/// to one project's tasks.
 struct TasksView: View {
     let project: Project?
 
     @Environment(BoardModel.self) private var model
 
     var body: some View {
-        let lanes = shownLanes
-        if lanes.allSatisfy({ $0.cards.isEmpty && $0.sessions.isEmpty }) {
+        let columns = shownColumns
+        // Sessions no task knows about belong to no project.
+        let untracked = project == nil ? model.untrackedSessions : []
+        if columns.allSatisfy(\.cards.isEmpty) && untracked.isEmpty {
             ContentUnavailableView {
                 Label(project.map { "No tasks in \($0.name)" } ?? "No tasks yet", systemImage: "checklist")
             } description: {
@@ -23,153 +25,269 @@ struct TasksView: View {
                     .controlSize(.large)
             }
         } else {
-            ScrollView {
-                LazyVStack(alignment: .leading, spacing: 0, pinnedViews: [.sectionHeaders]) {
-                    ForEach(lanes) { lane in
-                        if Self.groupStarts.contains(lane.id) {
-                            Color.clear.frame(height: 14 * Zoom.shared.scale)
-                        }
-                        TaskSection(lane: lane)
-                    }
-                }
-                .padding(.top, 6)
-                .padding(.bottom, 16)
+            VStack(alignment: .leading, spacing: 10) {
+                if !untracked.isEmpty { UntrackedStrip(sessions: untracked) }
+                ColumnsView(columns: columns)
             }
+            .padding(.horizontal, 16)
+            .padding(.top, 10)
+            .padding(.bottom, 16)
         }
     }
 
-    /// The sections with only the project's tasks and its subprojects'; sessions no task knows about belong to no project.
-    private var shownLanes: [TaskLane] {
-        guard let project else { return model.taskLanes }
-        return model.taskLanes.compactMap { lane in
-            guard lane.id != "untracked" else { return nil }
-            var lane = lane
-            lane.cards = lane.cards.filter { card in card.project.map { project.ids.contains($0.id) } ?? false }
-            return lane
+    /// The columns with only the project's tasks and its subprojects'.
+    private var shownColumns: [TaskColumn] {
+        guard let project else { return model.taskColumns }
+        return model.taskColumns.map { column in
+            var column = column
+            column.cards = column.cards.filter { card in card.project.map { project.ids.contains($0.id) } ?? false }
+            return column
         }
     }
-
-    /// The first section of each group after the first.
-    private static let groupStarts: Set<String> = ["working", "paused", "untracked", "done"]
 }
 
-/// One section: its header, then its cards (or sessions) unless it's folded or empty.
-private struct TaskSection: View {
-    let lane: TaskLane
-    @AppStorage private var folded: Bool
+/// The columns side by side, sharing the window's width. An empty or folded column shrinks to a
+/// slim strip, so the whole board usually fits; when it doesn't, it scrolls sideways.
+private struct ColumnsView: View {
+    let columns: [TaskColumn]
 
-    init(lane: TaskLane) {
-        self.lane = lane
-        // Done is history, and what's paused or untracked can wait: they start folded, however full.
-        _folded = AppStorage(wrappedValue: ["done", "paused", "untracked"].contains(lane.id), "tasks.\(lane.id).folded")
-    }
+    /// The columns you folded, by id, comma-separated.
+    @AppStorage("tasks.foldedColumns") private var folded = ""
 
     var body: some View {
-        let count = lane.cards.count + lane.sessions.count
-        let lit = lane.hot && count > 0
-        Section {
-            if !folded && count > 0 {
-                content.sectionBox(lit: lit, tint: lane.tint)
+        let zoom = Zoom.shared.scale
+        let spacing = 10 * zoom
+        let slimWidth = 40 * zoom
+        GeometryReader { geometry in
+            let slim = columns.filter(isSlim).count
+            let wide = columns.count - slim
+            let room = geometry.size.width - CGFloat(slim) * slimWidth - CGFloat(max(columns.count - 1, 0)) * spacing
+            let wideWidth = wide > 0 ? min(max(room / CGFloat(wide), 250 * zoom), 420 * zoom) : 0
+            ScrollView(.horizontal) {
+                HStack(alignment: .top, spacing: spacing) {
+                    ForEach(columns) { column in
+                        if isSlim(column) {
+                            SlimColumn(column: column, folded: foldedIds.contains(column.id)) { toggle(column) }
+                                .frame(width: slimWidth)
+                        } else {
+                            ColumnView(column: column) { toggle(column) }
+                                .frame(width: wideWidth)
+                        }
+                    }
+                }
+                .frame(height: geometry.size.height, alignment: .top)
             }
-        } header: {
-            SectionHeader(section: SectionInfo(title: lane.title, hint: lane.hint, symbol: lane.symbol, tint: lane.tint, count: count, lit: lit), folded: $folded)
+            .scrollIndicators(.automatic)
         }
     }
 
-    @ViewBuilder private var content: some View {
-        if lane.id == "untracked" {
-            RowList { ForEach(lane.sessions) { UntrackedRow(session: $0) } }
-        } else if lane.id == "done" {
-            RowList { ForEach(lane.cards) { DoneRow(card: $0) } }
-        } else {
-            let zoom = Zoom.shared.scale
-            CardGrid(minimum: 260 * zoom, maximum: 380 * zoom, spacing: 10) {
-                ForEach(lane.cards) { TaskCardView(card: $0, sectionTitle: lane.title) }
+    private var foldedIds: Set<String> { Set(folded.split(separator: ",").map(String.init)) }
+
+    private func isSlim(_ column: TaskColumn) -> Bool { column.cards.isEmpty || foldedIds.contains(column.id) }
+
+    private func toggle(_ column: TaskColumn) {
+        var ids = foldedIds
+        if ids.contains(column.id) { ids.remove(column.id) } else { ids.insert(column.id) }
+        withAnimation(.snappy(duration: 0.25)) { folded = ids.sorted().joined(separator: ",") }
+    }
+}
+
+/// One column: its header, then its cards, scrolling on their own. Clicking the header folds it.
+private struct ColumnView: View {
+    let column: TaskColumn
+    let fold: () -> Void
+
+    var body: some View {
+        VStack(spacing: 0) {
+            ColumnHeader(column: column, fold: fold)
+            ScrollView(.vertical) {
+                LazyVStack(spacing: 8) {
+                    if column.id == "done" {
+                        RowList { ForEach(column.cards) { DoneRow(card: $0) } }
+                    } else {
+                        ForEach(column.cards) { TaskCardView(card: $0) }
+                    }
+                }
+                .padding(.horizontal, 8)
+                .padding(.bottom, 8)
+            }
+            .scrollIndicators(.never)
+        }
+        .background {
+            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                .fill(column.id == "ship" ? AnyShapeStyle(Color.boardGreen.opacity(0.08)) : AnyShapeStyle(.quinary))
+        }
+    }
+}
+
+/// A column's title, how many cards it holds, and how many of them need you.
+private struct ColumnHeader: View {
+    let column: TaskColumn
+    let fold: () -> Void
+
+    @State private var hovering = false
+
+    var body: some View {
+        let needsYou = column.cards.count { $0.turn.needsYou }
+        Button(action: fold) {
+            HStack(spacing: 6) {
+                Image(systemName: column.symbol)
+                    .font(.zoomed(.callout))
+                    .foregroundStyle(column.tint)
+                Text(column.title)
+                    .font(.zoomedHeadline)
+                    .lineLimit(1)
+                Text("\(column.cards.count)")
+                    .font(.zoomed(.caption).weight(.semibold))
+                    .monospacedDigit()
+                    .foregroundStyle(.secondary)
+                    .padding(.horizontal, 7)
+                    .padding(.vertical, 2)
+                    .background(.quaternary, in: .capsule)
+                Spacer(minLength: 4)
+                if needsYou > 0 {
+                    Label("\(needsYou)", systemImage: "hand.raised.fill")
+                        .font(.zoomed(.caption).weight(.semibold))
+                        .monospacedDigit()
+                        .foregroundStyle(.white)
+                        .padding(.horizontal, 7)
+                        .padding(.vertical, 2)
+                        .background(Color.boardOrange, in: .capsule)
+                        .help("\(needsYou) need\(needsYou == 1 ? "s" : "") you")
+                }
+                Image(systemName: "chevron.left.2")
+                    .font(.zoomed(size: 9, weight: .bold))
+                    .foregroundStyle(.tertiary)
+                    .opacity(hovering ? 1 : 0)
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 10)
+            .contentShape(.rect)
+        }
+        .buttonStyle(.plain)
+        .onHover { hovering = $0 }
+        .help("\(column.hint). Click to fold.")
+    }
+}
+
+/// An empty or folded column, as a slim strip: its symbol, count, and title running down. A folded
+/// one opens again when clicked.
+private struct SlimColumn: View {
+    let column: TaskColumn
+    let folded: Bool
+    let unfold: () -> Void
+
+    @State private var hovering = false
+
+    var body: some View {
+        Button(action: unfold) {
+            VStack(spacing: 8) {
+                Image(systemName: column.symbol)
+                    .font(.zoomed(.callout))
+                    .foregroundStyle(column.cards.isEmpty ? AnyShapeStyle(.tertiary) : AnyShapeStyle(column.tint))
+                Text("\(column.cards.count)")
+                    .font(.zoomed(.caption).weight(.semibold))
+                    .monospacedDigit()
+                    .foregroundStyle(.secondary)
+                // Rotated, the title runs down the strip; its frame holds the room it takes once turned.
+                Text(column.title)
+                    .font(.zoomed(.callout).weight(.medium))
+                    .foregroundStyle(column.cards.isEmpty ? .tertiary : .secondary)
+                    .fixedSize()
+                    .rotationEffect(.degrees(90))
+                    .frame(width: 20 * Zoom.shared.scale, height: 120 * Zoom.shared.scale)
+                Spacer(minLength: 0)
+            }
+            .padding(.vertical, 12)
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .background {
+                RoundedRectangle(cornerRadius: 16, style: .continuous)
+                    .fill(.quinary.opacity(folded && hovering ? 1.6 : 1))
+            }
+            .contentShape(.rect)
+        }
+        .buttonStyle(.plain)
+        .disabled(!folded)
+        .onHover { hovering = $0 }
+        .help(folded ? "Show \(column.title)" : "\(column.title): nothing here. \(column.hint).")
+    }
+}
+
+/// Open sessions no task knows about, folded into one line above the board until you open it.
+private struct UntrackedStrip: View {
+    let sessions: [UntrackedSession]
+
+    @AppStorage("tasks.untracked.open") private var open = false
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Button {
+                withAnimation(.snappy(duration: 0.25)) { open.toggle() }
+            } label: {
+                HStack(spacing: 6) {
+                    Image(systemName: "chevron.right")
+                        .font(.zoomed(size: 9, weight: .bold))
+                        .rotationEffect(.degrees(open ? 90 : 0))
+                    Image(systemName: "questionmark.circle")
+                    Text("\(sessions.count) open session\(sessions.count == 1 ? "" : "s") not tracked as a task")
+                    Spacer(minLength: 0)
+                }
+                .font(.zoomed(.callout).weight(.medium))
+                .foregroundStyle(.secondary)
+                .contentShape(.rect)
+            }
+            .buttonStyle(.plain)
+            .help(open ? "Hide them" : "Show them, to track one as a task or say it isn't one")
+            if open {
+                RowList { ForEach(sessions) { UntrackedRow(session: $0) } }
             }
         }
     }
 }
 
-/// One task: what it is, how far along, why it's in its section, what its agent said last, its
-/// plan and PRs, then its session and its one step forward. Clicking it shows its details and history.
+/// One task, in the same shape on every card: what it is, whose move it is and why, then labeled
+/// rows in a fixed order (Update, Plan, Delivered, PRs; a row shows when it has something to say),
+/// then its session and its one step forward. Clicking it shows its details and history.
 struct TaskCardView: View {
     let card: TaskCard
-    /// The title of the section the card sits in, so the card doesn't repeat it ("Agent working").
-    let sectionTitle: String
 
     @State private var hovering = false
     @State private var showingDetails = false
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            VStack(alignment: .leading, spacing: 9) {
-                VStack(alignment: .leading, spacing: 5) {
-                    header
-                    // One line, so every card's stage bar sits at the same height; hover shows the rest.
-                    Text(card.title)
-                        .font(.zoomed(.body).weight(.semibold))
-                        .lineLimit(1)
-                        .truncationMode(.tail)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .help(card.title)
-                }
-                StageBar(card: card)
-                if let finish = card.finish, finish.awaiting {
-                    DeliveryNote(card: card, finish: finish)
-                } else if card.reason.text != sectionTitle {
-                    ReasonLine(reason: card.reason)
-                }
-                if let status = card.status {
-                    StatusText(status: status)
-                }
-                let earlierDelivery = card.finish.flatMap { $0.awaiting ? nil : $0 }
-                if card.plan != nil || earlierDelivery != nil || !card.prs.isEmpty {
-                    VStack(alignment: .leading, spacing: 4) {
-                        if let plan = card.plan {
-                            NoteLine(
-                                note: Note(symbol: "list.number", title: "Plan", text: plan.text, at: plan.at, steps: ["approve-plan"]),
-                                state: plan.awaiting ? "waiting for your approval" : plan.approved ? "approved" : "written",
-                                waiting: plan.awaiting,
-                                card: card
-                            )
-                        }
-                        // Delivered once and sent back, or more work reported since: still worth a look.
-                        if let finish = earlierDelivery {
-                            NoteLine(
-                                note: Note(symbol: "gift", title: "Last delivery", text: finish.text ?? "The agent didn't say what it did.", at: finish.at, steps: []),
-                                state: "sent back",
-                                waiting: false,
-                                card: card
-                            )
-                        }
-                        PRLines(prs: card.prs)
-                    }
-                    .font(.zoomed(.subheadline))
-                }
+        VStack(alignment: .leading, spacing: 9) {
+            VStack(alignment: .leading, spacing: 5) {
+                header
+                Text(card.title)
+                    .font(.zoomed(.body).weight(.semibold))
+                    .lineLimit(2)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .help(card.title)
             }
-            Spacer(minLength: 0)
+            TurnLine(turn: card.turn)
+            if let finish = card.finish, finish.awaiting {
+                DeliveryNote(card: card, finish: finish)
+            }
+            TaskRows(card: card)
             if card.session != nil || !card.steps.isEmpty || card.running != nil {
-                VStack(alignment: .leading, spacing: 10) {
+                VStack(alignment: .leading, spacing: 8) {
                     Divider()
-                    VStack(alignment: .leading, spacing: 8) {
-                        if let session = card.session { TaskSessionLine(card: card, session: session) }
-                        TaskStepSlot(card: card)
-                    }
+                    if let session = card.session { TaskSessionLine(card: card, session: session) }
+                    TaskStepSlot(card: card)
                 }
-                .padding(.top, 10)
+                .padding(.top, 2)
             }
         }
-        .frame(maxHeight: .infinity, alignment: .top)
         .padding(12)
-        .padding(.leading, 2)
         .background {
             RoundedRectangle(cornerRadius: 12, style: .continuous)
                 .fill(Color(nsColor: .controlBackgroundColor))
-                .shadow(color: delivered ? Color.boardGreen.opacity(hovering ? 0.3 : 0.16) : .black.opacity(hovering ? 0.14 : 0.06), radius: hovering ? 6 : delivered ? 4 : 2, y: hovering ? 3 : 1)
+                .shadow(color: .black.opacity(hovering ? 0.14 : 0.06), radius: hovering ? 6 : 2, y: hovering ? 3 : 1)
         }
         .overlay {
             RoundedRectangle(cornerRadius: 12, style: .continuous)
-                .strokeBorder(delivered ? Color.boardGreen.opacity(hovering ? 0.55 : 0.35) : Color.primary.opacity(hovering ? 0.14 : 0.07), lineWidth: 1)
+                .strokeBorder(card.turn.needsYou ? card.turn.tint.opacity(hovering ? 0.6 : 0.4) : Color.primary.opacity(hovering ? 0.14 : 0.07), lineWidth: 1)
         }
         .contentShape(.rect(cornerRadius: 12))
         .onTapGesture { showingDetails = true }
@@ -180,11 +298,9 @@ struct TaskCardView: View {
         .contextMenu { TaskMenuItems(card: card) }
     }
 
-    /// Its agent delivered and it waits for you to ship it: the card wears the section's green.
-    private var delivered: Bool { card.finish?.awaiting == true }
-
     private var header: some View {
         HStack(spacing: 6) {
+            Circle().fill(taskColor(card.hue)).frame(width: 7 * Zoom.shared.scale)
             Text(card.ref)
                 .fontWeight(.medium)
                 .monospacedDigit()
@@ -251,59 +367,104 @@ private struct ProjectChip: View {
     }
 }
 
-/// How far along the task is: a segment per stage, filled up to the current one, and its name.
-private struct StageBar: View {
-    let card: TaskCard
+/// Whose move it is, as a colored pill, then what exactly it waits on and for how long.
+private struct TurnLine: View {
+    let turn: Turn
 
     var body: some View {
-        let color = taskColor(card.hue)
-        HStack(spacing: 8) {
-            HStack(spacing: 3) {
-                ForEach(card.stages, id: \.id) { stage in
-                    Capsule()
-                        .fill(stage.state == .todo ? AnyShapeStyle(.quaternary) : AnyShapeStyle(color.opacity(stage.state == .current ? 1 : 0.45)))
-                        .frame(height: 4 * Zoom.shared.scale)
-                        .help(stage.label)
-                }
-            }
-            Text(card.stageLabel)
+        HStack(alignment: .firstTextBaseline, spacing: 6) {
+            Label(turn.label, systemImage: turn.symbol)
                 .font(.zoomed(.caption).weight(.semibold))
-                .foregroundStyle(card.stage == "idea" ? AnyShapeStyle(.secondary) : AnyShapeStyle(color))
+                .foregroundStyle(turn.tint)
+                .lineLimit(1)
+                .padding(.horizontal, 7)
+                .padding(.vertical, 2)
+                .background(turn.tint.opacity(0.14), in: .capsule)
                 .fixedSize()
+            if let text = detail {
+                Text(text)
+                    .font(.zoomed(.subheadline))
+                    .foregroundStyle(.secondary)
+                    .lineLimit(2)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            Spacer(minLength: 0)
+        }
+    }
+
+    /// "Plan ready for your approval · 12m", or just "12m".
+    private var detail: String? {
+        switch (turn.reason, turn.since) {
+        case (let reason?, let since?): "\(reason) · \(since)"
+        case (let reason?, nil): reason
+        case (nil, let since?): since
+        case (nil, nil): nil
         }
     }
 }
 
-/// Why the task is in its section: on a tinted line when it waits on someone, else quietly.
-private struct ReasonLine: View {
-    let reason: Reason
+/// The card's labeled rows, always in this order: the agent's latest update, its plan, an earlier
+/// delivery, and its PRs. Labels sit in a column of their own, values beside them, like a PR card's.
+private struct TaskRows: View {
+    let card: TaskCard
 
     var body: some View {
-        let quiet = reason.tone == .muted || reason.tone == .ghost
-        HStack(alignment: .firstTextBaseline, spacing: 5) {
-            Image(systemName: symbol)
-            Text(reason.text).fixedSize(horizontal: false, vertical: true)
-            if let since = reason.since {
-                Text(verbatim: "· \(since)").foregroundStyle(quiet ? AnyShapeStyle(.tertiary) : AnyShapeStyle(reason.tone.color.opacity(0.75)))
+        // Delivered once and sent back, or more work reported since: still worth a look.
+        let earlierDelivery = card.finish.flatMap { $0.awaiting ? nil : $0 }
+        if card.status != nil || card.plan != nil || earlierDelivery != nil || !card.prs.isEmpty {
+            Grid(alignment: .leading, horizontalSpacing: 10, verticalSpacing: 5) {
+                if let status = card.status {
+                    GridRow(alignment: .firstTextBaseline) {
+                        RowLabel(symbol: "text.bubble", text: "Update")
+                        StatusText(status: status)
+                    }
+                }
+                if let plan = card.plan {
+                    GridRow(alignment: .firstTextBaseline) {
+                        RowLabel(symbol: "list.number", text: "Plan")
+                        NoteLine(
+                            note: Note(symbol: "list.number", title: "Plan", text: plan.text, at: plan.at, steps: ["approve-plan"]),
+                            state: plan.awaiting ? "Waiting for your approval" : plan.approved ? "Approved" : "Written",
+                            waiting: plan.awaiting,
+                            card: card
+                        )
+                    }
+                }
+                if let finish = earlierDelivery {
+                    GridRow(alignment: .firstTextBaseline) {
+                        RowLabel(symbol: "gift", text: "Delivered")
+                        NoteLine(
+                            note: Note(symbol: "gift", title: "Last delivery", text: finish.text ?? "The agent didn't say what it did.", at: finish.at, steps: []),
+                            state: "Sent back",
+                            waiting: false,
+                            card: card
+                        )
+                    }
+                }
+                if !card.prs.isEmpty {
+                    GridRow(alignment: .firstTextBaseline) {
+                        RowLabel(symbol: "arrow.triangle.pull", text: "PRs")
+                        VStack(alignment: .leading, spacing: 3) { PRLines(prs: card.prs) }
+                    }
+                }
             }
+            .font(.zoomed(.subheadline))
         }
-        .font(.zoomed(.subheadline).weight(.medium))
-        .foregroundStyle(reason.tone.textStyle)
-        .padding(.horizontal, quiet ? 0 : 6)
-        .padding(.vertical, quiet ? 0 : 3)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(quiet ? Color.clear : reason.tone.color.opacity(0.1), in: .rect(cornerRadius: 6))
     }
+}
 
-    private var symbol: String {
-        switch reason.tone {
-        case .warn: "hand.raised.fill"
-        case .wait: "hourglass"
-        case .ok: "checkmark.circle.fill"
-        case .link: "sparkle.magnifyingglass"
-        case .bad: "exclamationmark.octagon.fill"
-        case .muted, .ghost: "pause.circle"
+/// A row's label: a symbol in a fixed box, so every label's text starts at the same place.
+private struct RowLabel: View {
+    let symbol: String
+    let text: String
+
+    var body: some View {
+        HStack(alignment: .center, spacing: 5) {
+            Image(systemName: symbol).frame(width: 16 * Zoom.shared.scale, alignment: .center)
+            Text(text).lineLimit(1).fixedSize()
         }
+        .foregroundStyle(.secondary)
+        .gridColumnAlignment(.leading)
     }
 }
 
@@ -313,7 +474,6 @@ private struct StatusText: View {
 
     var body: some View {
         Text("\(Text(status.text).foregroundStyle(.primary.opacity(0.85)))  \(Text(status.auto ? "\(status.ago) · auto" : status.ago).foregroundStyle(.tertiary))")
-            .font(.zoomed(.subheadline))
             .lineLimit(3)
             .fixedSize(horizontal: false, vertical: true)
             .frame(maxWidth: .infinity, alignment: .leading)
@@ -331,7 +491,7 @@ private struct Note: Hashable {
     var steps: [String]
 }
 
-/// A note on a line, with where it stands; clicking shows it, with its steps while they wait for you.
+/// A note's row value: where it stands; clicking shows it, with its steps while they wait for you.
 private struct NoteLine: View {
     let note: Note
     let state: String
@@ -344,8 +504,6 @@ private struct NoteLine: View {
     var body: some View {
         Button { showing = true } label: {
             HStack(alignment: .firstTextBaseline, spacing: 5) {
-                Image(systemName: note.symbol).frame(width: 14 * Zoom.shared.scale)
-                Text(note.title).fontWeight(.medium)
                 Text(state)
                     .foregroundStyle(waiting ? AnyShapeStyle(Color.boardOrange) : AnyShapeStyle(.secondary))
                 Image(systemName: "chevron.down").font(.zoomed(size: 7, weight: .bold)).foregroundStyle(.secondary)
@@ -380,7 +538,7 @@ private struct DeliveryNote: View {
                 HStack(alignment: .firstTextBaseline, spacing: 5) {
                     Image(systemName: "gift.fill")
                     Text("Delivered")
-                    if let since = card.reason.since {
+                    if let since = card.turn.since {
                         Text(verbatim: "· \(since)").foregroundStyle(Color.boardGreen.opacity(0.75))
                     }
                     Spacer(minLength: 4)
@@ -485,7 +643,7 @@ private struct PRLines: View {
             Text("+\(prs.count - shown) more")
                 .font(.zoomed(.caption).weight(.semibold))
                 .foregroundStyle(.secondary)
-                .padding(.leading, 14 * Zoom.shared.scale + 5)
+                .padding(.leading, 4)
                 .help(prs.dropFirst(shown).map(\.ref).joined(separator: ", "))
         }
     }
@@ -500,7 +658,6 @@ private struct PRLine: View {
     var body: some View {
         Button { openURL(pr.url) } label: {
             HStack(alignment: .firstTextBaseline, spacing: 5) {
-                Image(systemName: "arrow.triangle.pull").frame(width: 14 * Zoom.shared.scale).foregroundStyle(.secondary)
                 // A long repo name gives way before where the PR is, which is the point of the line.
                 Text(verbatim: "\(pr.repoName)#\(pr.number)").fontWeight(.medium).monospacedDigit().lineLimit(1).truncationMode(.middle)
                 ToneDot(tone: pr.tone, running: false)
@@ -628,7 +785,7 @@ private struct TaskDetailsPopover: View {
             if let details = card.details {
                 MarkdownText(text: details).foregroundStyle(.secondary)
             }
-            ReasonLine(reason: card.reason)
+            TurnLine(turn: card.turn)
             if let finish = card.finish, let text = finish.text {
                 Divider()
                 Text("What the agent delivered").font(.zoomed(.callout).weight(.semibold)).foregroundStyle(.secondary)
@@ -749,12 +906,13 @@ private struct DoneRow: View {
 
     var body: some View {
         HStack(alignment: .firstTextBaseline, spacing: 8) {
-            Circle().fill(taskColor(card.hue)).frame(width: 7 * Zoom.shared.scale)
+            Image(systemName: "checkmark").font(.zoomed(size: 9, weight: .bold)).foregroundStyle(Color.boardGreen.opacity(0.7))
             Text(card.ref).font(.zoomed(.caption)).monospacedDigit().foregroundStyle(.secondary).fixedSize()
-            Text(card.title).font(.zoomed(.subheadline).weight(.medium)).truncationMode(.tail)
-            if let project = card.project { ProjectChip(project: project) }
+            Text(card.title).font(.zoomed(.subheadline).weight(.medium)).truncationMode(.tail).help(card.title)
             Spacer(minLength: 8)
-            Text(card.reason.text).font(.zoomed(.caption)).foregroundStyle(.tertiary).fixedSize()
+            if let ago = card.turn.reason {
+                Text(ago).font(.zoomed(.caption)).foregroundStyle(.tertiary).fixedSize().help("Shipped \(ago)")
+            }
             CardMenu { TaskMenuItems(card: card) }
         }
         .lineLimit(1)

@@ -175,7 +175,7 @@ export interface TaskActionTarget {
  * Runs one of a task card's controls, or an untracked session's. `start` opens a session on the
  * task, `approve-plan` tells its session to carry out its plan, `open` shows its session;
  * `ship` and `done` finish it, closing its idle sessions, and `send-back` returns a task
- * its agent called finished and shows you its session. `pause` sets a task aside in Paused until
+ * its agent called finished and shows you its session. `pause` sets a task aside, its card Paused, until
  * `unpause` takes it off hold, or `resume` does and shows its session (or starts one).
  * `track` asks an untracked session to register its task, `close-session` closes its relay tab.
  */
