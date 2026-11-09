@@ -5,6 +5,7 @@ import { THINKING_LEVELS, listModels } from "../server/modelState.ts";
 import { parsePaneTitle } from "../server/sessions.ts";
 import { parseUploadedImages, saveUploadedImages, type UploadedImage } from "../server/uploads.ts";
 import { killWindow, pasteText, type Pane } from "../tmux.ts";
+import { nameTask, provisionalTitle } from "./autoTitle.ts";
 import { liveSessions } from "./command.ts";
 import { readSessionHeader } from "./owners.ts";
 import { ActionError, modelArgs, openAgentTab, promptSession, showSession, type BoardActionResult } from "./serve.ts";
@@ -45,9 +46,10 @@ function startPrompt(task: Task): string {
   const plan = task.approvePlan
     ? "When you have a plan, record it with `relay task plan --summary -` (the plan on stdin, through a heredoc) and stop there: I approve it on the board before you carry it out."
     : "It skips plan approval: once you know what to do, go ahead and do it.";
+  // A task made on the board is named from its details, so they carry the whole request.
+  const request = task.details ? `\n\n${task.details}\n\n` : `: ${task.title}\n\n`;
   return (
-    `I started ${taskRef(task.id)} from the relay board: ${task.title}\n\n` +
-    (task.details ? `${task.details}\n\n` : "") +
+    `I started ${taskRef(task.id)} from the relay board${request}` +
     `This session is on it already. Follow the Tasks section of the relay skill: relay keeps the card's stage and status current on its own, ` +
     `and whenever you stop to wait on me or on others, say so first with \`relay task update --blocked-on me\` or \`--blocked-on others\`. ` +
     `${plan} ${FINISH_ASK}`
@@ -279,10 +281,9 @@ async function runSessionAction(action: SessionAction, sessionFile: string | und
   }
 }
 
-/** A task as the board's New Task sheet sends it. */
+/** A task as the board's New Task sheet sends it: what you want done, which relay names it from. */
 export interface NewTaskRequest {
-  title: string;
-  details?: string;
+  details: string;
   /** Screenshots pasted into its details, saved for its agent to read. */
   images: UploadedImage[];
   /** A project's name: an existing one, or a new one to create. */
@@ -299,16 +300,17 @@ export interface NewTaskRequest {
 /** Where sessions on tasks made from the board start: a scratch folder, since agents pick their repos themselves. */
 const NEW_TASK_FOLDER = "/tmp";
 
-/** Creates a task from the board, starting a session on it when asked. */
+/** Creates a task from the board, naming it in the background and starting a session on it when asked. */
 export async function createTaskFromBoard(request: NewTaskRequest): Promise<BoardActionResult & { task?: number }> {
-  const title = request.title.trim();
-  if (!title) return { status: 400, message: "a task needs a title" };
+  const written = request.details.trim();
+  if (!written) return { status: 400, message: "say what you want done" };
   if (request.model && !(await listModels()).some((option) => option.selector === request.model)) {
     return { status: 400, message: `omp has no model ${request.model}` };
   }
   // Its screenshots go below what you wrote, one "[Attached image: <path>]" line each, like the phone's.
   const attachments = (await saveUploadedImages(request.images)).join("\n");
-  const details = [request.details?.trim(), attachments].filter(Boolean).join("\n\n") || null;
+  const details = [written, attachments].filter(Boolean).join("\n\n");
+  const title = provisionalTitle(written);
   const at = new Date().toISOString();
   const db = openBoardStore();
   let task: Task;
@@ -328,6 +330,7 @@ export async function createTaskFromBoard(request: NewTaskRequest): Promise<Boar
   } finally {
     db.close();
   }
+  void nameTask(task.id, written, title);
   if (!request.start) return { status: 200, message: `Saved ${taskRef(task.id)} in Ideas`, task: task.id };
   try {
     return { status: 200, message: await startTask(task), task: task.id };
@@ -395,13 +398,12 @@ export function parseNewTask(body: Record<string, unknown>): NewTaskRequest {
     if (typeof value !== "string") throw new Error(`${key} must be text`);
     return value;
   };
-  const title = text("title");
-  if (!title) throw new Error("missing title");
+  const details = text("details")?.trim();
+  if (!details) throw new Error("missing details");
   const thinkingLevel = text("thinkingLevel") || undefined;
   if (thinkingLevel && THINKING_LEVELS[thinkingLevel] !== true) throw new Error(`unknown thinking level: ${thinkingLevel}`);
   return {
-    title,
-    details: text("details"),
+    details,
     images: parseUploadedImages(body.images),
     project: text("project"),
     approvePlan: body.approvePlan !== false,

@@ -75,6 +75,7 @@ flowchart LR
 ```
 
 - **You never chase an agent.** Relay keeps each card's stage and status current by reading the end of the agent's session with a small, fast model, marked **auto**. The agent itself only speaks up at the moments that matter: when it starts, when it has a plan, when it stops waiting on you or others, and when it's done.
+- **Just say what you want.** A new task is what you write, nothing more: relay titles the card for you.
 - **Nothing ships without you.** A finished task lands in **Ready to ship** with a note on what the agent did and how it checked. One click on **Ship It** and it's shipped.
 - **Plans wait for you,** unless you say the task can skip that step.
 - **Park what can wait.** **Mark Blocked** from a task's menu and it moves to **Blocked**, saying which stage it was in, until you press **Resume** or **Unblock**.

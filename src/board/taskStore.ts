@@ -25,7 +25,7 @@ export interface Project {
 export interface Task {
   id: number;
   title: string;
-  /** What you asked for, as you wrote it; null when the title says it all. */
+  /** What you asked for, as you wrote it; null when the title says it all. Tasks made on the board are named from it. */
   details: string | null;
   projectId: number | null;
   stage: TaskStage;
@@ -453,6 +453,14 @@ export function markStarted(db: Database, id: number, at: string): void {
     db.query("UPDATE tasks SET stage = ?, updated_at = ? WHERE id = ?").run(stage, at, id);
     addEvent(db, id, at, "started", stage, null);
   })();
+}
+
+/**
+ * Gives a task the title relay wrote for it, unless its title changed since relay began: the stand-in
+ * title is only replaced, never a newer one. Says whether it was.
+ */
+export function retitleTask(db: Database, id: number, from: string, to: string): boolean {
+  return db.query("UPDATE tasks SET title = ? WHERE id = ? AND title = ?").run(to, id, from).changes > 0;
 }
 
 export function deleteTask(db: Database, id: number): void {

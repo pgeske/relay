@@ -818,14 +818,13 @@ private struct DoneRow: View {
     }
 }
 
-/// Jots down a task: what you want done, anything the agent should know, its project, and whether you
+/// Jots down a task: what you want done (relay titles it from that), its project, and whether you
 /// approve its plan first. Start (⌘↩) opens a session on it right away; Save as Idea keeps it for later.
 struct NewTaskSheet: View {
     let project: Project?
 
     @Environment(BoardModel.self) private var model
     @Environment(\.dismiss) private var dismiss
-    @State private var title = ""
     @State private var details = ""
     @State private var screenshots: [Screenshot] = []
     @State private var projectName = ""
@@ -837,7 +836,7 @@ struct NewTaskSheet: View {
     @State private var chosenLevel: String?
     @FocusState private var focus: Field?
 
-    private enum Field { case title, projectName }
+    private enum Field { case projectName }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -861,12 +860,8 @@ struct NewTaskSheet: View {
                     .keyboardShortcut(.cancelAction)
                     .help("Close (Esc)")
                 }
-                TextField("Task", text: $title, prompt: Text("What do you want done?"), axis: .vertical)
-                    .textFieldStyle(.plain)
-                    .font(.zoomed(size: 22, weight: .semibold))
-                    .lineLimit(1...3)
-                    .focused($focus, equals: .title)
-                DetailsEditor(text: $details, placeholder: "Anything the agent should know: context, links, what done looks like. Paste or drop screenshots here too.", onSubmit: { submit(start: true) }) { pasted in
+                // No title to write: relay names the task from what you say here.
+                DetailsEditor(text: $details, placeholder: "What do you want done? Add context, links, what done looks like. Paste or drop screenshots here too.", focusOnAppear: true, onSubmit: { submit(start: true) }) { pasted in
                     screenshots += pasted
                 }
                 .frame(minHeight: 200 * Zoom.shared.scale)
@@ -883,10 +878,7 @@ struct NewTaskSheet: View {
         }
         .font(.zoomed(.body))
         .frame(width: 640 * Zoom.shared.scale)
-        .onAppear {
-            projectName = project?.path ?? ""
-            focus = .title
-        }
+        .onAppear { projectName = project?.path ?? "" }
         .task { await model.loadModelChoices() }
     }
 
@@ -985,12 +977,12 @@ struct NewTaskSheet: View {
         (model.board?.tasks?.projects ?? []).sorted { $0.path.localizedStandardCompare($1.path) == .orderedAscending }
     }
 
-    private var ready: Bool { !title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && !model.isCreating }
+    private var ready: Bool { !details.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && !model.isCreating }
 
     private func submit(start: Bool) {
         guard ready else { return }
         let images = screenshots.map { NewTask.Image(base64: $0.data.base64EncodedString(), mimeType: $0.mimeType) }
-        let task = NewTask(title: title, details: details, images: images, project: projectName, approvePlan: approvePlan, start: start, model: chosenModel, thinkingLevel: chosenLevel)
+        let task = NewTask(details: details, images: images, project: projectName, approvePlan: approvePlan, start: start, model: chosenModel, thinkingLevel: chosenLevel)
         Task {
             if await model.create(task) { dismiss() }
         }

@@ -168,9 +168,8 @@ enum ActionTarget: Hashable, Sendable {
     }
 }
 
-/// A task as the New Task sheet sends it.
+/// A task as the New Task sheet sends it. It has no title: relay names it from its details.
 struct NewTask: Encodable, Sendable {
-    var title: String
     var details: String
     /// Screenshots pasted into its details; the server saves them and lists their paths in its details.
     var images: [Image]

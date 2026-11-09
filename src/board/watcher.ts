@@ -1,14 +1,8 @@
 import type { Database } from "bun:sqlite";
-import { execFile } from "node:child_process";
-import { mkdirSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
-import { CACHE_DIR } from "../paths.ts";
 import { readMessagePage, type Message } from "../server/messages.ts";
-import { OMP_BINARY, splitRoleSelector } from "../server/modelState.ts";
 import { parsePaneTitle, type SessionStatus } from "../server/sessions.ts";
 import { fileSize } from "../server/sessionFile.ts";
-import { agentEnv } from "../tmux.ts";
+import { askModel } from "./askModel.ts";
 import {
   agentSaidWhatItWaitsOn,
   applyStatusDecision,
@@ -44,11 +38,6 @@ const QUIET_MS = 3 * 60_000;
 const MESSAGES_READ = 80;
 /** The board pastes its prompt into a session (reopening it first, if need be) before noting the request. */
 const REQUEST_PROMPT_SLACK_MS = 2 * 60_000;
-const MODEL_TIMEOUT_MS = 90_000;
-
-/** The omp settings the watcher's model calls run with on top of the user's: no memory to read or fill with these calls. */
-const OMP_OVERLAY_PATH = join(CACHE_DIR, "watcher-omp.yml");
-const OMP_OVERLAY = "memory:\n  backend: off\nautolearn:\n  enabled: false\n";
 const SYSTEM_PROMPT = "You keep a task board accurate by reading AI agents' terminal sessions. Answer only from what you're given, never use tools, and reply with only the JSON object asked for.";
 
 /** One relay tab's agent, as the watcher has seen it. */
@@ -61,28 +50,6 @@ export interface Track {
   lastWorkingCheck: number;
   /** Its session log's size, in bytes. */
   logSize: number;
-}
-
-/**
- * Asks the user's omp for a one-off answer, on the watcher's model (by default the fast `@smol` role),
- * with nothing of a coding session loaded: no tools to speak of (a restricted tool list also skips MCP
- * servers), skills, rules, context files, or memory. It runs with the environment agents get. Low
- * thinking unless the model names a level: it reads which question is the latest one more reliably
- * than none, at no cost in time.
- */
-async function askModel(prompt: string, model: string): Promise<string> {
-  const role = splitRoleSelector(model);
-  const args = ["-p", "--no-session", "--tools", "read", "--no-skills", "--no-rules", "--no-context-files", "--no-extensions", "--no-title", "--no-lsp"];
-  args.push("--config", OMP_OVERLAY_PATH, "--model", role.model ?? model, "--thinking", role.thinkingLevel ?? "low", "--system-prompt", SYSTEM_PROMPT, prompt);
-  const env = await agentEnv();
-  const { promise, resolve, reject } = Promise.withResolvers<string>();
-  const child = execFile(OMP_BINARY, args, { cwd: tmpdir(), env, encoding: "utf8", timeout: MODEL_TIMEOUT_MS, maxBuffer: 1024 * 1024 }, (error, stdout) => {
-    if (error) reject(error);
-    else resolve(stdout);
-  });
-  // Print mode reads piped stdin into the prompt, so an open pipe would keep it waiting.
-  child.stdin?.end();
-  return promise;
 }
 
 /** Whether a task's card is the watcher's to correct: one in play, not shipped, paused, delivered, or waiting on your plan approval. */
@@ -108,7 +75,7 @@ async function checkTask(sessionFile: string, moment: Moment, messages: Message[
   if (moment === "working" && Date.now() - Date.parse(task.updatedAt) < QUIET_MS) return;
   if (moment === "stopped" && agentSaidWhatItWaitsOn(messages, task.id)) return;
 
-  const reply = await askModel(statusPrompt(task, moment, renderTranscript(messages), new Date()), model);
+  const reply = await askModel(statusPrompt(task, moment, renderTranscript(messages), new Date()), model, SYSTEM_PROMPT);
   const decision = parseStatusDecision(reply, moment);
   if (!decision) {
     console.error(`watcher: no usable answer for ${taskRef(task.id)}: ${reply.trim().slice(0, 200)}`);
@@ -169,7 +136,7 @@ async function recordForgottenSteps(sessionFile: string, messages: Message[], mo
     // The request scrolled out of what the watcher reads, or the session never got it.
     if (!fromRequest.some((message) => message.role === "user")) continue;
     const url = `https://github.com/${repo}/pull/${number}`;
-    const outcome = parseStepOutcome(await askModel(stepPrompt(step, url, renderTranscript(fromRequest)), model), step);
+    const outcome = parseStepOutcome(await askModel(stepPrompt(step, url, renderTranscript(fromRequest)), model, SYSTEM_PROMPT), step);
     if (!outcome?.done) {
       console.log(`watcher: the ${step} of ${repo}#${number} didn't finish, by the session; leaving it`);
       continue;
@@ -235,8 +202,6 @@ export function dueMoment(track: Track, now: number): Moment | null {
 
 /** Starts watching relay's tabs for as long as the server runs. */
 export function startWatcher(): void {
-  mkdirSync(CACHE_DIR, { recursive: true });
-  writeFileSync(OMP_OVERLAY_PATH, OMP_OVERLAY);
   const tracks = new Map<string, Track>();
   const busy = new Set<string>();
 
