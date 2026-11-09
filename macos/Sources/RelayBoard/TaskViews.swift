@@ -134,7 +134,9 @@ private struct UntrackedStrip: View {
 
 /// One task, in the same shape on every card: what it is, whose move it is and why, then labeled
 /// rows in a fixed order (Update, Plan, Delivered, PRs; a row shows when it has something to say),
-/// then its session and its one step forward. Clicking it shows its details and history.
+/// then its session and its one step forward. It fills the height it's offered, the extra above the
+/// footer, so a row of cards is one height and their footers line up. Clicking it shows its details
+/// and history.
 struct TaskCardView: View {
     let card: TaskCard
 
@@ -157,6 +159,7 @@ struct TaskCardView: View {
                 DeliveryNote(card: card, finish: finish)
             }
             TaskRows(card: card)
+            Spacer(minLength: 0)
             if card.session != nil || !card.steps.isEmpty || card.running != nil {
                 VStack(alignment: .leading, spacing: 8) {
                     Divider()
@@ -166,6 +169,7 @@ struct TaskCardView: View {
                 .padding(.top, 2)
             }
         }
+        .frame(maxHeight: .infinity, alignment: .top)
         .padding(12)
         .background {
             RoundedRectangle(cornerRadius: 12, style: .continuous)
