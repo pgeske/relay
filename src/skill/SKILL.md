@@ -58,9 +58,9 @@ EOF
 
 - `relay task update --pr <url>` adds a PR this session didn't open; PRs it opens join the task on their own.
 - `relay task update --stage <stage> --status "<line>"` is there when the auto status is wrong or you want to say something specific. Stages, in order: `research`, `plan`, `doing`, `rollout` (rolling out or verifying). Only the user moves a task to `done`.
-- The user can **pause** a task on the board to set it aside. It stays paused until they resume it or you finish it.
+- The user can **block** a task on the board to set it aside: it moves to the Blocked column and stays there until they unblock it or you finish it. That's separate from `--blocked-on`, which is what you say it waits on.
 
-**When the board hands you a task** ("I started T-12 from the relay board"), this session is already on it: don't register it again. When the board asks you to track a session, register what it's working on with `relay task new`, or say it isn't a task. `relay task link <task>` puts this session on an existing task (say, a second session on the same work). `relay task show` prints this session's task; `relay task --json` lists them all, in a column per stage (`idea`, `research`, `plan`, `doing`, `rollout`, `ship`, `done`), each card's `turn` saying whose move it is (`you`, `agent`, `others`, `paused`, `idle`, `idea`, `done`), then `untracked` sessions.
+**When the board hands you a task** ("I started T-12 from the relay board"), this session is already on it: don't register it again. When the board asks you to track a session, register what it's working on with `relay task new`, or say it isn't a task. `relay task link <task>` puts this session on an existing task (say, a second session on the same work). `relay task show` prints this session's task; `relay task --json` lists them all, in a column per stage (`idea`, `research`, `plan`, `doing`, `rollout`, `ship`, `blocked`, `done`), each card's `turn` saying whose move it is (`you`, `agent`, `others`, `blocked`, `idle`, `idea`, `done`), then `untracked` sessions.
 
 ## Pull requests
 

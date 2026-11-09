@@ -77,7 +77,7 @@ struct TaskStatus: Decodable, Sendable, Hashable {
 }
 
 struct Turn: Decodable, Sendable, Hashable {
-    /// "you", "agent", "others", "paused", "idle", "idea", or "done".
+    /// "you", "agent", "others", "blocked", "idle", "idea", or "done".
     var id: String
     /// "Needs you", "Agent working".
     var label: String

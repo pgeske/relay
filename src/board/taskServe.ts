@@ -175,8 +175,8 @@ export interface TaskActionTarget {
  * Runs one of a task card's controls, or an untracked session's. `start` opens a session on the
  * task, `approve-plan` tells its session to carry out its plan, `open` shows its session;
  * `ship` and `done` finish it, closing its idle sessions, and `send-back` returns a task
- * its agent called finished and shows you its session. `pause` sets a task aside, its card Paused, until
- * `unpause` takes it off hold, or `resume` does and shows its session (or starts one).
+ * its agent called finished and shows you its session. `block` sets a task aside in the Blocked column until
+ * `unblock` puts it back in its stage, or `resume` does and shows its session (or starts one).
  * `track` asks an untracked session to register its task, `close-session` closes its relay tab.
  */
 export async function runTaskAction(action: string, target: TaskActionTarget): Promise<BoardActionResult> {
@@ -199,13 +199,13 @@ export async function runTaskAction(action: string, target: TaskActionTarget): P
           if (!task.finishedAt) return { status: 409, message: `${taskRef(id)} isn't ready to ship` };
           sendBack(db, id, at);
           break;
-        case "pause":
+        case "block":
           if (task.stage === "done") return { status: 409, message: `${taskRef(id)} is already shipped` };
           pauseTask(db, id, at);
-          return { status: 200, message: `Paused ${taskRef(id)}` };
-        case "unpause":
+          return { status: 200, message: `Blocked ${taskRef(id)}` };
+        case "unblock":
           resumeTask(db, id, at);
-          return { status: 200, message: `Unpaused ${taskRef(id)}` };
+          return { status: 200, message: `Unblocked ${taskRef(id)}` };
         case "resume":
           resumeTask(db, id, at);
           break;

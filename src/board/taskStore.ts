@@ -53,7 +53,10 @@ export interface Task {
   /** Why its agent says it's done: what it did and how it checked. Kept after you approve it. */
   finishNote: string | null;
   doneAt: string | null;
-  /** When you set it aside on the board; null while it's in play. It stays paused until you resume it, ship it, or its agent delivers. */
+  /**
+   * When you set it aside on the board, which shows it in Blocked (not to be confused with `blockedOn`, what its
+   * agent says it waits on); null while it's in play. It stays set aside until you unblock it, ship it, or its agent delivers.
+   */
   pausedAt: string | null;
   /** When relay's watcher last reported for its agent, which forgot to; null once the agent reports itself. */
   autoReportedAt: string | null;
@@ -391,7 +394,7 @@ export function sendBack(db: Database, id: number, at: string): void {
   })();
 }
 
-/** You set a task aside on the board: its card says Paused, whatever its sessions do, until you resume it. */
+/** You set a task aside on the board: it sits in Blocked, whatever its sessions do, until you unblock it. */
 export function pauseTask(db: Database, id: number, at: string): void {
   db.transaction(() => {
     const task = getTask(db, id);
@@ -402,7 +405,7 @@ export function pauseTask(db: Database, id: number, at: string): void {
   })();
 }
 
-/** You picked a paused task back up: the board places it by what it needs again. */
+/** You unblocked a task you'd set aside: the board places it in its stage by what it needs again. */
 export function resumeTask(db: Database, id: number, at: string): void {
   db.transaction(() => {
     const task = getTask(db, id);

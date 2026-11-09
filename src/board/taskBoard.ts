@@ -11,9 +11,9 @@ import { timeAgo, type Confirm, type Tone } from "./view.ts";
 
 /**
  * Columns in the order work moves (Relay Board stacks them top to bottom): a task sits in its stage's column until its agent
- * delivers (Ready to ship), then in Shipped once you ship it.
+ * delivers (Ready to ship), then in Shipped once you ship it. One you blocked sits in Blocked, out of the way, until you unblock it.
  */
-export type TaskColumn = "idea" | "research" | "plan" | "doing" | "rollout" | "ship" | "done";
+export type TaskColumn = "idea" | "research" | "plan" | "doing" | "rollout" | "ship" | "blocked" | "done";
 
 const COLUMNS: { id: TaskColumn; title: string; hint: string }[] = [
   { id: "idea", title: "Ideas", hint: "Not started yet" },
@@ -22,33 +22,34 @@ const COLUMNS: { id: TaskColumn; title: string; hint: string }[] = [
   { id: "doing", title: "Doing", hint: "Making the change" },
   { id: "rollout", title: "Rollout", hint: "Rolling it out or verifying it" },
   { id: "ship", title: "Ready to ship", hint: "Its agent delivered: look it over, then ship it" },
+  { id: "blocked", title: "Blocked", hint: "Set aside until you unblock it" },
   { id: "done", title: "Shipped", hint: "Shipped in the last two weeks" },
 ];
 
 /**
  * Whose move a task waits on, said at the top of its card: you (a plan to approve, a question, a PR
  * to move along, an agent that stopped, a delivery to ship), its agent while it works, anyone else (a
- * team, reviewers), or nobody: you paused it, no session is open, or it hasn't started.
+ * team, reviewers), or nobody: you blocked it, no session is open, or it hasn't started.
  */
-export type Turn = "you" | "agent" | "others" | "paused" | "idle" | "idea" | "done";
+export type Turn = "you" | "agent" | "others" | "blocked" | "idle" | "idea" | "done";
 
 const TURN_LABELS: Record<Turn, string> = {
   you: "Needs you",
   agent: "Agent working",
   others: "Waiting on others",
-  paused: "Paused",
+  blocked: "Blocked",
   idle: "Idle",
   idea: "Not started",
   done: "Shipped",
 };
 
 /** A column's cards, top to bottom: your move first, then the agent's, then others', then what's parked. */
-const TURN_ORDER: Turn[] = ["you", "agent", "others", "paused", "idle", "idea", "done"];
+const TURN_ORDER: Turn[] = ["you", "agent", "others", "blocked", "idle", "idea", "done"];
 
 const DONE_SHOWN_MS = 14 * 24 * 60 * 60 * 1000;
 
 /** What a task card's controls ask relay's server: `POST /api/board/tasks/actions/<action>` with the card's `id`. */
-export const TASK_ACTIONS = ["start", "approve-plan", "open", "ship", "send-back", "pause", "resume", "unpause", "done", "reopen", "delete"] as const;
+export const TASK_ACTIONS = ["start", "approve-plan", "open", "ship", "send-back", "block", "resume", "unblock", "done", "reopen", "delete"] as const;
 export type TaskAction = (typeof TASK_ACTIONS)[number];
 /** What an untracked session's controls ask: the same endpoint, with the session's `sessionFile`. */
 export const SESSION_ACTIONS = ["open-session", "track", "dismiss", "close-session"] as const;
@@ -287,8 +288,8 @@ interface Placement {
 }
 
 /**
- * Whose move a task waits on. One you paused stays paused, whatever its sessions do, until you
- * resume it. Otherwise a working agent needs nothing from you yet, so that comes first.
+ * Whose move a task waits on. One you blocked stays blocked, whatever its sessions do, until you
+ * unblock it; its card says the stage it was in. Otherwise a working agent needs nothing from you yet, so that comes first.
  * Then a task its agent delivered, for you to look over and ship. Then what the agent
  * said it's waiting on (your approval of its plan, your answer), then PRs that
  * need a click from you, then what it's waiting on elsewhere. An agent that stopped without saying
@@ -303,7 +304,7 @@ export function placeTask(
   const ago = (iso: string | null) => since(iso, now);
   const place = (turn: Turn, reason: string | null, at: string, sinceAt: string | null = null): Placement => ({ turn, reason, since: ago(sinceAt), delivered: false, at });
   if (task.stage === "done") return place("done", timeAgo(task.doneAt ?? task.updatedAt, now), task.doneAt ?? task.updatedAt);
-  if (task.pausedAt) return place("paused", null, task.pausedAt, task.pausedAt);
+  if (task.pausedAt) return place("blocked", `Was in ${STAGE_LABELS[task.stage]}`, task.pausedAt, task.pausedAt);
 
   // What a session that moved on to another task is doing now is that task's business.
   const onTask = sessions.filter((session) => session.onTask);
@@ -395,8 +396,8 @@ const EVENT_TEXT: Record<TaskEvent["kind"], (event: TaskEvent) => string> = {
   "plan-approved": () => "You approved the plan",
   finished: (event) => (event.text ? `Delivered: ${event.text}` : "Delivered"),
   "sent-back": () => "You sent it back: not yet",
-  paused: () => "You paused it",
-  resumed: () => "You resumed it",
+  paused: () => "You blocked it",
+  resumed: () => "You unblocked it",
   done: () => "Shipped",
   reopened: () => "Reopened",
 };
@@ -416,7 +417,7 @@ function taskCard(task: Task, inputs: TaskInputs, places: Map<string, PrPlace>, 
   const steps: TaskActionView[] = [];
   if (task.pausedAt) {
     steps.push(
-      action("resume", "Resume", primary ? "Take it off hold and reopen its latest session" : `Take it off hold and open a new session${task.cwd ? ` in ${task.cwd}` : ""} on it`, {
+      action("resume", "Resume", primary ? "Unblock it and reopen its latest session" : `Unblock it and open a new session${task.cwd ? ` in ${task.cwd}` : ""} on it`, {
         running: primary ? null : "Starting…",
       }),
     );
@@ -447,8 +448,8 @@ function taskCard(task: Task, inputs: TaskInputs, places: Map<string, PrPlace>, 
   const menu: TaskActionView[] = [];
   if (task.stage === "done") menu.push(action("reopen", "Reopen Task", "Put it back in progress"));
   else if (!placement.delivered) menu.push(action("done", "Mark Shipped", "Move it to Shipped and close its idle sessions"));
-  if (task.pausedAt) menu.push(action("unpause", "Unpause", "Take it off hold without opening a session"));
-  else if (placement.turn !== "done" && placement.turn !== "idea" && !placement.delivered) menu.push(action("pause", "Pause", "Set it aside until you resume it"));
+  if (task.pausedAt) menu.push(action("unblock", "Unblock", "Put it back in its stage without opening a session"));
+  else if (placement.turn !== "done" && placement.turn !== "idea" && !placement.delivered) menu.push(action("block", "Mark Blocked", "Move it to Blocked, out of the way, until you unblock it"));
   menu.push(
     action("delete", "Delete Task…", "Forget the task; its sessions and PRs stay", {
       confirm: { title: `Delete ${ref}?`, message: "The board forgets the task and its history. Its sessions and pull requests stay.", button: "Delete", destructive: true },
@@ -510,7 +511,7 @@ function taskCard(task: Task, inputs: TaskInputs, places: Map<string, PrPlace>, 
     updatedAt: task.updatedAt,
     sortKey: placement.at,
   };
-  return { card, column: placement.delivered ? "ship" : task.stage };
+  return { card, column: placement.delivered ? "ship" : task.pausedAt ? "blocked" : task.stage };
 }
 
 export function taskBoardView(inputs: TaskInputs, home: string): TaskBoardView {

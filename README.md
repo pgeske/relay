@@ -60,7 +60,7 @@ Relay Board's **Chats** view lists your sessions like a chat app: open ones firs
 
 A **task** is one thing you want done: a fix, a rollout, an investigation, or getting another team to do something. It can take a few sessions and PRs, or none at all.
 
-Relay Board opens on your tasks as a Kanban board turned on its side: a section per stage, top to bottom, from **Ideas** through **Research**, **Plan**, **Doing**, and **Rollout** to **Ready to ship** and **Shipped**, so the closer a task is to done, the further down it sits. Every card has the same shape: a colored pill for whose move it is (**Needs you**, **Agent working**, **Waiting on others**, **Paused**), then labeled rows for the agent's latest update, its plan, and its PRs. Open sessions that no task knows about show up in a line above the board, so nothing slips through.
+Relay Board opens on your tasks as a Kanban board turned on its side: a section per stage, top to bottom, from **Ideas** through **Research**, **Plan**, **Doing**, and **Rollout** to **Ready to ship** and **Shipped**, so the closer a task is to done, the further down it sits. Tasks you've set aside wait in **Blocked**, just above Shipped. Every card has the same shape: a colored pill for whose move it is (**Needs you**, **Agent working**, **Waiting on others**, **Blocked**), then labeled rows for the agent's latest update, its plan, and its PRs. Open sessions that no task knows about show up in a line above the board, so nothing slips through.
 
 Here's the loop:
 
@@ -77,7 +77,7 @@ flowchart LR
 - **You never chase an agent.** Relay keeps each card's stage and status current by reading the end of the agent's session with a small, fast model, marked **auto**. The agent itself only speaks up at the moments that matter: when it starts, when it has a plan, when it stops waiting on you or others, and when it's done.
 - **Nothing ships without you.** A finished task lands in **Ready to ship** with a note on what the agent did and how it checked. One click on **Ship It** and it's shipped.
 - **Plans wait for you,** unless you say the task can skip that step.
-- **Park what can wait.** **Pause** a task from its menu and its card says **Paused** until you press **Resume**.
+- **Park what can wait.** **Mark Blocked** from a task's menu and it moves to **Blocked**, saying which stage it was in, until you press **Resume** or **Unblock**.
 - **PRs come along.** PRs a task's session opens join the task and wear its color on the PR board.
 
 ## 🔀 Pull requests

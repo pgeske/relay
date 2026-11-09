@@ -89,23 +89,23 @@ describe("whose move a task waits on", () => {
     expect(placeTask(task(), [session("working", 1, false)], [], now)).toMatchObject({ turn: "idle", reason: "Its session moved on to another task" });
   });
 
-  test("a task you paused stays paused, even with its agent working or a PR ready, and offers Resume", () => {
-    const paused = task({ pausedAt: minutesAgo(20), blockedOn: "me", blockedAt: minutesAgo(30) });
-    expect(placeTask(paused, [session("working")], [{ ref: "acme/api#1", lane: "ready" }], now)).toMatchObject({ turn: "paused", since: "20m" });
+  test("a task you blocked stays blocked, even with its agent working or a PR ready, says its stage, and offers Resume", () => {
+    const blocked = task({ pausedAt: minutesAgo(20), blockedOn: "me", blockedAt: minutesAgo(30) });
+    expect(placeTask(blocked, [session("working")], [{ ref: "acme/api#1", lane: "ready" }], now)).toMatchObject({ turn: "blocked", reason: "Was in Doing", since: "20m" });
 
-    const card = boardOf([paused]).columns.flatMap((column) => column.cards)[0];
-    expect(card.turn).toMatchObject({ id: "paused", label: "Paused" });
+    const card = boardOf([blocked]).columns.flatMap((column) => column.cards)[0];
+    expect(card.turn).toMatchObject({ id: "blocked", label: "Blocked" });
     expect(card.steps.map((step) => step.action)).toEqual(["resume"]);
-    expect(card.menu.map((item) => item.action)).toContain("unpause");
-    expect(card.menu.map((item) => item.action)).not.toContain("pause");
+    expect(card.menu.map((item) => item.action)).toContain("unblock");
+    expect(card.menu.map((item) => item.action)).not.toContain("block");
   });
 
-  test("any task in play can be paused, but not one shipped, delivered, or not started", () => {
+  test("any task in play can be blocked, but not one shipped, delivered, or not started", () => {
     const menuOf = (t: Task) => boardOf([t]).columns.flatMap((column) => column.cards)[0].menu.map((item) => item.action);
-    expect(menuOf(task({ blockedOn: "others", blockedAt: minutesAgo(5) }))).toContain("pause");
-    expect(menuOf(task({ stage: "done", doneAt: minutesAgo(5) }))).not.toContain("pause");
-    expect(menuOf(task({ finishedAt: minutesAgo(5) }))).not.toContain("pause");
-    expect(menuOf(task({ stage: "idea" }))).not.toContain("pause");
+    expect(menuOf(task({ blockedOn: "others", blockedAt: minutesAgo(5) }))).toContain("block");
+    expect(menuOf(task({ stage: "done", doneAt: minutesAgo(5) }))).not.toContain("block");
+    expect(menuOf(task({ finishedAt: minutesAgo(5) }))).not.toContain("block");
+    expect(menuOf(task({ stage: "idea" }))).not.toContain("block");
   });
 
   test("an agent that stopped without saying anything is your turn", () => {
@@ -138,11 +138,11 @@ describe("whose move a task waits on", () => {
 });
 
 describe("the columns", () => {
-  test("run in the order work moves, ending with Ready to ship and Shipped", () => {
-    expect(boardOf([]).columns.map((column) => column.id)).toEqual(["idea", "research", "plan", "doing", "rollout", "ship", "done"]);
+  test("run in the order work moves, ending with Ready to ship, Blocked, and Shipped", () => {
+    expect(boardOf([]).columns.map((column) => column.id)).toEqual(["idea", "research", "plan", "doing", "rollout", "ship", "blocked", "done"]);
   });
 
-  test("hold each task in its stage's column, whoever's move it is", () => {
+  test("hold each task in its stage's column, whoever's move it is, except one you blocked", () => {
     const tasks = [
       task({ id: 1, stage: "idea" }),
       task({ id: 2, stage: "research", pausedAt: minutesAgo(5) }),
@@ -151,12 +151,12 @@ describe("the columns", () => {
       task({ id: 5, stage: "done", doneAt: minutesAgo(5) }),
     ];
     const where = new Map(boardOf(tasks).columns.flatMap((column) => column.cards.map((card) => [card.id, column.id])));
-    expect(Object.fromEntries(where)).toEqual({ 1: "idea", 2: "research", 3: "doing", 4: "rollout", 5: "done" });
+    expect(Object.fromEntries(where)).toEqual({ 1: "idea", 2: "blocked", 3: "doing", 4: "rollout", 5: "done" });
   });
 
   test("put your move on top, then the agent's, then others', then what's parked", () => {
     const tasks = [
-      task({ id: 1, pausedAt: minutesAgo(5) }),
+      task({ id: 1 }),
       task({ id: 2, blockedOn: "others", blockedAt: minutesAgo(5) }),
       task({ id: 3, blockedOn: "me", blockedAt: minutesAgo(5) }),
       task({ id: 4 }),
@@ -167,7 +167,7 @@ describe("the columns", () => {
       [3, "you"],
       [4, "agent"],
       [2, "others"],
-      [1, "paused"],
+      [1, "idle"],
     ]);
   });
 });
