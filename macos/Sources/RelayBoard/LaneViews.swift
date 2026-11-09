@@ -47,6 +47,8 @@ struct SectionInfo {
     var count: Int
     /// Waiting on you, and holding anything.
     var lit: Bool
+    /// How many of its cards need you, badged at the header's end.
+    var needsYou = 0
 }
 
 extension View {
@@ -97,6 +99,16 @@ struct SectionHeader: View {
                     .padding(.leading, 4)
                     .help(section.hint)
                 Spacer(minLength: 0)
+                if section.needsYou > 0 {
+                    Label("\(section.needsYou)", systemImage: "hand.raised.fill")
+                        .font(.zoomed(.caption).weight(.semibold))
+                        .monospacedDigit()
+                        .foregroundStyle(.white)
+                        .padding(.horizontal, 7)
+                        .padding(.vertical, 2)
+                        .background(Color.boardOrange, in: .capsule)
+                        .help("\(section.needsYou) need\(section.needsYou == 1 ? "s" : "") you")
+                }
             }
             .lineLimit(1)
             // The section's box is inset 16 and its cards 8 more.

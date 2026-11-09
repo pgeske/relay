@@ -60,7 +60,7 @@ Relay Board's **Chats** view lists your sessions like a chat app: open ones firs
 
 A **task** is one thing you want done: a fix, a rollout, an investigation, or getting another team to do something. It can take a few sessions and PRs, or none at all.
 
-Relay Board opens on your tasks as a Kanban board: a column per stage, from **Ideas** through **Research**, **Plan**, **Doing**, and **Rollout** to **Ready to ship** and **Shipped**, so the closer a task is to done, the further right it sits. Every card has the same shape: a colored pill for whose move it is (**Needs you**, **Agent working**, **Waiting on others**, **Paused**), then labeled rows for the agent's latest update, its plan, and its PRs. Open sessions that no task knows about show up in a line above the board, so nothing slips through.
+Relay Board opens on your tasks as a Kanban board turned on its side: a section per stage, top to bottom, from **Ideas** through **Research**, **Plan**, **Doing**, and **Rollout** to **Ready to ship** and **Shipped**, so the closer a task is to done, the further down it sits. Every card has the same shape: a colored pill for whose move it is (**Needs you**, **Agent working**, **Waiting on others**, **Paused**), then labeled rows for the agent's latest update, its plan, and its PRs. Open sessions that no task knows about show up in a line above the board, so nothing slips through.
 
 Here's the loop:
 

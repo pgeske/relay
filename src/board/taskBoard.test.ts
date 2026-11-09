@@ -138,7 +138,7 @@ describe("whose move a task waits on", () => {
 });
 
 describe("the columns", () => {
-  test("run left to right in the order work moves, ending with Ready to ship and Shipped", () => {
+  test("run in the order work moves, ending with Ready to ship and Shipped", () => {
     expect(boardOf([]).columns.map((column) => column.id)).toEqual(["idea", "research", "plan", "doing", "rollout", "ship", "done"]);
   });
 

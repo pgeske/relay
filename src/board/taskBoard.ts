@@ -10,7 +10,7 @@ import { timeAgo, type Confirm, type Tone } from "./view.ts";
  */
 
 /**
- * Columns left to right, in the order work moves: a task sits in its stage's column until its agent
+ * Columns in the order work moves (Relay Board stacks them top to bottom): a task sits in its stage's column until its agent
  * delivers (Ready to ship), then in Shipped once you ship it.
  */
 export type TaskColumn = "idea" | "research" | "plan" | "doing" | "rollout" | "ship" | "done";

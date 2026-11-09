@@ -1,10 +1,10 @@
 import AppKit
 import SwiftUI
 
-/// Your tasks as a Kanban board: a column per stage, left to right in the order work moves, from
-/// Ideas to Shipped, so how close each task is to done reads at a glance. Each card says whose move
-/// it is. Open sessions no task knows about sit in a strip above the columns. `project` narrows it
-/// to one project's tasks.
+/// Your tasks as a Kanban board turned on its side: a section per stage, top to bottom in the order
+/// work moves, from Ideas to Shipped, so how close each task is to done reads at a glance. Each card
+/// says whose move it is. Open sessions no task knows about sit in a strip above the stages.
+/// `project` narrows it to one project's tasks.
 struct TasksView: View {
     let project: Project?
 
@@ -25,13 +25,18 @@ struct TasksView: View {
                     .controlSize(.large)
             }
         } else {
-            VStack(alignment: .leading, spacing: 10) {
-                if !untracked.isEmpty { UntrackedStrip(sessions: untracked) }
-                ColumnsView(columns: columns)
+            ScrollView {
+                LazyVStack(alignment: .leading, spacing: 0, pinnedViews: [.sectionHeaders]) {
+                    if !untracked.isEmpty {
+                        UntrackedStrip(sessions: untracked)
+                            .padding(.horizontal, 24)
+                            .padding(.vertical, 6)
+                    }
+                    ForEach(columns) { StageSection(column: $0) }
+                }
+                .padding(.top, 6)
+                .padding(.bottom, 16)
             }
-            .padding(.horizontal, 16)
-            .padding(.top, 10)
-            .padding(.bottom, 16)
         }
     }
 
@@ -46,170 +51,52 @@ struct TasksView: View {
     }
 }
 
-/// The columns side by side, sharing the window's width. An empty or folded column shrinks to a
-/// slim strip, so the whole board usually fits; when it doesn't, it scrolls sideways.
-private struct ColumnsView: View {
-    let columns: [TaskColumn]
+/// One stage: its header, then its cards unless it's folded or empty. The header stays pinned while
+/// its cards scroll by; clicking it folds the stage.
+private struct StageSection: View {
+    let column: TaskColumn
+    @AppStorage private var folded: Bool
 
-    /// The columns you folded, by id, comma-separated.
-    @AppStorage("tasks.foldedColumns") private var folded = ""
+    init(column: TaskColumn) {
+        self.column = column
+        // Shipped is history: it starts folded.
+        _folded = AppStorage(wrappedValue: column.id == "done", "tasks.\(column.id).folded")
+    }
 
     var body: some View {
-        let zoom = Zoom.shared.scale
-        let spacing = 10 * zoom
-        let slimWidth = 40 * zoom
-        GeometryReader { geometry in
-            let slim = columns.filter(isSlim).count
-            let wide = columns.count - slim
-            let room = geometry.size.width - CGFloat(slim) * slimWidth - CGFloat(max(columns.count - 1, 0)) * spacing
-            let wideWidth = wide > 0 ? min(max(room / CGFloat(wide), 250 * zoom), 420 * zoom) : 0
-            ScrollView(.horizontal) {
-                HStack(alignment: .top, spacing: spacing) {
-                    ForEach(columns) { column in
-                        if isSlim(column) {
-                            SlimColumn(column: column, folded: foldedIds.contains(column.id)) { toggle(column) }
-                                .frame(width: slimWidth)
-                        } else {
-                            ColumnView(column: column) { toggle(column) }
-                                .frame(width: wideWidth)
-                        }
-                    }
-                }
-                .frame(height: geometry.size.height, alignment: .top)
+        Section {
+            if !folded && !column.cards.isEmpty {
+                StageCards(column: column).sectionBox(lit: section.lit, tint: column.tint)
             }
-            .scrollIndicators(.automatic)
+        } header: {
+            SectionHeader(section: section, folded: $folded)
         }
     }
 
-    private var foldedIds: Set<String> { Set(folded.split(separator: ",").map(String.init)) }
-
-    private func isSlim(_ column: TaskColumn) -> Bool { column.cards.isEmpty || foldedIds.contains(column.id) }
-
-    private func toggle(_ column: TaskColumn) {
-        var ids = foldedIds
-        if ids.contains(column.id) { ids.remove(column.id) } else { ids.insert(column.id) }
-        withAnimation(.snappy(duration: 0.25)) { folded = ids.sorted().joined(separator: ",") }
+    /// Ready to ship lights up while it holds anything: it's waiting on you to look.
+    private var section: SectionInfo {
+        SectionInfo(
+            title: column.title, hint: column.hint, symbol: column.symbol, tint: column.tint,
+            count: column.cards.count, lit: column.id == "ship" && !column.cards.isEmpty,
+            needsYou: column.cards.count { $0.turn.needsYou }
+        )
     }
 }
 
-/// One column: its header, then its cards, scrolling on their own. Clicking the header folds it.
-private struct ColumnView: View {
+/// A stage's cards: Shipped as a list, since there's nothing left to do on them; every other stage
+/// as a grid that wraps to the window's width.
+private struct StageCards: View {
     let column: TaskColumn
-    let fold: () -> Void
 
     var body: some View {
-        VStack(spacing: 0) {
-            ColumnHeader(column: column, fold: fold)
-            ScrollView(.vertical) {
-                LazyVStack(spacing: 8) {
-                    if column.id == "done" {
-                        RowList { ForEach(column.cards) { DoneRow(card: $0) } }
-                    } else {
-                        ForEach(column.cards) { TaskCardView(card: $0) }
-                    }
-                }
-                .padding(.horizontal, 8)
-                .padding(.bottom, 8)
+        if column.id == "done" {
+            RowList { ForEach(column.cards) { DoneRow(card: $0) } }
+        } else {
+            let zoom = Zoom.shared.scale
+            CardGrid(minimum: 260 * zoom, maximum: 380 * zoom, spacing: 10) {
+                ForEach(column.cards) { TaskCardView(card: $0) }
             }
-            .scrollIndicators(.never)
         }
-        .background {
-            RoundedRectangle(cornerRadius: 16, style: .continuous)
-                .fill(column.id == "ship" ? AnyShapeStyle(Color.boardGreen.opacity(0.08)) : AnyShapeStyle(.quinary))
-        }
-    }
-}
-
-/// A column's title, how many cards it holds, and how many of them need you.
-private struct ColumnHeader: View {
-    let column: TaskColumn
-    let fold: () -> Void
-
-    @State private var hovering = false
-
-    var body: some View {
-        let needsYou = column.cards.count { $0.turn.needsYou }
-        Button(action: fold) {
-            HStack(spacing: 6) {
-                Image(systemName: column.symbol)
-                    .font(.zoomed(.callout))
-                    .foregroundStyle(column.tint)
-                Text(column.title)
-                    .font(.zoomedHeadline)
-                    .lineLimit(1)
-                Text("\(column.cards.count)")
-                    .font(.zoomed(.caption).weight(.semibold))
-                    .monospacedDigit()
-                    .foregroundStyle(.secondary)
-                    .padding(.horizontal, 7)
-                    .padding(.vertical, 2)
-                    .background(.quaternary, in: .capsule)
-                Spacer(minLength: 4)
-                if needsYou > 0 {
-                    Label("\(needsYou)", systemImage: "hand.raised.fill")
-                        .font(.zoomed(.caption).weight(.semibold))
-                        .monospacedDigit()
-                        .foregroundStyle(.white)
-                        .padding(.horizontal, 7)
-                        .padding(.vertical, 2)
-                        .background(Color.boardOrange, in: .capsule)
-                        .help("\(needsYou) need\(needsYou == 1 ? "s" : "") you")
-                }
-                Image(systemName: "chevron.left.2")
-                    .font(.zoomed(size: 9, weight: .bold))
-                    .foregroundStyle(.tertiary)
-                    .opacity(hovering ? 1 : 0)
-            }
-            .padding(.horizontal, 12)
-            .padding(.vertical, 10)
-            .contentShape(.rect)
-        }
-        .buttonStyle(.plain)
-        .onHover { hovering = $0 }
-        .help("\(column.hint). Click to fold.")
-    }
-}
-
-/// An empty or folded column, as a slim strip: its symbol, count, and title running down. A folded
-/// one opens again when clicked.
-private struct SlimColumn: View {
-    let column: TaskColumn
-    let folded: Bool
-    let unfold: () -> Void
-
-    @State private var hovering = false
-
-    var body: some View {
-        Button(action: unfold) {
-            VStack(spacing: 8) {
-                Image(systemName: column.symbol)
-                    .font(.zoomed(.callout))
-                    .foregroundStyle(column.cards.isEmpty ? AnyShapeStyle(.tertiary) : AnyShapeStyle(column.tint))
-                Text("\(column.cards.count)")
-                    .font(.zoomed(.caption).weight(.semibold))
-                    .monospacedDigit()
-                    .foregroundStyle(.secondary)
-                // Rotated, the title runs down the strip; its frame holds the room it takes once turned.
-                Text(column.title)
-                    .font(.zoomed(.callout).weight(.medium))
-                    .foregroundStyle(column.cards.isEmpty ? .tertiary : .secondary)
-                    .fixedSize()
-                    .rotationEffect(.degrees(90))
-                    .frame(width: 20 * Zoom.shared.scale, height: 120 * Zoom.shared.scale)
-                Spacer(minLength: 0)
-            }
-            .padding(.vertical, 12)
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .background {
-                RoundedRectangle(cornerRadius: 16, style: .continuous)
-                    .fill(.quinary.opacity(folded && hovering ? 1.6 : 1))
-            }
-            .contentShape(.rect)
-        }
-        .buttonStyle(.plain)
-        .disabled(!folded)
-        .onHover { hovering = $0 }
-        .help(folded ? "Show \(column.title)" : "\(column.title): nothing here. \(column.hint).")
     }
 }
 
