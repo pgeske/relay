@@ -1,7 +1,6 @@
 import { open } from "node:fs/promises";
 import type { ServerResponse } from "node:http";
 import { BranchTracker, normalizeEntry, paneImageUrl, parseJsonEntry } from "./messages.ts";
-import { livePhase } from "./live.ts";
 import { fileSize, resolveSessionFile } from "./sessionFile.ts";
 import { toSession, type Session } from "./sessions.ts";
 import { listOmpPanes, type Pane } from "../tmux.ts";
@@ -12,15 +11,7 @@ const PING_INTERVAL_MS = 15_000;
 
 type Tail = { filePath: string | null; offset: number; partial: Buffer; branch: BranchTracker };
 
-/** A `status` event: the session, and the phase of omp's live voice mode while it's on (null when off). */
-type SessionStatusEvent = Session & { livePhase: string | null };
-
-async function statusOf(pane: Pane): Promise<SessionStatusEvent> {
-  const [session, phase] = await Promise.all([toSession(pane), livePhase(pane.paneId)]);
-  return { ...session, livePhase: phase };
-}
-
-function statusKey(session: SessionStatusEvent): string {
+function statusKey(session: Session): string {
   return [
     session.status,
     session.title,
@@ -30,7 +21,6 @@ function statusKey(session: SessionStatusEvent): string {
     session.sessionFile,
     session.model,
     session.thinkingLevel,
-    session.livePhase,
   ].join("\u001f");
 }
 
@@ -128,7 +118,7 @@ export function startSessionEvents(res: ServerResponse, pane: Pane): void {
 
       tickCount += 1;
       if (tickCount % STATUS_EVERY_TICKS === 0) {
-        const session = await statusOf(current);
+        const session = await toSession(current);
         const key = statusKey(session);
         if (key !== lastStatusKey) {
           lastStatusKey = key;
@@ -164,7 +154,7 @@ export function startSessionEvents(res: ServerResponse, pane: Pane): void {
   });
 
   void (async () => {
-    const session = await statusOf(pane);
+    const session = await toSession(pane);
     if (finished) return;
     lastStatusKey = statusKey(session);
     send("status", session);

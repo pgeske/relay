@@ -91,10 +91,17 @@ struct DetailsEditor: NSViewRepresentable {
     }
 
     /// A chat's box is as tall as its text, between one line and `maxLines`; a task's details fill their frame.
+    /// The text is measured on a copy: SwiftUI probes several widths, and squeezing the live text view's
+    /// container to a probe would leave the text wrapping at that width once the box is laid out wider.
     func sizeThatFits(_ proposal: ProposedViewSize, nsView scrollView: NSScrollView, context: Context) -> CGSize? {
         guard sendsOnReturn, let width = proposal.width, let textView = scrollView.documentView as? NSTextView,
-              let layout = textView.layoutManager, let container = textView.textContainer, let font = textView.font else { return nil }
-        container.containerSize = NSSize(width: width, height: .greatestFiniteMagnitude)
+              let font = textView.font else { return nil }
+        let storage = NSTextStorage(string: textView.string, attributes: [.font: font])
+        let layout = NSLayoutManager()
+        let container = NSTextContainer(size: NSSize(width: width, height: .greatestFiniteMagnitude))
+        container.lineFragmentPadding = textView.textContainer?.lineFragmentPadding ?? 0
+        layout.addTextContainer(container)
+        storage.addLayoutManager(layout)
         layout.ensureLayout(for: container)
         let line = layout.defaultLineHeight(for: font)
         let inset = textView.textContainerInset.height * 2

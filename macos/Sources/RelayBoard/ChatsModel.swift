@@ -174,8 +174,6 @@ final class Conversation {
     /// Your latest model or thinking pick, shown until omp reports it so the chip doesn't flick back.
     private(set) var modelOverride: String?
     private(set) var levelOverride: String?
-    /// A live-mode switch on its way, so the button can't be pressed twice.
-    private(set) var isSwitchingLive = false
 
     private let client: BoardClient
     private let toast: (Toast) -> Void
@@ -194,7 +192,6 @@ final class Conversation {
 
     var isOpen: Bool { paneId != nil }
     var working: Bool { status?.working == true || awaitingReply }
-    var livePhase: String? { status?.livePhase }
     var model: String? { modelOverride ?? status?.model }
     var thinkingLevel: String? { levelOverride ?? status?.thinkingLevel }
 
@@ -381,25 +378,6 @@ final class Conversation {
         guard let paneId else { return }
         levelOverride = level
         if await !run({ try await client.switchModel(nil, thinkingLevel: level, in: paneId) }) { levelOverride = nil }
-    }
-
-    /// Turns omp's live voice mode on or off: it listens on this Mac's microphone and answers out loud.
-    func setLive(_ on: Bool) async {
-        guard !isSwitchingLive else { return }
-        isSwitchingLive = true
-        defer { isSwitchingLive = false }
-        do {
-            let result = try await client.setLive(on, in: sessionFile)
-            if !result.ok { toast(Toast(message: result.message, failed: true)) }
-        } catch {
-            toast(Toast(error))
-        }
-    }
-
-    /// Mutes or unmutes live mode, with the key omp's live panel takes for it.
-    func toggleMute() async {
-        guard let paneId else { return }
-        await run { try await client.press(["Space"], in: paneId) }
     }
 
     /// Runs a control on the open session, saying so only when it failed. True when it went through.

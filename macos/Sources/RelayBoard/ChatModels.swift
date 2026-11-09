@@ -172,8 +172,6 @@ struct PaneStatus: Decodable, Sendable, Equatable {
     /// Active `provider/id`, or nil when the server can't tell.
     let model: String?
     let thinkingLevel: String?
-    /// omp's live voice phase ("listening", "speaking", …) while live mode is on; nil when it's off.
-    let livePhase: String?
 
     var working: Bool { status == "working" }
 }

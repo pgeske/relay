@@ -46,11 +46,6 @@ extension BoardClient {
         try await post("api/board/chats/actions/link", body: try JSONSerialization.data(withJSONObject: ["session": sessionFile, "task": task]))
     }
 
-    /// Turns omp's live voice mode on or off in an open chat.
-    func setLive(_ on: Bool, in sessionFile: String) async throws -> ActionResult {
-        try await post("api/board/chats/actions/live", body: try JSONSerialization.data(withJSONObject: ["session": sessionFile, "on": on]))
-    }
-
     /// Shows a chat in your terminal, reopening it there if it's closed.
     func openInTerminal(_ sessionFile: String) async throws -> ActionResult {
         try await post("api/board/chats/actions/open", body: try JSONSerialization.data(withJSONObject: ["session": sessionFile]))

@@ -1,7 +1,6 @@
 import { readdirSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
-import { startLiveMode, stopLiveMode } from "../server/live.ts";
 import { readEntryImage, readMessagePage, type Message } from "../server/messages.ts";
 import { THINKING_LEVELS, listModels } from "../server/modelState.ts";
 import { SESSIONS_DIR } from "../server/sessionFile.ts";
@@ -236,10 +235,9 @@ export interface ChatActionBody {
   text?: unknown;
   images?: unknown;
   task?: unknown;
-  on?: unknown;
 }
 
-export const CHAT_ACTIONS = ["send", "link", "live", "open"] as const;
+export const CHAT_ACTIONS = ["send", "link", "open"] as const;
 export type ChatAction = (typeof CHAT_ACTIONS)[number];
 
 function linkPrompt(taskId: number, title: string): string {
@@ -251,8 +249,7 @@ function linkPrompt(taskId: number, title: string): string {
 
 /**
  * Runs a chat's control. `send` types a message into it, reopening a closed chat in a background
- * tab first; `link` puts it on a task and tells it so; `live` turns omp's live voice mode on or
- * off (`on`); `open` shows it in your terminal.
+ * tab first; `link` puts it on a task and tells it so; `open` shows it in your terminal.
  */
 export async function runChatAction(action: string, body: ChatActionBody): Promise<BoardActionResult & { paneId?: string }> {
   try {
@@ -293,21 +290,11 @@ export async function runChatAction(action: string, body: ChatActionBody): Promi
         if (pane) await pasteText(pane.paneId, linkPrompt(body.task, title));
         return { status: 200, message: `Added "${name}" to ${taskRef(body.task)}` };
       }
-      case "live": {
-        if (!pane) return { status: 409, message: `"${name}" isn't open; send it a message first` };
-        if (body.on === true) {
-          await startLiveMode(pane.paneId);
-          return { status: 200, message: "Live: talk to it out loud", paneId: pane.paneId };
-        }
-        await stopLiveMode(pane.paneId);
-        return { status: 200, message: "Ended live mode", paneId: pane.paneId };
-      }
       case "open":
         return { status: 200, message: await showSession(sessionFile, pane, name) };
     }
   } catch (error) {
     if (error instanceof ActionError) return { status: error.status, message: error.message };
-    if (error instanceof Error && action === "live") return { status: 502, message: error.message };
     throw error;
   }
 }

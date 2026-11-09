@@ -52,7 +52,7 @@ You need [tmux](https://github.com/tmux/tmux) and omp on your `PATH`. relay runs
 
 ## 💬 Chats
 
-Relay Board's **Chats** view lists your sessions like a chat app: open ones first (a spinner while they work), then the rest by day. Pick one to read it live, type to it (↩ sends, screenshots paste right in), stop it, answer its questions with a click, or switch its model. Typing into a closed chat reopens it. **Live** turns on omp's `/live` voice mode on your Mac's mic and speakers.
+Relay Board's **Chats** view lists your sessions like a chat app: open ones first (a spinner while they work), then the rest by day. Pick one to read it live, type to it (↩ sends, screenshots paste right in), stop it, answer its questions with a click, or switch its model. Typing into a closed chat reopens it.
 
 **New Chat** (⇧⌘N) starts a fresh omp session from your first message. Its **…** menu adds it to a task anytime, and clicking a task's session opens it here.
 

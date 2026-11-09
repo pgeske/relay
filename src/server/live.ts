@@ -106,19 +106,6 @@ export async function stopLiveMode(paneId: string): Promise<void> {
   }
 }
 
-/**
- * Turns on omp's live mode in the pane for someone at this Mac: omp then listens on the Mac's own
- * microphone and talks through its speakers, so unlike a phone call nothing gets rerouted.
- */
-export async function startLiveMode(paneId: string): Promise<void> {
-  if (await livePhase(paneId)) return;
-  // Ctrl+L toggles live mode, so only press it when the pane isn't live already.
-  await sendKeys(paneId, ["C-l"]);
-  if (!(await waitForLivePanel(paneId, true, START_TIMEOUT_MS))) {
-    throw new Error("omp didn't start live mode. Check the session in your terminal for an error.");
-  }
-}
-
 async function setAudioDevices(defaults: AudioDefaults): Promise<void> {
   await run("SwitchAudioSource", ["-t", "input", "-s", defaults.input]);
   await run("SwitchAudioSource", ["-t", "output", "-s", defaults.output]);

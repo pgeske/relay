@@ -152,21 +152,20 @@ private struct ChatRow: View {
     }
 }
 
-/// Working (an amber spinner), open and waiting for you (a green dot), or closed (nothing).
+/// Working (an amber spinner); nothing while it's open and waiting for you, or closed.
 private struct StateIndicator: View {
     let state: Chat.State
 
     var body: some View {
         let size = 14 * Zoom.shared.scale
         Group {
-            switch state {
-            case .working:
+            if state == .working {
                 Image(systemName: "progress.indicator")
                     .font(.system(size: size - 1, weight: .bold))
                     .foregroundStyle(Color.boardAmber)
                     .symbolEffect(.variableColor.iterative, options: .repeat(.continuous))
-            case .idle: Circle().fill(Color.boardGreen).frame(width: 7, height: 7)
-            case .closed: Color.clear
+            } else {
+                Color.clear
             }
         }
         .frame(width: size, height: size)
@@ -222,9 +221,6 @@ private struct ConversationPage: View {
             if let ask = conversation.pendingAsk {
                 AskPanel(conversation: conversation, call: ask).id(ask.id)
             }
-            if let phase = conversation.livePhase {
-                LiveBar(conversation: conversation, phase: phase)
-            }
             ChatComposer(
                 placeholder: conversation.isOpen ? "Message the agent" : "Message to pick this chat back up",
                 text: $draft,
@@ -236,15 +232,6 @@ private struct ConversationPage: View {
             ) {
                 if let choices = model.modelChoices, conversation.isOpen {
                     ModelChip(choices: choices, model: modelBinding, level: levelBinding, offersDefault: false, help: "Switch its model or thinking level, like omp's /switch and /effort")
-                }
-                if conversation.isOpen, conversation.livePhase == nil {
-                    Button { Task { await conversation.setLive(true) } } label: {
-                        Label("Live", systemImage: "waveform")
-                    }
-                    .buttonStyle(.plain)
-                    .modifier(ComposerChip())
-                    .disabled(conversation.isSwitchingLive)
-                    .help("Talk to it out loud with omp's live mode, on this Mac's microphone and speakers")
                 }
             }
         }
@@ -373,42 +360,8 @@ private struct ConversationHeader: View {
     private var title: String { chat?.title ?? "New chat" }
 
     private var stateText: String {
-        if conversation.livePhase != nil { return "Live" }
         if conversation.working { return "Working" }
         return conversation.isOpen ? "Open" : "Closed · send a message to reopen it"
-    }
-}
-
-/// omp's live voice mode while it's on: what it's doing (listening, speaking), mute, and end.
-private struct LiveBar: View {
-    let conversation: Conversation
-    let phase: String
-
-    var body: some View {
-        HStack(spacing: 10) {
-            Image(systemName: phase == "muted" ? "mic.slash.fill" : "waveform")
-                .symbolEffect(.variableColor.iterative, isActive: phase == "listening" || phase == "speaking")
-                .foregroundStyle(phase == "error" ? Color.boardRed : .accentColor)
-                .font(.zoomed(size: 16, weight: .semibold))
-            VStack(alignment: .leading, spacing: 1) {
-                Text("Live · \(phase.capitalized)").font(.zoomed(.body).weight(.semibold))
-                Text("Talk to it out loud; it answers through this Mac's speakers.")
-                    .font(.zoomed(.caption))
-                    .foregroundStyle(.secondary)
-            }
-            Spacer()
-            Button(phase == "muted" ? "Unmute" : "Mute", systemImage: phase == "muted" ? "mic.fill" : "mic.slash") {
-                Task { await conversation.toggleMute() }
-            }
-            .buttonStyle(.glass)
-            Button("End", systemImage: "phone.down.fill") { Task { await conversation.setLive(false) } }
-                .buttonStyle(.glassProminent)
-                .tint(.red)
-                .disabled(conversation.isSwitchingLive)
-        }
-        .padding(.horizontal, 16)
-        .padding(.vertical, 10)
-        .glassEffect(.regular.tint(.accentColor.opacity(0.12)), in: .rect(cornerRadius: 18))
     }
 }
 
@@ -676,18 +629,5 @@ private struct RoundButtonStyle: ButtonStyle {
             .background(fill.opacity(configuration.isPressed ? 0.75 : 1), in: .circle)
             .opacity(isEnabled ? 1 : 0.3)
             .contentShape(.circle)
-    }
-}
-
-/// A small capsule for an option beside the message box, like the model chip.
-private struct ComposerChip: ViewModifier {
-    func body(content: Content) -> some View {
-        content
-            .font(.zoomed(.callout).weight(.medium))
-            .foregroundStyle(.secondary)
-            .padding(.horizontal, 10)
-            .padding(.vertical, 5)
-            .background(.quaternary.opacity(0.6), in: .capsule)
-            .contentShape(.capsule)
     }
 }
