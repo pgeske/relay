@@ -382,8 +382,9 @@ export function displayFolder(cwd: string | null, home: string): string | null {
   return cwd.startsWith(`${home}/`) ? `~${cwd.slice(home.length)}` : cwd;
 }
 
+/** The card's session's own control: its menu's Open in Terminal. Steps built on it (Go to Session, Resume) open it in the app's Chats instead. */
 function openAction(session: TaskSessionInfo): TaskActionView {
-  return action("open", "Open Session", session.live ? "Show this session in your terminal" : "Reopen this session in a new relay tab");
+  return action("open", "Open in Terminal", session.live ? "Show this session in your terminal" : "Reopen this session in a new relay tab");
 }
 
 const EVENT_TEXT: Record<TaskEvent["kind"], (event: TaskEvent) => string> = {
@@ -418,7 +419,7 @@ function taskCard(task: Task, inputs: TaskInputs, places: Map<string, PrPlace>, 
   const steps: TaskActionView[] = [];
   if (task.pausedAt) {
     steps.push(
-      action("resume", "Resume", primary ? "Unblock it and reopen its latest session" : `Unblock it and open a new session${task.cwd ? ` in ${task.cwd}` : ""} on it`, {
+      action("resume", "Resume", primary ? "Unblock it and show its latest session in Chats" : `Unblock it and open a new session${task.cwd ? ` in ${task.cwd}` : ""} on it`, {
         running: primary ? null : "Starting…",
       }),
     );
@@ -434,14 +435,14 @@ function taskCard(task: Task, inputs: TaskInputs, places: Map<string, PrPlace>, 
     // No confirm: Reopen undoes it, and omp keeps the closed sessions' conversations.
     steps.push(
       action("ship", "Ship It", "Move it to Shipped and close its idle session tabs; omp keeps their conversations"),
-      action("send-back", "Not Yet", "Put it back in progress and show its session, so you can tell the agent what's missing"),
+      action("send-back", "Not Yet", "Put it back in progress and show its session in Chats, so you can tell the agent what's missing"),
     );
   } else if (placement.turn === "idea") {
     steps.push(action("start", "Start", `Open a new session${task.cwd ? ` in ${task.cwd}` : ""} and hand it this task`, { running: "Starting…" }));
   } else if (placement.turn === "you" && primary) {
-    steps.push({ ...openAction(primary), label: primary.live ? "Go to Session" : "Reopen Session" });
+    steps.push({ ...openAction(primary), label: "Go to Session", hint: "Show this session in Chats" });
   } else if (placement.turn === "idle" && primary) {
-    steps.push({ ...openAction(primary), label: "Resume", hint: "Reopen its latest session in a new relay tab" });
+    steps.push({ ...openAction(primary), label: "Resume", hint: "Show its latest session in Chats" });
   } else if (placement.turn === "idle") {
     steps.push(action("start", "Start", `Open a new session${task.cwd ? ` in ${task.cwd}` : ""} and hand it this task`, { running: "Starting…" }));
   }

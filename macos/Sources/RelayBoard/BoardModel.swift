@@ -123,13 +123,27 @@ final class BoardModel {
         isSending(action, on: .pr(card.ref))
     }
 
-    /// Runs a control, asking first when it changes something.
+    /// Runs a control, asking first when it changes something. A task's ways into its session (Go to
+    /// Session, Resume, Not Yet) show it in Chats rather than your terminal.
     func request(_ action: BoardAction, on target: ActionTarget) {
-        if let confirm = action.confirm {
+        if action.action == "open", let file = chatSessionFile(for: target) {
+            openChat(file)
+        } else if let confirm = action.confirm {
             confirming = PendingAction(action: action, target: target, confirm: confirm)
         } else {
             Task { await run(action, on: target) }
         }
+    }
+
+    /// Shows a task's session in your terminal, as its menu's Open in Terminal does.
+    func openInTerminal(_ action: BoardAction, on target: ActionTarget) {
+        Task { await run(action, on: target) }
+    }
+
+    /// The session a task card shows, to open in Chats; nil for other targets, or from a relay too old to say.
+    private func chatSessionFile(for target: ActionTarget) -> String? {
+        guard case .task(let id) = target else { return nil }
+        return taskColumns.lazy.flatMap(\.cards).first { $0.id == id }?.session?.sessionFile
     }
 
     func request(_ action: BoardAction, on card: Card) {
@@ -240,8 +254,11 @@ final class BoardModel {
             if action.action == "approve-plan", case .task(let id) = target {
                 plan = taskColumns.lazy.flatMap(\.cards).first { $0.id == id }?.plan?.revision
             }
+            // Not Yet and Resume hand the task back to its session: show that session in Chats once the server took it.
+            let chatFile = ["send-back", "resume"].contains(action.action) ? chatSessionFile(for: target) : nil
             let result = try await client.perform(action.action, on: target, plan: plan)
             toast = Toast(message: result.message, failed: !result.ok)
+            if result.ok, let chatFile { openChat(chatFile) }
             if result.ok, ["ship", "done"].contains(action.action), case .task = target {
                 celebrate()
             }

@@ -580,7 +580,7 @@ private struct TaskSessionLine: View {
     var body: some View {
         let sending = model.isSending(session.open, on: .task(card.id))
         Button {
-            if let file = session.sessionFile { model.openChat(file) } else { model.request(session.open, on: .task(card.id)) }
+            model.request(session.open, on: .task(card.id))
         } label: {
             HStack(spacing: 6) {
                 if sending {
@@ -644,7 +644,7 @@ struct TaskMenuItems: View {
             if let file = session.sessionFile {
                 Button("Open in Chats", systemImage: "bubble.left.and.text.bubble.right") { model.openChat(file) }
             }
-            Button(session.open.label, systemImage: "terminal") { model.request(session.open, on: .task(card.id)) }
+            Button(session.open.label, systemImage: "terminal") { model.openInTerminal(session.open, on: .task(card.id)) }
         }
         ForEach(card.steps.filter { $0.action != "open" }, id: \.self) { step in
             Button(step.confirm == nil ? step.label : "\(step.label)…", systemImage: step.symbol) { model.request(step, on: .task(card.id)) }
