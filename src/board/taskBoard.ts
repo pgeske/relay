@@ -11,7 +11,8 @@ import { timeAgo, type Confirm, type Tone } from "./view.ts";
 
 /**
  * Columns in the order work moves (Relay Board stacks them top to bottom): a task sits in its stage's column until its agent
- * delivers (Ready to ship), then in Shipped once you ship it. One you blocked sits in Blocked, out of the way, until you unblock it.
+ * delivers (Ready to ship), then in Shipped once you ship it. One waiting on others (a team, reviewers) sits in Blocked,
+ * since nobody here can move it, and so does one you blocked, until you unblock it.
  */
 export type TaskColumn = "idea" | "research" | "plan" | "doing" | "rollout" | "ship" | "blocked" | "done";
 
@@ -22,7 +23,7 @@ const COLUMNS: { id: TaskColumn; title: string; hint: string }[] = [
   { id: "doing", title: "Doing", hint: "Making the change" },
   { id: "rollout", title: "Rollout", hint: "Rolling it out or verifying it" },
   { id: "ship", title: "Ready to ship", hint: "Its agent delivered: look it over, then ship it" },
-  { id: "blocked", title: "Blocked", hint: "Set aside until you unblock it" },
+  { id: "blocked", title: "Blocked", hint: "Waiting on others, or set aside until you unblock it" },
   { id: "done", title: "Shipped", hint: "Shipped in the last two weeks" },
 ];
 
@@ -511,7 +512,8 @@ function taskCard(task: Task, inputs: TaskInputs, places: Map<string, PrPlace>, 
     updatedAt: task.updatedAt,
     sortKey: placement.at,
   };
-  return { card, column: placement.delivered ? "ship" : task.pausedAt ? "blocked" : task.stage };
+  const column: TaskColumn = placement.delivered ? "ship" : task.pausedAt || placement.turn === "others" ? "blocked" : task.stage;
+  return { card, column };
 }
 
 export function taskBoardView(inputs: TaskInputs, home: string): TaskBoardView {

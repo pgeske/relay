@@ -42,7 +42,7 @@ relay task update --blocked-on me --reason "Which datacenter should go first?"
 relay task update --blocked-on others --reason "Waiting on the storage team to approve the config change"
 ```
 
-- Waiting for the user's answer or decision: `--blocked-on me`. Waiting for anyone else (a team, a reviewer, a deploy, a long job): `--blocked-on others`. When that update is your last step before you stop, relay takes your word for it.
+- Waiting for the user's answer or decision: `--blocked-on me`. Waiting for anyone else (a team, a reviewer, a deploy, a long job): `--blocked-on others`, which moves the task to the board's Blocked column until the block clears. When that update is your last step before you stop, relay takes your word for it.
 - Any update without `--blocked-on` clears the block, so repeat it while it holds.
 - Stopping because the work is finished? Run `relay task done` instead (below). Stopping after `relay task plan` needs nothing more.
 
