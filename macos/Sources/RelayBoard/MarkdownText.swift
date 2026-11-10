@@ -207,18 +207,113 @@ private struct MarkdownBlockView: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .background(Color.primary.opacity(0.05), in: .rect(cornerRadius: 6))
         case .table(let rows):
-            Grid(alignment: .leading, horizontalSpacing: 14 * scale, verticalSpacing: 5 * scale) {
+            let columns = rows.map(\.count).max() ?? 0
+            TableLayout(columns: columns, horizontalSpacing: 14 * scale, verticalSpacing: 5 * scale) {
                 ForEach(Array(rows.enumerated()), id: \.offset) { index, cells in
-                    GridRow {
-                        ForEach(Array(cells.enumerated()), id: \.offset) { _, cell in
-                            Text(cell)
-                                .fontWeight(index == 0 ? .semibold : nil)
-                                .fixedSize(horizontal: false, vertical: true)
-                        }
+                    // Short rows get empty cells, so every row starts in the first column.
+                    ForEach(0..<columns, id: \.self) { column in
+                        Text(cells.indices.contains(column) ? cells[column] : "")
+                            .fontWeight(index == 0 ? .semibold : nil)
                     }
-                    if index == 0 { Divider().gridCellUnsizedAxes(.horizontal) }
+                    if index == 0 { Divider().layoutValue(key: TableRule.self, value: true) }
                 }
             }
         }
+    }
+}
+
+/// Marks a view in a `TableLayout` as a line across the whole table, on a row of its own.
+private struct TableRule: LayoutValueKey {
+    static let defaultValue = false
+}
+
+/// A Markdown table's cells in rows of `columns`, each row as tall as its tallest cell. SwiftUI's
+/// Grid measured wrapped cells at one width and drew them at another, so a tall row spilled over
+/// the text below the table. This measures every cell at the width it's drawn at.
+private struct TableLayout: Layout {
+    let columns: Int
+    let horizontalSpacing: CGFloat
+    let verticalSpacing: CGFloat
+
+    private struct Row {
+        var subviews: [LayoutSubview]
+        var isRule: Bool
+        var height: CGFloat = 0
+    }
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        let (widths, rows) = measure(subviews, width: proposal.width)
+        return CGSize(width: tableWidth(widths), height: tableHeight(rows))
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        let (widths, rows) = measure(subviews, width: bounds.width)
+        var y = bounds.minY
+        for row in rows {
+            if row.isRule {
+                row.subviews[0].place(at: CGPoint(x: bounds.minX, y: y), proposal: ProposedViewSize(width: tableWidth(widths), height: row.height))
+            } else {
+                var x = bounds.minX
+                for (column, cell) in row.subviews.enumerated() {
+                    // Cells sit centered in their row's height, like Grid's leading alignment.
+                    let height = cell.sizeThatFits(ProposedViewSize(width: widths[column], height: nil)).height
+                    cell.place(at: CGPoint(x: x, y: y + (row.height - height) / 2), proposal: ProposedViewSize(width: widths[column], height: height))
+                    x += widths[column] + horizontalSpacing
+                }
+            }
+            y += row.height + verticalSpacing
+        }
+    }
+
+    /// The columns' widths within `width`, and the rows with their heights at those widths.
+    private func measure(_ subviews: Subviews, width: CGFloat?) -> ([CGFloat], [Row]) {
+        var rows: [Row] = []
+        for subview in subviews {
+            if subview[TableRule.self] {
+                rows.append(Row(subviews: [subview], isRule: true))
+            } else if let last = rows.indices.last, !rows[last].isRule, rows[last].subviews.count < columns {
+                rows[last].subviews.append(subview)
+            } else {
+                rows.append(Row(subviews: [subview], isRule: false))
+            }
+        }
+        var ideal = [CGFloat](repeating: 0, count: columns)
+        for row in rows where !row.isRule {
+            for (column, cell) in row.subviews.enumerated() {
+                ideal[column] = max(ideal[column], cell.sizeThatFits(.unspecified).width)
+            }
+        }
+        let widths = fitting(ideal, into: (width ?? .infinity) - horizontalSpacing * CGFloat(max(columns - 1, 0)))
+        for index in rows.indices {
+            rows[index].height = rows[index].isRule
+                ? rows[index].subviews[0].sizeThatFits(ProposedViewSize(width: tableWidth(widths), height: nil)).height
+                : rows[index].subviews.enumerated().map { column, cell in
+                    cell.sizeThatFits(ProposedViewSize(width: widths[column], height: nil)).height
+                }.max() ?? 0
+        }
+        return (widths, rows)
+    }
+
+    /// Columns that fit keep their ideal widths. When the table is too wide, narrow columns keep
+    /// theirs and the wide ones share what's left equally, wrapping their text.
+    private func fitting(_ ideal: [CGFloat], into available: CGFloat) -> [CGFloat] {
+        guard ideal.reduce(0, +) > available else { return ideal }
+        var widths = ideal
+        var remaining = max(available, 0)
+        var unsized = Array(ideal.indices).sorted { ideal[$0] < ideal[$1] }
+        while let narrowest = unsized.first, ideal[narrowest] <= remaining / CGFloat(unsized.count) {
+            remaining -= ideal[narrowest]
+            unsized.removeFirst()
+        }
+        for column in unsized { widths[column] = remaining / CGFloat(unsized.count) }
+        return widths
+    }
+
+    private func tableWidth(_ widths: [CGFloat]) -> CGFloat {
+        widths.reduce(0, +) + horizontalSpacing * CGFloat(max(widths.count - 1, 0))
+    }
+
+    private func tableHeight(_ rows: [Row]) -> CGFloat {
+        rows.map(\.height).reduce(0, +) + verticalSpacing * CGFloat(max(rows.count - 1, 0))
     }
 }
