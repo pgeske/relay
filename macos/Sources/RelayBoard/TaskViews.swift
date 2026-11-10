@@ -26,7 +26,8 @@ struct TasksView: View {
             }
         } else {
             ScrollView {
-                LazyVStack(alignment: .leading, spacing: 0, pinnedViews: [.sectionHeaders]) {
+                // Plain, not lazy, for the same reason as the PR board's lanes: a lazy stack can hang the app.
+                VStack(alignment: .leading, spacing: 0) {
                     if !untracked.isEmpty {
                         UntrackedStrip(sessions: untracked)
                             .padding(.horizontal, 24)
@@ -51,8 +52,8 @@ struct TasksView: View {
     }
 }
 
-/// One stage: its header, then its cards unless it's folded or empty. The header stays pinned while
-/// its cards scroll by; clicking it folds the stage.
+/// One stage: its header, then its cards unless it's folded or empty. Clicking the header folds
+/// the stage.
 private struct StageSection: View {
     let column: TaskColumn
     @AppStorage private var folded: Bool

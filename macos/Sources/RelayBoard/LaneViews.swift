@@ -1,13 +1,14 @@
 import SwiftUI
 
 /// Every lane top to bottom in work order, each a section whose cards wrap to the window's width.
-/// Headers stay pinned while their section scrolls by; clicking one folds the section.
+/// Clicking a header folds its section. A plain stack, not a lazy one: a lazy stack of these tall,
+/// wrapping sections can keep re-measuring a section at the edge of the screen and hang the app.
 struct LanesView: View {
     let lanes: [Lane]
 
     var body: some View {
         ScrollView {
-            LazyVStack(alignment: .leading, spacing: 0, pinnedViews: [.sectionHeaders]) {
+            VStack(alignment: .leading, spacing: 0) {
                 ForEach(lanes) { LaneSection(lane: $0) }
             }
             .padding(.top, 6)
@@ -64,9 +65,9 @@ extension View {
     }
 }
 
-/// A section's one-line header: chevron, symbol, title, count, and its hint. Pinned, so it hides the
-/// cards scrolling under it. The chevron and symbol sit in fixed boxes, so every header's title starts
-/// at the same place, and the chevron lines up with the cards' left edge.
+/// A section's one-line header: chevron, symbol, title, count, and its hint. The chevron and symbol
+/// sit in fixed boxes, so every header's title starts at the same place, and the chevron lines up
+/// with the cards' left edge.
 struct SectionHeader: View {
     let section: SectionInfo
     @Binding var folded: Bool
