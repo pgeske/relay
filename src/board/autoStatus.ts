@@ -15,7 +15,7 @@ import { timeAgo } from "./view.ts";
 export type Moment = "stopped" | "working";
 
 /** The stages a working task can be in; the watcher never ships a task or turns it back into an idea. */
-const WORK_STAGES = ["research", "plan", "doing", "rollout"] as const;
+const WORK_STAGES = ["research", "plan", "doing"] as const;
 type WorkStage = (typeof WORK_STAGES)[number];
 
 /** What a stopped agent waits on: the user, anyone else, or nothing because it says it's finished. */
@@ -147,7 +147,7 @@ ${moment === "stopped" ? "The agent just stopped and is waiting for input." : "T
 The session, oldest first, up to now (go by its end: the start can be about earlier work):
 ${transcript}
 
-Stages: research (reading, investigating), plan (working out how, writing a plan), doing (making the change: code, PRs, CI, reviews, merging), rollout (deploying or verifying a change that's merged or otherwise in place).
+Stages: research (reading, investigating), plan (working out how, writing a plan), doing (making the change and seeing it through: code, PRs, CI, reviews, merging, deploying, verifying).
 
 Reply with only a JSON object, either {"accurate": true} when the board already shows the right thing, or:
 ${fields}

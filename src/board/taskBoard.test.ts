@@ -128,7 +128,7 @@ describe("whose move a task waits on", () => {
   });
 
   test("a delivered task counts as needing you, and offers shipping it or sending it back instead of Mark Shipped", () => {
-    const view = boardOf([task({ stage: "rollout", finishedAt: minutesAgo(3), finishNote: "Shipped it" })]);
+    const view = boardOf([task({ stage: "doing", finishedAt: minutesAgo(3), finishNote: "Shipped it" })]);
     const card = view.columns.find((column) => column.id === "ship")!.cards[0];
     expect(view.needsYou).toBe(1);
     expect(card.steps.map((step) => step.action)).toEqual(["ship", "send-back"]);
@@ -139,7 +139,7 @@ describe("whose move a task waits on", () => {
 
 describe("the columns", () => {
   test("run in the order work moves, ending with Ready to ship, Blocked, and Shipped", () => {
-    expect(boardOf([]).columns.map((column) => column.id)).toEqual(["idea", "research", "plan", "doing", "rollout", "ship", "blocked", "done"]);
+    expect(boardOf([]).columns.map((column) => column.id)).toEqual(["idea", "research", "plan", "doing", "ship", "blocked", "done"]);
   });
 
   test("hold each task in its stage's column, except one waiting on others or one you blocked", () => {
@@ -147,14 +147,14 @@ describe("the columns", () => {
       task({ id: 1, stage: "idea" }),
       task({ id: 2, stage: "research", pausedAt: minutesAgo(5) }),
       task({ id: 3, stage: "doing", blockedOn: "others", blockedAt: minutesAgo(5) }),
-      task({ id: 4, stage: "rollout", blockedOn: "me", blockedAt: minutesAgo(5) }),
+      task({ id: 4, stage: "plan", blockedOn: "me", blockedAt: minutesAgo(5) }),
       task({ id: 5, stage: "done", doneAt: minutesAgo(5) }),
       // Its agent is still at it, so it hasn't stopped to wait yet.
       task({ id: 6, stage: "doing", blockedOn: "others", blockedAt: minutesAgo(5) }),
     ];
     const view = boardOf(tasks, [{ taskId: 6, info: { ...session("working"), sessionFile: "/sessions/6.jsonl" } }]);
     const where = new Map(view.columns.flatMap((column) => column.cards.map((card) => [card.id, column.id])));
-    expect(Object.fromEntries(where)).toEqual({ 1: "idea", 2: "blocked", 3: "blocked", 4: "rollout", 5: "done", 6: "doing" });
+    expect(Object.fromEntries(where)).toEqual({ 1: "idea", 2: "blocked", 3: "blocked", 4: "plan", 5: "done", 6: "doing" });
   });
 
   test("put your move on top, then the agent's, then others', then what's parked", () => {

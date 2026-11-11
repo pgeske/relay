@@ -2,7 +2,6 @@ import AppKit
 import SwiftUI
 
 enum SidebarItem: Hashable {
-    case chats
     case tasks
     case project(Int)
     case all
@@ -92,10 +91,6 @@ private struct Sidebar: View {
 
     var body: some View {
         List(selection: $selection) {
-            Label("Chats", systemImage: "bubble.left.and.bubble.right")
-                .badge(model.chats.chats.filter { $0.state == .working }.count)
-                .tag(SidebarItem.chats)
-                .help("Your sessions as conversations: read them, type into them, start new ones")
             Section("Tasks") {
                 Label("All Tasks", systemImage: "checklist")
                     .badge(model.tasksWaitingOnYou)
@@ -390,8 +385,6 @@ private struct BoardContent: View {
 
     var body: some View {
         switch selection {
-        case .chats:
-            ChatsView()
         case .tasks, .project:
             tasksContent
         case .all, .lane:

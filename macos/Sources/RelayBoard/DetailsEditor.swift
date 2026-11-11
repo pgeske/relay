@@ -54,13 +54,9 @@ struct Screenshot: Identifiable {
 /// A plain-text box for a task's details that takes screenshots too: pasting or dropping an image
 /// hands it to `onScreenshots` instead of the text. SwiftUI's text fields drop pasted images.
 /// ⌘↩ calls `onSubmit`: SwiftUI's keyboard shortcuts don't hear keys typed into an AppKit text view.
-/// As a chat's message box (`sendsOnReturn`), ↩ sends too and ⇧↩ starts a new line, and the box
-/// grows with what you type, up to `maxLines`, then scrolls.
 struct DetailsEditor: NSViewRepresentable {
     @Binding var text: String
     let placeholder: String
-    var sendsOnReturn = false
-    var maxLines = 10
     /// Takes the keyboard once it's on screen.
     var focusOnAppear = false
     let onSubmit: () -> Void
@@ -90,33 +86,13 @@ struct DetailsEditor: NSViewRepresentable {
         return scrollView
     }
 
-    /// A chat's box is as tall as its text, between one line and `maxLines`; a task's details fill their frame.
-    /// The text is measured on a copy: SwiftUI probes several widths, and squeezing the live text view's
-    /// container to a probe would leave the text wrapping at that width once the box is laid out wider.
-    func sizeThatFits(_ proposal: ProposedViewSize, nsView scrollView: NSScrollView, context: Context) -> CGSize? {
-        guard sendsOnReturn, let width = proposal.width, let textView = scrollView.documentView as? NSTextView,
-              let font = textView.font else { return nil }
-        let storage = NSTextStorage(string: textView.string, attributes: [.font: font])
-        let layout = NSLayoutManager()
-        let container = NSTextContainer(size: NSSize(width: width, height: .greatestFiniteMagnitude))
-        container.lineFragmentPadding = textView.textContainer?.lineFragmentPadding ?? 0
-        layout.addTextContainer(container)
-        storage.addLayoutManager(layout)
-        layout.ensureLayout(for: container)
-        let line = layout.defaultLineHeight(for: font)
-        let inset = textView.textContainerInset.height * 2
-        let height = min(max(layout.usedRect(for: container).height, line), line * CGFloat(maxLines))
-        return CGSize(width: width, height: ceil(height + inset))
-    }
-
     func updateNSView(_ scrollView: NSScrollView, context: Context) {
         context.coordinator.parent = self
         let textView = scrollView.documentView as! ScreenshotTextView
         textView.onScreenshots = onScreenshots
         textView.onSubmit = onSubmit
-        textView.sendsOnReturn = sendsOnReturn
         textView.placeholder = placeholder
-        let font = NSFont.systemFont(ofSize: (sendsOnReturn ? 14 : BoardTextStyle.body.rawValue) * Zoom.shared.scale)
+        let font = NSFont.systemFont(ofSize: BoardTextStyle.body.rawValue * Zoom.shared.scale)
         if textView.font != font {
             textView.font = font
             textView.typingAttributes[.font] = font
@@ -142,7 +118,6 @@ struct DetailsEditor: NSViewRepresentable {
 final class ScreenshotTextView: NSTextView {
     var onScreenshots: ([Screenshot]) -> Void = { _ in }
     var onSubmit: () -> Void = {}
-    var sendsOnReturn = false
     var placeholder = "" { didSet { needsDisplay = true } }
 
     /// A plain-text view turns Paste off when the clipboard holds only an image, so ⌘V would never reach `paste`.
@@ -155,10 +130,8 @@ final class ScreenshotTextView: NSTextView {
         let isReturn = event.keyCode == 36 || event.keyCode == 76  // Return, or Enter on a keypad
         let modifiers = event.modifierFlags.intersection(.deviceIndependentFlagsMask).subtracting([.capsLock, .numericPad, .function])
         // While an input method is composing (Japanese, say), Return picks the text instead.
-        if isReturn, !hasMarkedText(), modifiers == .command || (sendsOnReturn && modifiers.isEmpty) {
+        if isReturn, !hasMarkedText(), modifiers == .command {
             onSubmit()
-        } else if isReturn, sendsOnReturn, modifiers == .shift || modifiers == .option {
-            insertNewlineIgnoringFieldEditor(nil)
         } else {
             super.keyDown(with: event)
         }

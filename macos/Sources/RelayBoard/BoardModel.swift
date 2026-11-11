@@ -48,22 +48,10 @@ final class BoardModel {
     private var removed: Set<String> = []
 
     let client = BoardClient(server: .fromEnvironment())
-    /// The Chats view: your sessions as conversations.
-    let chats = ChatsModel(client: BoardClient(server: .fromEnvironment()))
     /// The sidebar's pick: which view the window shows.
     var section: SidebarItem? = .tasks
     private var loop: Task<Void, Never>?
     private var refreshes = 0
-
-    init() {
-        chats.onToast = { [weak self] toast in self?.toast = toast }
-    }
-
-    /// Shows a session in Chats, to read it and type into it.
-    func openChat(_ sessionFile: String) {
-        section = .chats
-        chats.select(.chat(sessionFile))
-    }
 
     func showTasks() {
         section = .tasks
@@ -105,10 +93,7 @@ final class BoardModel {
     var tasksWaitingOnYou: Int { taskColumns.reduce(0) { $0 + $1.cards.count { $0.turn.needsYou } } }
 
     func start() {
-        if loop == nil {
-            schedule(after: .zero)
-            chats.startRefreshing()
-        }
+        if loop == nil { schedule(after: .zero) }
     }
 
     func refreshNow() {
@@ -123,27 +108,13 @@ final class BoardModel {
         isSending(action, on: .pr(card.ref))
     }
 
-    /// Runs a control, asking first when it changes something. A task's ways into its session (Go to
-    /// Session, Resume, Not Yet) show it in Chats rather than your terminal.
+    /// Runs a control, asking first when it changes something.
     func request(_ action: BoardAction, on target: ActionTarget) {
-        if action.action == "open", let file = chatSessionFile(for: target) {
-            openChat(file)
-        } else if let confirm = action.confirm {
+        if let confirm = action.confirm {
             confirming = PendingAction(action: action, target: target, confirm: confirm)
         } else {
             Task { await run(action, on: target) }
         }
-    }
-
-    /// Shows a task's session in your terminal, as its menu's Open in Terminal does.
-    func openInTerminal(_ action: BoardAction, on target: ActionTarget) {
-        Task { await run(action, on: target) }
-    }
-
-    /// The session a task card shows, to open in Chats; nil for other targets, or from a relay too old to say.
-    private func chatSessionFile(for target: ActionTarget) -> String? {
-        guard case .task(let id) = target else { return nil }
-        return taskColumns.lazy.flatMap(\.cards).first { $0.id == id }?.session?.sessionFile
     }
 
     func request(_ action: BoardAction, on card: Card) {
@@ -254,11 +225,8 @@ final class BoardModel {
             if action.action == "approve-plan", case .task(let id) = target {
                 plan = taskColumns.lazy.flatMap(\.cards).first { $0.id == id }?.plan?.revision
             }
-            // Not Yet and Resume hand the task back to its session: show that session in Chats once the server took it.
-            let chatFile = ["send-back", "resume"].contains(action.action) ? chatSessionFile(for: target) : nil
             let result = try await client.perform(action.action, on: target, plan: plan)
             toast = Toast(message: result.message, failed: !result.ok)
-            if result.ok, let chatFile { openChat(chatFile) }
             if result.ok, ["ship", "done"].contains(action.action), case .task = target {
                 celebrate()
             }

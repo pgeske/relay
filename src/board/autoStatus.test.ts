@@ -16,9 +16,9 @@ function said(role: "user" | "assistant", text: string): Message {
 }
 
 test("a model answer is read out of prose or a code fence, and one the board can't use is refused", () => {
-  expect(parseStatusDecision('Sure:\n```json\n{"accurate": false, "stage": "rollout", "status": "PR merged", "waiting_on": "others", "reason": "Deploy running"}\n```', "stopped")).toEqual({
+  expect(parseStatusDecision('Sure:\n```json\n{"accurate": false, "stage": "doing", "status": "PR merged", "waiting_on": "others", "reason": "Deploy running"}\n```', "stopped")).toEqual({
     accurate: false,
-    stage: "rollout",
+    stage: "doing",
     status: "PR merged",
     waitingOn: "others",
     reason: "Deploy running",
@@ -57,18 +57,18 @@ test("the agent's own report wins over an answer about the card as it was, and a
 
 test("while the agent works, a refresh moves the stage and status but keeps what the task waits on", () => {
   const db = openBoardStore(":memory:");
-  const { id } = createTask(db, base);
+  const { id } = createTask(db, { ...base, stage: "plan" });
   const seen = reportTask(db, id, { blocked: { on: "others", reason: "Storage team approval" }, at: "2026-11-04T10:05:00Z" });
-  applyStatusDecision(db, seen, { accurate: false, stage: "rollout", status: "Applying in staging", waitingOn: null, reason: null }, null, "2026-11-04T10:30:00Z");
-  expect(getTask(db, id)).toMatchObject({ stage: "rollout", status: "Applying in staging", blockedOn: "others", blockedReason: "Storage team approval", blockedAt: "2026-11-04T10:05:00Z" });
+  applyStatusDecision(db, seen, { accurate: false, stage: "doing", status: "Applying in staging", waitingOn: null, reason: null }, null, "2026-11-04T10:30:00Z");
+  expect(getTask(db, id)).toMatchObject({ stage: "doing", status: "Applying in staging", blockedOn: "others", blockedReason: "Storage team approval", blockedAt: "2026-11-04T10:05:00Z" });
 });
 
 test("an agent that says it's done without handing it over goes to Ready to ship with its last message as the note", () => {
   const db = openBoardStore(":memory:");
   const seen = createTask(db, base);
-  applyStatusDecision(db, seen, { accurate: false, stage: "rollout", status: "Rolled out everywhere", waitingOn: "finished", reason: null }, "Rolled out to all 6 datacenters; p99 flat.", "2026-11-04T11:00:00Z");
+  applyStatusDecision(db, seen, { accurate: false, stage: "doing", status: "Rolled out everywhere", waitingOn: "finished", reason: null }, "Rolled out to all 6 datacenters; p99 flat.", "2026-11-04T11:00:00Z");
   expect(getTask(db, seen.id)).toMatchObject({
-    stage: "rollout",
+    stage: "doing",
     finishedAt: "2026-11-04T11:00:00Z",
     finishNote: "Rolled out to all 6 datacenters; p99 flat.",
     autoReportedAt: "2026-11-04T11:00:00Z",

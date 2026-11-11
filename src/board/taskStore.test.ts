@@ -67,10 +67,10 @@ test("a PR joins the task its session was on when it opened it, and keeps it whe
 
 test("a finished task waits to be checked until it's sent back or the agent reports more work; done keeps its note", () => {
   const db = openBoardStore(":memory:");
-  const { id } = createTask(db, { ...base, stage: "rollout" });
+  const { id } = createTask(db, { ...base, stage: "doing" });
   reportTask(db, id, { blocked: { on: "me", reason: "Which datacenter first?" }, at: "2026-11-04T10:05:00Z" });
   expect(finishTask(db, id, { note: "Rolled out everywhere", status: "All green", at: "2026-11-04T11:00:00Z" })).toMatchObject({
-    stage: "rollout",
+    stage: "doing",
     finishedAt: "2026-11-04T11:00:00Z",
     finishNote: "Rolled out everywhere",
     status: "All green",
@@ -78,7 +78,7 @@ test("a finished task waits to be checked until it's sent back or the agent repo
   });
 
   sendBack(db, id, "2026-11-04T11:10:00Z");
-  expect(getTask(db, id)).toMatchObject({ stage: "rollout", finishedAt: null });
+  expect(getTask(db, id)).toMatchObject({ stage: "doing", finishedAt: null });
 
   finishTask(db, id, { note: "Fixed the last datacenter", at: "2026-11-04T12:00:00Z" });
   expect(reportTask(db, id, { status: "One more thing", blocked: null, at: "2026-11-04T12:05:00Z" }).finishedAt).toBeNull();

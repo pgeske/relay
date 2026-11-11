@@ -18,7 +18,6 @@ Five agents going at once is easy. Remembering which one is waiting on you is no
 
 | | |
 |---|---|
-| 💬 **[Chats](#-chats)** | Every agent session as a conversation on your Mac: read it live, type to it, or start a new one. |
 | 🗂️ **[Tasks](#️-tasks)** | Everything you're getting done, sorted by what it needs from you. Your agents keep it up to date. |
 | 🔀 **[Pull requests](#-pull-requests)** | Every open PR on its way from draft to merged, with one button for its next step. |
 | 🖥️ **[Terminal](#️-terminal)** | One agent per tab. A spinner while it works, a green dot when it finished while you were away. |
@@ -50,17 +49,11 @@ relay board             # open Relay Board (or prefix B inside relay)
 
 You need [tmux](https://github.com/tmux/tmux) and omp on your `PATH`. relay runs on macOS and Linux; Relay Board needs macOS 26 or newer. The installer puts `relay` in `~/.local/bin` (`RELAY_INSTALL_DIR` changes that) and Relay Board in `~/Applications`.
 
-## 💬 Chats
-
-Relay Board's **Chats** view lists your sessions like a chat app: open ones first (a spinner while they work), then the rest by day. Pick one to read it live, type to it (↩ sends, screenshots paste right in), stop it, answer its questions with a click, or switch its model. Typing into a closed chat reopens it.
-
-**New Chat** (⇧⌘N) starts a fresh omp session from your first message. Its **…** menu adds it to a task anytime, and clicking a task's session opens it here.
-
 ## 🗂️ Tasks
 
 A **task** is one thing you want done: a fix, a rollout, an investigation, or getting another team to do something. It can take a few sessions and PRs, or none at all.
 
-Relay Board opens on your tasks as a Kanban board turned on its side: a section per stage, top to bottom, from **Ideas** through **Research**, **Plan**, **Doing**, and **Rollout** to **Ready to ship** and **Shipped**, so the closer a task is to done, the further down it sits. Tasks waiting on someone else (a team, reviewers) and tasks you've set aside wait in **Blocked**, just above Shipped, so the stage sections only hold work that you or an agent can move. Every card has the same shape: a colored pill for whose move it is (**Needs you**, **Agent working**, **Waiting on others**, **Blocked**), then labeled rows for the agent's latest update, its plan, and its PRs. Open sessions that no task knows about show up in a line above the board, so nothing slips through.
+Relay Board opens on your tasks as a Kanban board turned on its side: a section per stage, top to bottom, from **Ideas** through **Research**, **Plan**, and **Doing** to **Ready to ship** and **Shipped**, so the closer a task is to done, the further down it sits. Tasks waiting on someone else (a team, reviewers) and tasks you've set aside wait in **Blocked**, just above Shipped, so the stage sections only hold work that you or an agent can move. Every card has the same shape: a colored pill for whose move it is (**Needs you**, **Agent working**, **Waiting on others**, **Blocked**), then labeled rows for the agent's latest update, its plan, and its PRs. **Go to Session** jumps to the task's tab in your terminal. Open sessions that no task knows about show up in a line above the board, so nothing slips through.
 
 Here's the loop:
 

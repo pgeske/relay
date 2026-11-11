@@ -177,9 +177,8 @@ export interface TaskActionTarget {
  * Runs one of a task card's controls, or an untracked session's. `start` opens a session on the
  * task, `approve-plan` tells its session to carry out its plan, `open` shows its session in your
  * terminal; `ship` and `done` finish it, closing its idle sessions, and `send-back` returns a task
- * its agent called finished. `block` sets a task aside in the Blocked column until `unblock` or
- * `resume` puts it back in its stage; `resume` starts a session when it has none. The app shows a
- * sent-back or resumed task's session in Chats itself.
+ * its agent called finished and shows you its session. `block` sets a task aside in the Blocked column until
+ * `unblock` puts it back in its stage, or `resume` does and shows its session (or starts one).
  * `track` asks an untracked session to register its task, `close-session` closes its relay tab.
  */
 export async function runTaskAction(action: string, target: TaskActionTarget): Promise<BoardActionResult> {
@@ -226,13 +225,15 @@ export async function runTaskAction(action: string, target: TaskActionTarget): P
     if (action === "start") return { status: 200, message: await startTask(task) };
     if (action === "resume") {
       const session = taskSession(id, await liveSessions(), false);
-      return { status: 200, message: session ? `Unblocked ${taskRef(id)}` : await startTask(task) };
+      return { status: 200, message: session ? await showSession(session.sessionFile, session.live, session.name) : await startTask(task) };
     }
-    if (action === "send-back") return { status: 200, message: `Sent ${taskRef(id)} back` };
     if (action === "ship" || action === "done") return { status: 200, message: await completeTask(id) };
     const session = taskSession(id, await liveSessions(), action === "approve-plan");
-    if (!session) return { status: 409, message: action === "approve-plan" ? `${taskRef(id)} has no session to carry out its plan` : `${taskRef(id)} has no session yet` };
-    if (action === "open") return { status: 200, message: await showSession(session.sessionFile, session.live, session.name) };
+    if (!session) {
+      if (action === "send-back") return { status: 200, message: `Sent ${taskRef(id)} back; it has no session to open` };
+      return { status: 409, message: action === "approve-plan" ? `${taskRef(id)} has no session to carry out its plan` : `${taskRef(id)} has no session yet` };
+    }
+    if (action === "open" || action === "send-back") return { status: 200, message: await showSession(session.sessionFile, session.live, session.name) };
 
     // approve-plan: only the plan you read. One revised since waits for you to read it.
     if (!task.plan || task.planApprovedAt) return { status: 409, message: `${taskRef(id)} has no plan waiting for approval` };

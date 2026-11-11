@@ -95,9 +95,7 @@ extension BoardAction {
         case "block": "nosign"
         case "resume": "play.fill"
         case "unblock": "play.circle"
-        // A task's Go to Session opens it in Chats; its menu's Open in Terminal draws its own icon.
-        case "open": "bubble.left.and.text.bubble.right"
-        case "open-session": "terminal"
+        case "open", "open-session": "terminal"
         case "track": "plus.circle"
         case "dismiss": "eye.slash"
         case "close-session": "xmark.circle"
@@ -128,7 +126,6 @@ extension TaskColumn {
         case "research": "magnifyingglass"
         case "plan": "list.number"
         case "doing": "hammer"
-        case "rollout": "paperplane"
         case "ship": "shippingbox.fill"
         case "blocked": "nosign"
         case "done": "checkmark.seal.fill"

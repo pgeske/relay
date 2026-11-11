@@ -2,12 +2,12 @@ import type { Database } from "bun:sqlite";
 
 /**
  * Tasks: what you set out to get done, a level above pull requests. A task can take several
- * sessions and PRs, or none (a rollout, asking a team for something). Agents report where each
+ * sessions and PRs, or none (a deploy, asking a team for something). Agents report where each
  * stands as they work; the board shows which ones need you. Projects group tasks.
  */
 
 /** Where a task is on its way to done, in order. `idea` is one nobody has started on yet. */
-export const TASK_STAGES = ["idea", "research", "plan", "doing", "rollout", "done"] as const;
+export const TASK_STAGES = ["idea", "research", "plan", "doing", "done"] as const;
 export type TaskStage = (typeof TASK_STAGES)[number];
 
 /** Who a blocked task waits on: you (an answer, a decision), or anyone else (a team, a deploy, a reviewer). */
@@ -205,6 +205,9 @@ export function createTaskTables(db: Database): void {
   )`);
   const eventColumns = db.query<{ name: string }, []>("SELECT name FROM pragma_table_info('task_events')").all();
   if (!eventColumns.some((column) => column.name === "auto")) db.run("ALTER TABLE task_events ADD COLUMN auto INTEGER NOT NULL DEFAULT 0");
+  // Rolling out was once a stage of its own after Doing.
+  db.run("UPDATE tasks SET stage = 'doing' WHERE stage = 'rollout'");
+  db.run("UPDATE task_events SET stage = 'doing' WHERE stage = 'rollout'");
   db.run(`CREATE TABLE IF NOT EXISTS task_sessions (
     task_id INTEGER NOT NULL,
     session_file TEXT NOT NULL,

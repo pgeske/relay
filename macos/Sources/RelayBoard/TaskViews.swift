@@ -569,8 +569,7 @@ private struct PRLine: View {
     }
 }
 
-/// The task's session, on a row of its own: clicking it opens the session in Chats (or, from a
-/// relay too old to say which session it is, in your terminal).
+/// The task's session, on a row of its own: clicking it shows the session in your terminal.
 private struct TaskSessionLine: View {
     let card: TaskCard
     let session: TaskSession
@@ -587,7 +586,7 @@ private struct TaskSessionLine: View {
                 if sending {
                     ProgressView().controlSize(.mini)
                 } else {
-                    Image(systemName: session.sessionFile == nil ? "terminal" : "bubble.left.and.text.bubble.right").imageScale(.medium).foregroundStyle(.secondary)
+                    Image(systemName: "terminal").imageScale(.medium).foregroundStyle(.secondary)
                 }
                 Text(session.title).lineLimit(1).truncationMode(.tail)
                 if session.others > 0 {
@@ -609,7 +608,7 @@ private struct TaskSessionLine: View {
         }
         .buttonStyle(.plain)
         .onHover { hovering = $0 }
-        .help(session.sessionFile == nil ? session.open.hint : "Open this session in Chats")
+        .help(session.open.hint)
         .disabled(sending)
     }
 }
@@ -642,10 +641,7 @@ struct TaskMenuItems: View {
 
     var body: some View {
         if let session = card.session {
-            if let file = session.sessionFile {
-                Button("Open in Chats", systemImage: "bubble.left.and.text.bubble.right") { model.openChat(file) }
-            }
-            Button(session.open.label, systemImage: "terminal") { model.openInTerminal(session.open, on: .task(card.id)) }
+            Button(session.open.label, systemImage: "terminal") { model.request(session.open, on: .task(card.id)) }
         }
         ForEach(card.steps.filter { $0.action != "open" }, id: \.self) { step in
             Button(step.confirm == nil ? step.label : "\(step.label)…", systemImage: step.symbol) { model.request(step, on: .task(card.id)) }
@@ -745,7 +741,7 @@ private struct UntrackedRow: View {
     var body: some View {
         let target = ActionTarget.session(session.sessionFile)
         HStack(alignment: .firstTextBaseline, spacing: 8) {
-            Image(systemName: "bubble.left.and.text.bubble.right").foregroundStyle(.secondary)
+            Image(systemName: "terminal").foregroundStyle(.secondary)
             Text(session.title)
                 .font(.zoomed(.subheadline).weight(.medium))
                 .truncationMode(.tail)
@@ -772,14 +768,13 @@ private struct UntrackedRow: View {
         .padding(.vertical, 8)
         .background(Color.primary.opacity(hovering ? 0.05 : 0))
         .contentShape(.rect)
-        .onTapGesture { model.openChat(session.sessionFile) }
+        .onTapGesture { model.request(session.open, on: target) }
         .contextMenu { menuItems(target) }
         .onHover { hovering = $0 }
-        .help("Open this session in Chats")
+        .help(session.open.hint)
     }
 
     @ViewBuilder private func menuItems(_ target: ActionTarget) -> some View {
-        Button("Open in Chats", systemImage: "bubble.left.and.text.bubble.right") { model.openChat(session.sessionFile) }
         Button(session.open.label, systemImage: "terminal") { model.request(session.open, on: target) }
         Button(session.dismiss.label, systemImage: session.dismiss.symbol) { model.request(session.dismiss, on: target) }
         if let close = session.close {

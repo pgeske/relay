@@ -14,14 +14,13 @@ import { timeAgo, type Confirm, type Tone } from "./view.ts";
  * delivers (Ready to ship), then in Shipped once you ship it. One waiting on others (a team, reviewers) sits in Blocked,
  * since nobody here can move it, and so does one you blocked, until you unblock it.
  */
-export type TaskColumn = "idea" | "research" | "plan" | "doing" | "rollout" | "ship" | "blocked" | "done";
+export type TaskColumn = "idea" | "research" | "plan" | "doing" | "ship" | "blocked" | "done";
 
 const COLUMNS: { id: TaskColumn; title: string; hint: string }[] = [
   { id: "idea", title: "Ideas", hint: "Not started yet" },
   { id: "research", title: "Research", hint: "Finding out what it takes" },
   { id: "plan", title: "Plan", hint: "Deciding how to do it" },
   { id: "doing", title: "Doing", hint: "Making the change" },
-  { id: "rollout", title: "Rollout", hint: "Rolling it out or verifying it" },
   { id: "ship", title: "Ready to ship", hint: "Its agent delivered: look it over, then ship it" },
   { id: "blocked", title: "Blocked", hint: "Waiting on others, or set aside until you unblock it" },
   { id: "done", title: "Shipped", hint: "Shipped in the last two weeks" },
@@ -56,7 +55,7 @@ export type TaskAction = (typeof TASK_ACTIONS)[number];
 export const SESSION_ACTIONS = ["open-session", "track", "dismiss", "close-session"] as const;
 export type SessionAction = (typeof SESSION_ACTIONS)[number];
 
-export const STAGE_LABELS: Record<TaskStage, string> = { idea: "Idea", research: "Research", plan: "Plan", doing: "Doing", rollout: "Rollout", done: "Shipped" };
+export const STAGE_LABELS: Record<TaskStage, string> = { idea: "Idea", research: "Research", plan: "Plan", doing: "Doing", done: "Shipped" };
 
 /** PR lanes as a task card's PR lines word them. */
 const PR_LANES: Record<Lane | "merged", { text: string; tone: Tone }> = {
@@ -127,8 +126,6 @@ export interface TaskPrView {
 }
 
 export interface TaskSessionView {
-  /** Which session it is, for opening it in the board's Chats. */
-  sessionFile: string;
   title: string;
   state: "open" | "working" | "closed";
   open: TaskActionView;
@@ -371,18 +368,18 @@ function action(name: TaskAction | SessionAction, label: string, hint: string, e
 /** omp starts session titles with a nerd-font icon, which no system font draws. */
 const PRIVATE_USE = /[\uE000-\uF8FF]|[\u{F0000}-\u{10FFFF}]/gu;
 
-export function sessionTitle(title: string): string {
+function sessionTitle(title: string): string {
   return title.replace(PRIVATE_USE, "").trim() || "Untitled session";
 }
 
 /** A folder with ~ for your home, as you'd type it. */
-export function displayFolder(cwd: string | null, home: string): string | null {
+function displayFolder(cwd: string | null, home: string): string | null {
   if (cwd === null) return null;
   if (cwd === home) return "~";
   return cwd.startsWith(`${home}/`) ? `~${cwd.slice(home.length)}` : cwd;
 }
 
-/** The card's session's own control: its menu's Open in Terminal. Steps built on it (Go to Session, Resume) open it in the app's Chats instead. */
+/** The card's session's own control, which shows it in your terminal; Go to Session and Resume reuse it. */
 function openAction(session: TaskSessionInfo): TaskActionView {
   return action("open", "Open in Terminal", session.live ? "Show this session in your terminal" : "Reopen this session in a new relay tab");
 }
@@ -419,7 +416,7 @@ function taskCard(task: Task, inputs: TaskInputs, places: Map<string, PrPlace>, 
   const steps: TaskActionView[] = [];
   if (task.pausedAt) {
     steps.push(
-      action("resume", "Resume", primary ? "Unblock it and show its latest session in Chats" : `Unblock it and open a new session${task.cwd ? ` in ${task.cwd}` : ""} on it`, {
+      action("resume", "Resume", primary ? "Unblock it and show its latest session in your terminal" : `Unblock it and open a new session${task.cwd ? ` in ${task.cwd}` : ""} on it`, {
         running: primary ? null : "Starting…",
       }),
     );
@@ -435,14 +432,14 @@ function taskCard(task: Task, inputs: TaskInputs, places: Map<string, PrPlace>, 
     // No confirm: Reopen undoes it, and omp keeps the closed sessions' conversations.
     steps.push(
       action("ship", "Ship It", "Move it to Shipped and close its idle session tabs; omp keeps their conversations"),
-      action("send-back", "Not Yet", "Put it back in progress and show its session in Chats, so you can tell the agent what's missing"),
+      action("send-back", "Not Yet", "Put it back in progress and show its session in your terminal, so you can tell the agent what's missing"),
     );
   } else if (placement.turn === "idea") {
     steps.push(action("start", "Start", `Open a new session${task.cwd ? ` in ${task.cwd}` : ""} and hand it this task`, { running: "Starting…" }));
   } else if (placement.turn === "you" && primary) {
-    steps.push({ ...openAction(primary), label: "Go to Session", hint: "Show this session in Chats" });
+    steps.push({ ...openAction(primary), label: "Go to Session" });
   } else if (placement.turn === "idle" && primary) {
-    steps.push({ ...openAction(primary), label: "Resume", hint: "Show its latest session in Chats" });
+    steps.push({ ...openAction(primary), label: "Resume" });
   } else if (placement.turn === "idle") {
     steps.push(action("start", "Start", `Open a new session${task.cwd ? ` in ${task.cwd}` : ""} and hand it this task`, { running: "Starting…" }));
   }
@@ -497,7 +494,6 @@ function taskCard(task: Task, inputs: TaskInputs, places: Map<string, PrPlace>, 
       }),
     session: primary
       ? {
-          sessionFile: primary.sessionFile,
           title: sessionTitle(primary.title),
           // A session working on another task isn't working on this one.
           state: primary.live ? (primary.live.status === "working" && primary.onTask ? "working" : "open") : "closed",
