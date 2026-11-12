@@ -328,7 +328,8 @@ export function placeTask(
   const idle = onTask.filter((session) => session.live?.status === "idle").toSorted((a, b) => (b.activeAt ?? "").localeCompare(a.activeAt ?? ""))[0];
   if (idle) return place("you", "The agent stopped", idle.activeAt ?? task.updatedAt, idle.activeAt);
 
-  if (sessions.length === 0 && task.stage === "idea") return place("idea", null, task.createdAt);
+  // A session that only made the task and moved on (say, an agent handing it off) hasn't started it.
+  if (onTask.length === 0 && task.stage === "idea") return place("idea", null, task.createdAt);
   const last = sessions.map((session) => session.activeAt ?? "").toSorted().at(-1) || task.updatedAt;
   const why = onTask.length < sessions.length && sessions.some((session) => session.live) ? "Its session moved on to another task" : sessions.length ? "No session open" : "No session yet";
   return place("idle", why, last, last);
@@ -438,7 +439,7 @@ function taskCard(task: Task, inputs: TaskInputs, places: Map<string, PrPlace>, 
     steps.push(action("start", "Start", `Open a new session${task.cwd ? ` in ${task.cwd}` : ""} and hand it this task`, { running: "Starting…" }));
   } else if (placement.turn === "you" && primary) {
     steps.push({ ...openAction(primary), label: "Go to Session" });
-  } else if (placement.turn === "idle" && primary) {
+  } else if (placement.turn === "idle" && primary?.onTask) {
     steps.push({ ...openAction(primary), label: "Resume" });
   } else if (placement.turn === "idle") {
     steps.push(action("start", "Start", `Open a new session${task.cwd ? ` in ${task.cwd}` : ""} and hand it this task`, { running: "Starting…" }));

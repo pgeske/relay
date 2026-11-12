@@ -120,6 +120,22 @@ describe("whose move a task waits on", () => {
     expect(placeTask(task({ stage: "research" }), [], [], now).turn).toBe("idle");
   });
 
+  test("a task whose only session made it and moved on offers Start, not that other task's session", () => {
+    const info: TaskSessionInfo = { sessionFile: "/sessions/a.jsonl", title: "Other work", cwd: null, live: { paneId: "%1", windowId: "@1", status: "working" }, activeAt: minutesAgo(1) };
+    // The session registered task 2, then went back to task 1.
+    const links = [
+      { taskId: 2, sessionFile: info.sessionFile, linkedAt: minutesAgo(10) },
+      { taskId: 1, sessionFile: info.sessionFile, linkedAt: minutesAgo(5) },
+    ];
+    const stepsOf = (handedOff: Task) => {
+      const view = taskBoardView({ tasks: [task(), handedOff], projects: [], events: new Map(), sessions: links, sessionInfo: new Map([[info.sessionFile, info]]), prs: new Map(), board: null, dismissed: new Set(), now }, "/home");
+      const card = view.columns.flatMap((column) => column.cards).find((c) => c.id === 2)!;
+      return { turn: card.turn.id, steps: card.steps.map((step) => step.action) };
+    };
+    expect(stepsOf(task({ id: 2, stage: "idea" }))).toEqual({ turn: "idea", steps: ["start"] });
+    expect(stepsOf(task({ id: 2, stage: "research" }))).toEqual({ turn: "idle", steps: ["start"] });
+  });
+
   test("a task its agent delivered waits for you to ship it, ahead of everything but a working agent", () => {
     const finished = task({ finishedAt: minutesAgo(3), finishNote: "Shipped it", blockedOn: "me", blockedAt: minutesAgo(30) });
     expect(placeTask(finished, [session("idle")], [{ ref: "acme/api#1", lane: "ready" }], now)).toMatchObject({ turn: "you", delivered: true, since: "3m" });
