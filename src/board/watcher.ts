@@ -7,9 +7,11 @@ import {
   agentSaidWhatItWaitsOn,
   applyStatusDecision,
   lastAgentText,
+  parseReviewerRun,
   parseStatusDecision,
   parseStepOutcome,
   renderTranscript,
+  reviewerRunPrompt,
   statusPrompt,
   stepPrompt,
   type Moment,
@@ -17,10 +19,24 @@ import {
 } from "./autoStatus.ts";
 import { liveSessions, sourceFor } from "./command.ts";
 import { loadBoardConfig } from "./config.ts";
-import { fetchPullRequest } from "./github.ts";
+import { fetchPullRequest, type PullRequest } from "./github.ts";
 import { REQUEST_MAX_AGE_MS } from "./lanes.ts";
-import { prOwners } from "./owners.ts";
-import { agentRequestHead, agentRequests, latestAgentReviews, latestCiFixes, openBoardStore, recordAgentReview, recordCiFix } from "./store.ts";
+import { prOwners, scanSessions } from "./owners.ts";
+import { finishedReviewerRuns, type FinishedReviewerRun } from "./reviewerRuns.ts";
+import {
+  agentRequestHead,
+  agentRequests,
+  latestAgentReviews,
+  latestCiFixes,
+  latestFeedbackFixes,
+  markReviewerRunSeen,
+  openBoardStore,
+  recordAgentReview,
+  recordCiFix,
+  recordFeedbackFix,
+  seenReviewerRuns,
+  type AgentReview,
+} from "./store.ts";
 import { currentTask, getTask, taskRef, type Task } from "./taskStore.ts";
 
 /**
@@ -98,17 +114,18 @@ interface ForgottenStep {
   requestedAt: string;
 }
 
-/** The reviews and CI fixes the board asked this session for that it hasn't recorded a result for. */
+/** The reviews, CI fixes, and feedback fixes the board asked this session for that it hasn't recorded a result for. */
 function forgottenSteps(db: Database, sessionFile: string, now: number): ForgottenStep[] {
   const requests = agentRequests(db);
   const reviews = latestAgentReviews(db);
   const ciFixes = latestCiFixes(db);
+  const feedbackFixes = latestFeedbackFixes(db);
   return [...prOwners(db)].flatMap(([key, owner]) => {
     if (owner.sessionFile !== sessionFile) return [];
-    return (["review", "fix-ci"] as const).flatMap((step) => {
+    return (["review", "fix-ci", "address-feedback"] as const).flatMap((step) => {
       const requestedAt = requests.get(key)?.[step];
       if (!requestedAt || now - Date.parse(requestedAt) > REQUEST_MAX_AGE_MS) return [];
-      const answeredAt = step === "review" ? reviews.get(key)?.reviewedAt : ciFixes.get(key)?.recordedAt;
+      const answeredAt = step === "review" ? reviews.get(key)?.reviewedAt : (step === "fix-ci" ? ciFixes : feedbackFixes).get(key)?.recordedAt;
       return answeredAt && answeredAt >= requestedAt ? [] : [{ repo: owner.repo, number: owner.number, step, requestedAt }];
     });
   });
@@ -155,8 +172,10 @@ async function recordForgottenSteps(sessionFile: string, messages: Message[], mo
           if (outcome.step === "review") {
             if (agentRequestHead(store, repo, number, "review") !== pr.headSha) return "commits landed since the review was asked for";
             recordAgentReview(store, { repo, number, headSha: pr.headSha, verdict: outcome.findings === 0 ? "passed" : "findings", findings: outcome.findings, summary, reviewedAt: at });
-          } else {
+          } else if (outcome.step === "fix-ci") {
             recordCiFix(store, { repo, number, headSha: pr.headSha, verdict: outcome.fixed ? "fixed" : "not-fixed", summary, recordedAt: at });
+          } else {
+            recordFeedbackFix(store, { repo, number, headSha: pr.headSha, verdict: outcome.fixed ? "addressed" : "not-addressed", summary, recordedAt: at });
           }
           return null;
         })
@@ -166,6 +185,95 @@ async function recordForgottenSteps(sessionFile: string, messages: Message[], mo
       store.close();
     }
   }
+}
+
+/**
+ * Records reviews an agent ran on its own, without the board asking, and didn't record. For each
+ * reviewer agent that finished lately in the session, with the session in charge of an open PR
+ * whose latest recorded review is older than the run, the model says which of those PRs it reviewed
+ * (if any) and what it found; the reviewer's report becomes the result's write-up. A review counts
+ * only for code it saw, so one is left alone when the PR's head commit was made after it started.
+ * Reviewers that ran side by side on the same commit (say, a general and a security review) add up.
+ * Each run is looked at once, which the board store remembers.
+ */
+async function recordUnrecordedReviews(sessionFile: string, model: string): Promise<void> {
+  const now = Date.now();
+  const recent = (await finishedReviewerRuns(sessionFile)).filter((run) => now - Date.parse(run.finishedAt) <= REQUEST_MAX_AGE_MS);
+  if (recent.length === 0) return;
+
+  const db = openBoardStore();
+  let runs;
+  let owned;
+  let reviews;
+  try {
+    const seen = seenReviewerRuns(db, sessionFile);
+    runs = recent.filter((run) => !seen.has(`${run.id}|${run.startedAt}`));
+    // A PR the session opened since the board last looked is the likeliest one it reviewed.
+    if (runs.length > 0) scanSessions(db);
+    owned = [...prOwners(db).values()].filter((owner) => owner.sessionFile === sessionFile);
+    reviews = latestAgentReviews(db);
+  } finally {
+    db.close();
+  }
+  // Agents often review before opening the PR: then the runs wait for a later stop, once it's open.
+  if (runs.length === 0 || owned.length === 0) return;
+  const config = loadBoardConfig();
+  const fetched = await Promise.all(owned.map((owner) => fetchPullRequest(sourceFor(config, owner.repo), owner.repo, owner.number).catch(() => null)));
+  const open = fetched.filter((pr): pr is PullRequest => pr?.state === "OPEN");
+
+  for (const run of runs) {
+    const match = await matchReviewerRun(run, open, reviews, model);
+    // A run counts as looked at only once it's handled, along with the review it gave, so a restart midway loses none.
+    const store = openBoardStore();
+    try {
+      store
+        .transaction(() => {
+          if (match) recordRecoveredReview(store, run, match.pr, match.findings);
+          markReviewerRunSeen(store, sessionFile, run, new Date().toISOString());
+        })
+        .immediate();
+    } finally {
+      store.close();
+    }
+  }
+}
+
+/** Which of the open PRs a reviewer run reviewed and what it found, by the model; null when none it could count for. */
+async function matchReviewerRun(
+  run: FinishedReviewerRun,
+  open: PullRequest[],
+  reviews: Map<string, AgentReview>,
+  model: string,
+): Promise<{ pr: PullRequest; findings: number } | null> {
+  // A review recorded when this run finished is a side-by-side run's, which this one adds to.
+  const unreviewed = open.filter((pr) => (reviews.get(`${pr.repo}#${pr.number}`)?.reviewedAt ?? "") <= run.finishedAt);
+  if (unreviewed.length === 0) return null;
+  const urls = unreviewed.map((pr) => pr.url);
+  const answer = parseReviewerRun(await askModel(reviewerRunPrompt(run, urls), model, SYSTEM_PROMPT), urls);
+  if (!answer) console.error(`watcher: no usable answer about reviewer run ${run.id}`);
+  if (!answer?.pr) return null;
+  const pr = unreviewed.find((candidate) => candidate.url === answer.pr)!;
+  if (!pr.headCommittedAt || pr.headCommittedAt > run.startedAt) {
+    console.log(`watcher: left reviewer run ${run.id} of ${pr.repo}#${pr.number} alone: commits landed after it started`);
+    return null;
+  }
+  return { pr, findings: answer.findings };
+}
+
+/**
+ * Records a reviewer run's result as the PR's review, inside the caller's transaction. A review
+ * recorded after the run finished covers it already (the agent's own word wins); one of the same
+ * commit recorded while it ran is a side-by-side run's, which this one adds its findings to.
+ */
+export function recordRecoveredReview(store: Database, run: FinishedReviewerRun, pr: PullRequest, found: number): void {
+  const existing = latestAgentReviews(store).get(`${pr.repo}#${pr.number}`);
+  if (existing && existing.reviewedAt > run.finishedAt) return;
+  const alongside = existing && existing.headSha === pr.headSha && existing.reviewedAt >= run.startedAt ? existing : null;
+  const findings = found + (alongside?.findings ?? 0);
+  const report = `Relay recorded this from the session, which ran the reviewer on its own and didn't record it. The reviewer's report:\n\n${run.output}`;
+  const summary = alongside ? `${alongside.summary ?? ""}\n\n---\n\n${report}`.trim() : report;
+  recordAgentReview(store, { repo: pr.repo, number: pr.number, headSha: pr.headSha, verdict: findings === 0 ? "passed" : "findings", findings, summary, reviewedAt: run.finishedAt });
+  console.log(`watcher: recorded reviewer run ${run.id} as the review of ${pr.repo}#${pr.number}: ${found} findings`);
 }
 
 async function check(sessionFile: string, moment: Moment): Promise<void> {
@@ -178,7 +286,10 @@ async function check(sessionFile: string, moment: Moment): Promise<void> {
   // A working agent's log grows all the time, and what it waits on isn't decided then anyway.
   const stillCurrent = async () => moment === "working" || (await fileSize(sessionFile)) === sizeRead;
   await checkTask(sessionFile, moment, messages, autoStatus.model, stillCurrent);
-  if (moment === "stopped") await recordForgottenSteps(sessionFile, messages, autoStatus.model, stillCurrent);
+  if (moment !== "stopped") return;
+  await recordForgottenSteps(sessionFile, messages, autoStatus.model, stillCurrent);
+  // After the board's own requests, so a review it asked for is recorded as that.
+  await recordUnrecordedReviews(sessionFile, autoStatus.model);
 }
 
 /**

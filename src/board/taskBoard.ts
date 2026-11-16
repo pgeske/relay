@@ -61,6 +61,7 @@ export const STAGE_LABELS: Record<TaskStage, string> = { idea: "Idea", research:
 const PR_LANES: Record<Lane | "merged", { text: string; tone: Tone }> = {
   draft: { text: "Draft", tone: "muted" },
   "agent-review": { text: "Agent review", tone: "link" },
+  "changes-requested": { text: "Changes requested", tone: "bad" },
   "human-review": { text: "Human review", tone: "wait" },
   "approved-blocked": { text: "Approved · blocked", tone: "warn" },
   ready: { text: "Ready to merge", tone: "ok" },
@@ -318,6 +319,8 @@ export function placeTask(
   if (ready) return place("you", `${short(ready.ref)} is ready to merge`, task.updatedAt);
   const blockedPr = open.find((pr) => pr.lane === "approved-blocked");
   if (blockedPr) return place("you", `${short(blockedPr.ref)} is approved but blocked`, task.updatedAt);
+  const feedbackPr = open.find((pr) => pr.lane === "changes-requested");
+  if (feedbackPr) return place("you", `${short(feedbackPr.ref)} has feedback to address`, task.updatedAt);
   if (task.blockedOn === "others") return place("others", task.blockedReason, task.blockedAt ?? task.updatedAt, task.blockedAt);
   // A PR waiting for a click from you comes before one waiting on reviewers.
   const needsReview = open.find((pr) => pr.lane === "agent-review");

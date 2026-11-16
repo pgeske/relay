@@ -1,6 +1,6 @@
 ---
 name: relay
-description: Relay's board of the user's tasks and PRs. Use at the start of any multi-step task in a relay session (anything taking more than a few minutes, code or not, like a change, a rollout, an investigation, or asking a team for something) to register it, and while working on it to record its plan, say what it waits on before stopping, and say when it's done; when asked to track this in relay; when asked where tasks or pull requests stand, what's ready to merge, or what's waiting on review; right after a reviewer agent finishes reviewing a pull request, after finishing a Fix CI request from the board, or after drafting a Slack approval ask or bump for a pull request, to record it; and when taking over a pull request another session opened.
+description: Relay's board of the user's tasks and PRs. Use at the start of any multi-step task in a relay session (anything taking more than a few minutes, code or not, like a change, a rollout, an investigation, or asking a team for something) to register it, and while working on it to record its plan, say what it waits on before stopping, and say when it's done; when asked to track this in relay; when asked where tasks or pull requests stand, what's ready to merge, or what's waiting on review; right after a reviewer agent finishes reviewing a pull request, after finishing a Fix CI or Address Feedback request from the board, or after drafting a Slack approval ask or bump for a pull request, to record it; and when taking over a pull request another session opened.
 ---
 
 # relay board
@@ -72,13 +72,14 @@ EOF
 | Approved · blocked | Every approval in, but CI is red or running, or GitHub still won't merge (a failed gate check, branch rules, conflicts) |
 | Agent review | Ready for review, but no reviewer agent has passed its current commit, the user didn't skip its agent review, and no person has approved yet |
 | Human review | Waiting on people: a reviewer agent passed the current commit, the user skipped the agent review, or someone approved, but approvals are still missing (GitHub's review decision, or a merge gate asking for more) |
+| Changes requested | Not fully approved, and a person asked for something the author hasn't answered: a request for changes, or a comment asking for something, made after the last commit and the author's last comment; or an open review thread on unchanged lines whose last word is a reviewer's. Bots and the author don't count. Pushing a fix or replying moves it on |
 | Draft | Still being shaped |
 
 After the lanes: PRs merged recently. PRs waiting on the user's review aren't on the board; `--json` lists them (`teammates`, and `bots` counted per bot).
 
 ## Reading the board
 
-- `relay board --json` for data. Each card has `pr` (including `mergeState`, `approvedBy`, `approvedFor`: the teams those approvals were on behalf of, and `waitingOn`: reviewers, people or teams, still asked), `ci` (`passed`/`failed`/`running`/`none`), `mergeBlocker` (what keeps it from merging besides CI, e.g. "1 approval missing", or null), `agentReview`, `ciFix` (the latest Fix CI result: `fixed`/`not-fixed`, with `stale` once newer commits landed), `approval` (the Slack asks for approval: `asks`, one per reviewer, each with `reviewer`, `channel`, `askedAt`, `recordedAt`, `source` (`drafted`, or `found` already sent), `bumpedAt`, `slackUrl`, and `approved` once that reviewer approved; and `unasked`: reviewers the PR waits on that no ask went to yet), and `requests`: where each request the board sent the PR's session stands, per step (`review`, `merge`, `fix-ci`, `ask-approval`, `bump`: `none`, `running`, or `stalled` when the session stopped without finishing). `owners` maps "owner/repo#number" to the session in charge of it.
+- `relay board --json` for data. Each card has `pr` (including `mergeState`, `approvedBy`, `approvedFor`: the teams those approvals were on behalf of, `waitingOn`: reviewers, people or teams, still asked, and `discussion`: what reviewers said), `ci` (`passed`/`failed`/`running`/`none`), `mergeBlocker` (what keeps it from merging besides CI, e.g. "1 approval missing", or null), `agentReview`, `ciFix` (the latest Fix CI result: `fixed`/`not-fixed`, with `stale` once newer commits landed), `feedback` (what reviewers asked that the author hasn't answered, oldest first, each with `kind`: `changes-requested`/`thread`/`comment`, `author`, `body`, `url`, `at`, and a thread's `path`), `feedbackFix` (the latest Address Feedback result: `addressed`/`not-addressed`), `approval` (the Slack asks for approval: `asks`, one per reviewer, each with `reviewer`, `channel`, `askedAt`, `recordedAt`, `source` (`drafted`, or `found` already sent), `bumpedAt`, `slackUrl`, and `approved` once that reviewer approved; and `unasked`: reviewers the PR waits on that no ask went to yet), and `requests`: where each request the board sent the PR's session stands, per step (`review`, `merge`, `fix-ci`, `address-feedback`, `ask-approval`, `bump`: `none`, `running`, or `stalled` when the session stopped without finishing). `owners` maps "owner/repo#number" to the session in charge of it.
 - `relay board` opens the human view, the Relay Board macOS app (prefix `B` inside relay does the same). It is for the user; read `--json` yourself.
 
 ## The session in charge of a PR
@@ -128,6 +129,24 @@ EOF
 - Record after pushing the fix or retrying the jobs, once the rerun finishes when that's practical.
 - The result is tied to the PR's head commit when you record it, so record after pushing a fix. The board shows it until the next commit.
 - The summary is what the user sees when they click the result on the board: what failed, whether it was flaky, and what you did, or why it couldn't be fixed.
+
+## Recording an Address Feedback result
+
+In **Changes requested**, the board's **Address Feedback** button asks the session in charge to go through what reviewers asked: fix it with new signed commits (never force-push or amend shared history), and draft a reply to each piece of feedback. Never post anything on GitHub (comments, replies, reviews, resolving threads) without the user's say-so. When you finish, **always** record how it went:
+
+```sh
+relay board feedback <pr-url> --addressed --summary - <<'EOF'
+1. sara on cache.go, "add the gov team here too": added it in 3f2a1c9. Reply: "done, added in 3f2a1c9".
+2. sam, "why a 5 minute TTL?": no code change. Reply: "matches the token lifetime; anything longer serves revoked tokens".
+EOF
+
+relay board feedback <pr-url> --not-addressed --summary - <<'EOF'
+sara asks to move the cache to another service, which needs that team's call first.
+EOF
+```
+
+- Record after pushing the fixes; the result is tied to the PR's head commit then.
+- The summary is what the user sees when they click the result on the board: each piece of feedback, what you changed or why not, and the reply you drafted for them to post.
 
 ## Recording approval asks and bumps
 

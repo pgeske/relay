@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import type { Check, PullRequest } from "./github.ts";
-import { approvalState, approvalStep, buildBoard, ciFixState, ciState, requestProgress, waitingAsks, type ApprovalState, type Lane, type RequestResults } from "./lanes.ts";
+import { approvalState, approvalStep, buildBoard, ciState, requestProgress, stepResultState, waitingAsks, type ApprovalState, type Lane, type RequestResults } from "./lanes.ts";
 import { AGENT_ACTIONS, type AgentReview, type ApprovalAsk, type CiFix } from "./store.ts";
 
 const GATE = "merge-queue/gate";
@@ -21,8 +21,10 @@ function pr(overrides: Partial<PullRequest> = {}): PullRequest {
     approvedFor: [],
     waitingOn: [],
     headSha: "aaa",
+    headCommittedAt: "2026-10-29T23:00:00Z",
     updatedAt: "2026-10-30T00:00:00Z",
     mergedAt: null,
+    discussion: { changeRequests: [], threads: [], comments: [] },
     checks: [{ name: "test", state: "passed" }],
     ...overrides,
   };
@@ -206,7 +208,7 @@ describe("requestProgress", () => {
   });
 
   test("no request, or a long-abandoned one, shows nothing", () => {
-    expect(requestProgress(undefined, open, live("working"), now)).toEqual({ review: "none", merge: "none", "fix-ci": "none", "ask-approval": "none", bump: "none" });
+    expect(requestProgress(undefined, open, live("working"), now)).toEqual({ review: "none", merge: "none", "fix-ci": "none", "address-feedback": "none", "ask-approval": "none", bump: "none" });
     expect(requestProgress({ review: minutesAgo(7 * 60) }, open, live("working"), now).review).toBe("none");
   });
 
@@ -276,7 +278,7 @@ describe("requestProgress", () => {
 
   test("only the newest request can be running: the board sent it because the older one had stopped", () => {
     const progress = requestProgress({ review: minutesAgo(30), "fix-ci": minutesAgo(5) }, open, live("working"), now);
-    expect(progress).toEqual({ review: "stalled", merge: "none", "fix-ci": "running", "ask-approval": "none", bump: "none" });
+    expect(progress).toEqual({ review: "stalled", merge: "none", "fix-ci": "running", "address-feedback": "none", "ask-approval": "none", bump: "none" });
   });
 
   test("each card follows its requests through the session in charge", () => {
@@ -289,18 +291,18 @@ describe("requestProgress", () => {
   });
 });
 
-describe("ciFixState", () => {
+describe("stepResultState", () => {
   test("a CI-fix result speaks for the commit it was recorded at", () => {
-    expect(ciFixState(pr(), ciFix({ summary: "retried the flaky job" }))).toMatchObject({ status: "fixed", stale: false, summary: "retried the flaky job" });
-    expect(ciFixState(pr(), ciFix({ verdict: "not-fixed" }))).toMatchObject({ status: "not-fixed", stale: false });
+    expect(stepResultState(pr(), ciFix({ summary: "retried the flaky job" }))).toMatchObject({ status: "fixed", stale: false, summary: "retried the flaky job" });
+    expect(stepResultState(pr(), ciFix({ verdict: "not-fixed" }))).toMatchObject({ status: "not-fixed", stale: false });
   });
 
   test("a commit pushed after the result makes it stale", () => {
-    expect(ciFixState(pr({ headSha: "bbb" }), ciFix({ headSha: "aaa" }))).toMatchObject({ status: "fixed", stale: true });
+    expect(stepResultState(pr({ headSha: "bbb" }), ciFix({ headSha: "aaa" }))).toMatchObject({ status: "fixed", stale: true });
   });
 
   test("no result recorded", () => {
-    expect(ciFixState(pr(), undefined)).toEqual({ status: "not-run" });
+    expect(stepResultState(pr(), undefined)).toEqual({ status: "not-run" });
   });
 });
 

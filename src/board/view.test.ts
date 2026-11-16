@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
-import type { PullRequest } from "./github.ts";
+import type { PrComment, PullRequest, ReviewThread } from "./github.ts";
 import { buildBoard, type CardOwner, type LocalState } from "./lanes.ts";
-import type { AgentRequests, AgentReview, ApprovalAsk, CiFix } from "./store.ts";
+import type { AgentRequests, AgentReview, ApprovalAsk, CiFix, FeedbackFix } from "./store.ts";
 import { ACTIVE_REFRESH_SECONDS, REFRESH_SECONDS, boardView, type CardView, type RowView } from "./view.ts";
 
 const now = new Date("2026-11-02T12:00:00Z");
@@ -24,8 +24,10 @@ function pr(overrides: Partial<PullRequest> = {}): PullRequest {
     approvedFor: [],
     waitingOn: [],
     headSha: "aaa",
+    headCommittedAt: "2026-11-01T23:00:00Z",
     updatedAt: "2026-11-02T00:00:00Z",
     mergedAt: null,
+    discussion: { changeRequests: [], threads: [], comments: [] },
     checks: [{ name: "test", state: "failed" }],
     ...overrides,
   };
@@ -43,6 +45,7 @@ interface Local {
   owner?: CardOwner | null;
   requests?: AgentRequests;
   ciFix?: CiFix;
+  feedbackFix?: FeedbackFix;
   review?: AgentReview;
   approvals?: ApprovalAsk[];
   /** When the PR's agent review was skipped. */
@@ -54,6 +57,7 @@ function view(pullRequests: PullRequest[], local: Local = {}, merged: PullReques
     owners: local.owner === null ? {} : { [KEY]: local.owner ?? owner() },
     requests: new Map(local.requests ? [[KEY, local.requests]] : []),
     ciFixes: new Map(local.ciFix ? [[KEY, local.ciFix]] : []),
+    feedbackFixes: new Map(local.feedbackFix ? [[KEY, local.feedbackFix]] : []),
     reviews: new Map(local.review ? [[KEY, local.review]] : []),
     approvals: new Map(local.approvals ? [[KEY, local.approvals]] : []),
     reviewSkips: new Map(local.skippedAt ? [[KEY, local.skippedAt]] : []),
@@ -79,8 +83,8 @@ const green = [{ name: "test", state: "passed" as const }];
 const passed: AgentReview = { repo: "acme/api", number: 1, headSha: "aaa", verdict: "passed", findings: 0, summary: null, reviewedAt: minutesAgo(60) };
 
 test("lanes come in the order work moves, then Merged", () => {
-  expect(view([]).lanes.map((lane) => lane.id)).toEqual(["draft", "agent-review", "human-review", "approved-blocked", "ready", "merged"]);
-  expect(view([]).lanes.filter((lane) => lane.hot).map((lane) => lane.id)).toEqual(["approved-blocked", "ready"]);
+  expect(view([]).lanes.map((lane) => lane.id)).toEqual(["draft", "agent-review", "changes-requested", "human-review", "approved-blocked", "ready", "merged"]);
+  expect(view([]).lanes.filter((lane) => lane.hot).map((lane) => lane.id)).toEqual(["changes-requested", "approved-blocked", "ready"]);
 });
 
 test("a board that never loaded has no lanes, and says why", () => {
@@ -230,6 +234,58 @@ describe("Fix CI", () => {
   test("a newer request outranks the last result", () => {
     const view = card(pr(), { ciFix: ciFix({ verdict: "not-fixed" }), requests: { "fix-ci": minutesAgo(1) } });
     expect(rowOf(view, "ci")?.running).toBe(true);
+    expect(view.notices).toEqual([]);
+  });
+});
+
+describe("Changes requested", () => {
+  const said = (author: string, at: string, body = "Can you add the gov team here too?"): PrComment => ({
+    author,
+    authorIsBot: false,
+    body,
+    url: `https://github.com/acme/api/pull/1#discussion-${author}`,
+    at,
+  });
+  const thread = (last: PrComment, overrides: Partial<ReviewThread> = {}): ReviewThread => ({
+    resolved: false,
+    outdated: false,
+    path: "src/cache.ts",
+    first: said("sara", minutesAgo(90)),
+    last,
+    ...overrides,
+  });
+  const withThreads = (threads: ReviewThread[], overrides: Partial<PullRequest> = {}) =>
+    pr({ checks: green, discussion: { changeRequests: [], threads, comments: [] }, ...overrides });
+  const addressed: FeedbackFix = { repo: "acme/api", number: 1, headSha: "aaa", verdict: "addressed", summary: "Added it. Reply: done.", recordedAt: minutesAgo(10) };
+
+  test("lists each piece of feedback, opening it on GitHub, and offers Address Feedback", () => {
+    const view = card(withThreads([thread(said("sara", minutesAgo(90)))]));
+    expect(view.lane).toBe("changes-requested");
+    expect(rowOf(view, "feedback")).toMatchObject({
+      value: "1 to address",
+      items: [{ text: "sara: Can you add the gov team here too?", note: "2h ago", link: "https://github.com/acme/api/pull/1#discussion-sara" }],
+    });
+    expect(steps(view)).toEqual(["Address Feedback"]);
+  });
+
+  test("once the agent's fix cleared the feedback, a notice still opens the replies it drafted, until you reply", () => {
+    const fixed = withThreads([thread(said("sara", minutesAgo(90)), { outdated: true })]);
+    const view = card(fixed, { feedbackFix: addressed });
+    expect(view.lane).not.toBe("changes-requested");
+    expect(view.notices).toMatchObject([{ text: "Agent addressed feedback: replies to post", detail: { verdict: "Addressed", summary: "Added it. Reply: done." } }]);
+
+    const replied = withThreads([thread(said("me", minutesAgo(2)), { outdated: true })]);
+    expect(notices(card(replied, { feedbackFix: addressed }))).toEqual([]);
+  });
+
+  test("replying to one thread keeps the drafts on the card while another it covered is still open", () => {
+    const partly = withThreads([thread(said("me", minutesAgo(2)), { outdated: true }), thread(said("sara", minutesAgo(90)))]);
+    expect(notices(card(partly, { feedbackFix: addressed }))).toEqual(["Agent addressed feedback: replies to post"]);
+  });
+
+  test("feedback that came after the agent's result outranks it", () => {
+    const view = card(withThreads([thread(said("sara", minutesAgo(1)))]), { feedbackFix: addressed });
+    expect(view.lane).toBe("changes-requested");
     expect(view.notices).toEqual([]);
   });
 });

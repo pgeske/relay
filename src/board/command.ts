@@ -12,15 +12,17 @@ import {
   agentRequests,
   agentReviewSkips,
   approvalAsks,
+  commentVerdicts,
   latestAgentReviews,
   latestCiFixes,
+  latestFeedbackFixes,
   openBoardStore,
   recordAgentReview,
   recordApprovalAsk,
   recordApprovalBump,
   recordCiFix,
+  recordFeedbackFix,
   type AgentVerdict,
-  type CiFixVerdict,
 } from "./store.ts";
 
 export const BOARD_HELP = `relay board: where each of your pull requests is, from draft to merged.
@@ -36,6 +38,9 @@ Usage:
   relay board ci-fix <pr> --fixed|--not-fixed [--summary <text|->]
                                       Record how a Fix CI request went: what failed, whether
                                       it was flaky, and what was done (or why it couldn't be)
+  relay board feedback <pr> --addressed|--not-addressed [--summary <text|->]
+                                      Record how an Address Feedback request went: what changed
+                                      for each piece of feedback, and the replies drafted
   relay board approval <pr> --asked --for <reviewer>[,<reviewer>…] --channel <channel> --slack <link>
                                       Record that you drafted a Slack message asking these
                                       reviewers (GitHub logins or team slugs) for the PR's
@@ -95,6 +100,8 @@ export async function assembleBoard(data: BoardData, config: BoardConfig, live?:
     return buildBoard(data, config.gateChecks, {
       reviews: latestAgentReviews(db),
       ciFixes: latestCiFixes(db),
+      feedbackFixes: latestFeedbackFixes(db),
+      commentVerdicts: commentVerdicts(db),
       requests: agentRequests(db),
       approvals: approvalAsks(db),
       reviewSkips: agentReviewSkips(db),
@@ -163,24 +170,28 @@ async function recordReview(args: string[]): Promise<void> {
   console.log(`recorded agent review of ${repo}#${number} at ${pr.headSha.slice(0, 7)}: ${result}`);
 }
 
-async function recordCiFixResult(args: string[]): Promise<void> {
+/** Records how a Fix CI or Address Feedback request went, against the PR's head commit: after pushed fixes, that's the last of them. */
+async function recordStepResult(args: string[], step: "ci-fix" | "feedback"): Promise<void> {
   const [rawRef] = args;
   if (!rawRef) throw new Error(`missing <pr>\n\n${BOARD_HELP}`);
-  const fixed = args.includes("--fixed");
-  if (fixed === args.includes("--not-fixed")) throw new Error("give exactly one of --fixed or --not-fixed");
-  const verdict: CiFixVerdict = fixed ? "fixed" : "not-fixed";
+  const [yes, no] = step === "ci-fix" ? ["--fixed", "--not-fixed"] : ["--addressed", "--not-addressed"];
+  const done = args.includes(yes);
+  if (done === args.includes(no)) throw new Error(`give exactly one of ${yes} or ${no}`);
 
   const { repo, number } = parsePrRef(rawRef);
   const summary = await readSummary(flagValue(args, "--summary"));
-  // After a pushed fix the head is the fix, so the board shows the result until the next commit.
   const pr = await fetchPullRequest(sourceFor(loadBoardConfig(), repo), repo, number);
+  const result = { repo, number, headSha: pr.headSha, summary, recordedAt: new Date().toISOString() };
   const db = openBoardStore();
   try {
-    recordCiFix(db, { repo, number, headSha: pr.headSha, verdict, summary, recordedAt: new Date().toISOString() });
+    if (step === "ci-fix") recordCiFix(db, { ...result, verdict: done ? "fixed" : "not-fixed" });
+    else recordFeedbackFix(db, { ...result, verdict: done ? "addressed" : "not-addressed" });
   } finally {
     db.close();
   }
-  console.log(`recorded CI fix of ${repo}#${number} at ${pr.headSha.slice(0, 7)}: ${fixed ? "fixed" : "not fixed"}`);
+  const what = step === "ci-fix" ? "CI fix" : "feedback fix";
+  // "--not-fixed" → "not fixed".
+  console.log(`recorded ${what} of ${repo}#${number} at ${pr.headSha.slice(0, 7)}: ${(done ? yes : no).slice(2).replace("-", " ")}`);
 }
 
 /** `--summary -` reads stdin, so an agent can pass a long multi-line write-up through a heredoc. */
@@ -322,7 +333,8 @@ function openApp(): void {
 export async function boardCommand(args: string[]): Promise<void> {
   const [subcommand, ...rest] = args;
   if (subcommand === "review") return recordReview(rest);
-  if (subcommand === "ci-fix") return recordCiFixResult(rest);
+  if (subcommand === "ci-fix") return recordStepResult(rest, "ci-fix");
+  if (subcommand === "feedback") return recordStepResult(rest, "feedback");
   if (subcommand === "approval") return recordApproval(rest);
   if (subcommand === "claim") return claim(rest);
   if (subcommand === "--help" || subcommand === "-h" || subcommand === "help") {

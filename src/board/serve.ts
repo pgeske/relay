@@ -7,6 +7,7 @@ import { parsePaneTitle } from "../server/sessions.ts";
 import { listOmpPanes, mainSessionName, newWindow, pasteText, selectWindow } from "../tmux.ts";
 import { assembleBoard, describeOwner, liveSessions, parsePrRef, sourceFor } from "./command.ts";
 import { loadBoardConfig } from "./config.ts";
+import { openFeedback, judgeComments, type FeedbackItem } from "./feedback.ts";
 import { closePullRequest, fetchBoardData, fetchPullRequest, type BoardData } from "./github.ts";
 import { REQUEST_MAX_AGE_MS, approvalState, requestProgress, waitingAsks, type ApprovalState, type CardOwner } from "./lanes.ts";
 import { prOwner, readSessionHeader } from "./owners.ts";
@@ -15,8 +16,10 @@ import {
   AGENT_ACTIONS,
   agentRequests,
   approvalAsks,
+  commentVerdicts,
   latestAgentReviews,
   latestCiFixes,
+  latestFeedbackFixes,
   openBoardStore,
   recordAgentRequest,
   requireAgentReview,
@@ -45,6 +48,8 @@ export async function fetchBoardView(): Promise<BoardView> {
   let error: string | undefined;
   try {
     lastGood = { data: await fetchBoardData(config, { reviewRequests: false, recheck: recentMergeRequests() }), at: new Date() };
+    // Comments that may ask for a change get read in the background; later refreshes show what they asked.
+    judgeComments(lastGood.data.mine.filter((pr) => pr.state === "OPEN" && !pr.isDraft));
   } catch (failure) {
     error = failure instanceof Error ? failure.message : String(failure);
   }
@@ -112,6 +117,31 @@ function fixCiPrompt(url: string): string {
   );
 }
 
+/** The feedback as a prompt lists it: who, about which file, the start of what they said, and where. */
+function feedbackLine(item: FeedbackItem, index: number): string {
+  const what = item.kind === "changes-requested" ? "requested changes" : item.kind === "thread" ? `commented on ${item.path}` : "commented";
+  const said = item.body.replace(/\s+/g, " ").trim();
+  return `(${index + 1}) ${item.author} ${what}${said ? `: "${said.length > 160 ? `${said.slice(0, 159)}…` : said}"` : ""} (${item.url})`;
+}
+
+/**
+ * Addresses what reviewers asked that the PR hasn't answered. Fixes go in as new commits; replies
+ * are only drafted, since posting on GitHub needs the user's say-so.
+ */
+export function addressFeedbackPrompt(url: string, { feedback }: Pick<PromptContext, "feedback">): string {
+  const which = feedback.length
+    ? `Reviewers left feedback it hasn't answered yet: ${feedback.map(feedbackLine).join("; ")}.`
+    : "Reviewers left feedback it hasn't answered yet: find it on the PR (requested changes, open review threads, and conversation comments asking for something).";
+  return (
+    `I pressed Address Feedback on the relay board for ${url}. ${which} ` +
+    `Read each one in full on GitHub with gh, with the rest of its thread. Fix what they asked with new signed commits and push them ` +
+    `(never force-push or amend shared history). Where you disagree, or a question needs an answer rather than code, don't change code for it. ` +
+    `Draft a short reply to each one (what changed, or the answer), but don't post anything on GitHub (comments, replies, reviews, or resolving threads) until I say so. ` +
+    `Then record it with \`relay board feedback ${url} --addressed --summary -\`, putting on stdin (a heredoc) each piece of feedback with what you changed or why not, ` +
+    `and the reply you drafted; if you can't address it, record \`--not-addressed\` with why. Then tell me what you changed and show me the replies.`
+  );
+}
+
 /** Slack asks are only ever drafted: Philip reads and sends them himself. */
 const DRAFT_ONLY =
   `Only ever draft, with the Slack MCP draft tool (slack_send_message_draft); never send or schedule a message, since I send drafts myself.`;
@@ -121,6 +151,8 @@ interface PromptContext {
   approval: ApprovalState;
   /** Who approved the PR so far; empty when GitHub didn't answer. */
   approvedBy: string[];
+  /** What reviewers asked that it hasn't answered; empty when GitHub didn't answer. */
+  feedback: FeedbackItem[];
 }
 
 /**
@@ -128,7 +160,7 @@ interface PromptContext {
  * none listed, the session works out who. It first looks for asks the user already sent outside the
  * board, and links those instead of drafting again.
  */
-export function askApprovalPrompt(url: string, { approval, approvedBy }: PromptContext): string {
+export function askApprovalPrompt(url: string, { approval, approvedBy }: Pick<PromptContext, "approval" | "approvedBy">): string {
   const { unasked } = approval;
   const { repo, number } = parsePrRef(url);
   const asked = approval.asks.flatMap((ask) => (ask.reviewer ? [`${ask.reviewer}${ask.channel ? ` in ${ask.channel}` : ""}`] : []));
@@ -157,7 +189,7 @@ export function askApprovalPrompt(url: string, { approval, approvedBy }: PromptC
 }
 
 /** Bumps each ask whose reviewer hasn't approved yet, in its own thread; asks whose reviewer approved are left out. */
-export function bumpPrompt(url: string, { approval, approvedBy }: PromptContext): string {
+export function bumpPrompt(url: string, { approval, approvedBy }: Pick<PromptContext, "approval" | "approvedBy">): string {
   const asks = waitingAsks(approval).map((ask, index) =>
     ask.reviewer
       ? `(${index + 1}) the ask to ${ask.reviewer}${ask.channel ? ` in ${ask.channel}` : ""}, which the board has at ${ask.slackUrl}` +
@@ -186,6 +218,7 @@ const REQUESTS: Record<AgentAction, { prompt: (url: string, context: PromptConte
   review: { prompt: reviewPrompt, asked: "review", running: "reviewing" },
   merge: { prompt: mergePrompt, asked: "merge", running: "merging" },
   "fix-ci": { prompt: fixCiPrompt, asked: "fix CI on", running: "fixing CI on" },
+  "address-feedback": { prompt: addressFeedbackPrompt, asked: "address the feedback on", running: "addressing the feedback on" },
   "ask-approval": { prompt: askApprovalPrompt, asked: "draft Slack approval asks for", running: "drafting approval asks for" },
   bump: { prompt: bumpPrompt, asked: "draft Slack bumps for", running: "drafting bumps for" },
 };
@@ -304,9 +337,11 @@ export async function runBoardAction(action: string, prRef: string): Promise<Boa
   const db = openBoardStore();
   let owner;
   let asks;
+  let verdicts;
   try {
     owner = prOwner(db, repo, number);
     asks = approvalAsks(db).get(`${repo}#${number}`) ?? [];
+    verdicts = commentVerdicts(db);
   } finally {
     db.close();
   }
@@ -331,7 +366,8 @@ export async function runBoardAction(action: string, prRef: string): Promise<Boa
       return { status: 409, message: `${repo}#${number} has nothing to bump: ${why}` };
     }
     const url = `https://github.com/${repo}/pull/${number}`;
-    const reopened = await promptSession(owner.sessionFile, card.live, name, REQUESTS[action].prompt(url, { approval, approvedBy: pr?.approvedBy ?? [] }));
+    const context: PromptContext = { approval, approvedBy: pr?.approvedBy ?? [], feedback: pr ? openFeedback(pr, verdicts) : [] };
+    const reopened = await promptSession(owner.sessionFile, card.live, name, REQUESTS[action].prompt(url, context));
     const store = openBoardStore();
     try {
       recordAgentRequest(store, repo, number, action, new Date().toISOString(), pr?.headSha ?? null);
@@ -351,7 +387,7 @@ function runningRequest(repo: string, number: number, approval: ApprovalState, l
   const db = openBoardStore();
   try {
     // The PR is still open: its card offered the button, and merging takes the card away.
-    const results = { mergedAt: null, review: latestAgentReviews(db).get(key), ciFix: latestCiFixes(db).get(key), approval };
+    const results = { mergedAt: null, review: latestAgentReviews(db).get(key), ciFix: latestCiFixes(db).get(key), feedbackFix: latestFeedbackFixes(db).get(key), approval };
     const progress = requestProgress(agentRequests(db).get(key), results, live, new Date());
     return AGENT_ACTIONS.find((action) => progress[action] === "running");
   } finally {

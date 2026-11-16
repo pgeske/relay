@@ -1,4 +1,5 @@
 import { AGENT_COMMAND } from "../tmux.ts";
+import { authorRepliedSince, type FeedbackItem } from "./feedback.ts";
 import type { PullRequest } from "./github.ts";
 import {
   type AgentReviewState,
@@ -8,6 +9,7 @@ import {
   type BoardCard,
   type CardOwner,
   type CiFixState,
+  type FeedbackFixState,
   type CiState,
   type Lane,
   type RequestProgress,
@@ -39,6 +41,7 @@ export type BoardAction = (typeof BOARD_ACTIONS)[number];
 const LANES: { id: Lane; title: string; hint: string; hot: boolean }[] = [
   { id: "draft", title: "Draft", hint: "Still being shaped", hot: false },
   { id: "agent-review", title: "Agent review", hint: "No passing review of the current commit", hot: false },
+  { id: "changes-requested", title: "Changes requested", hint: "Reviewers asked for something you haven't answered yet", hot: true },
   { id: "human-review", title: "Human review", hint: "Waiting on people's approvals", hot: false },
   { id: "approved-blocked", title: "Approved · blocked", hint: "All approvals in; CI or GitHub says not yet", hot: true },
   { id: "ready", title: "Ready to merge", hint: "Approved and green", hot: true },
@@ -53,6 +56,12 @@ const STEPS: Record<AgentAction, { button?: string; does: string; running: strin
   review: { button: "Review", does: "review this PR", running: "Agent reviewing…", stalled: "Review stopped without a result" },
   merge: { button: "Merge", does: "merge this PR", running: "Agent merging…", stalled: "Merge stopped without a result" },
   "fix-ci": { does: "fix this PR's failing CI", running: "Agent fixing CI…", stalled: "CI fix stopped without a result" },
+  "address-feedback": {
+    button: "Address Feedback",
+    does: "fix what reviewers asked and draft replies (you post them)",
+    running: "Agent addressing feedback…",
+    stalled: "Feedback fix stopped without a result",
+  },
   "ask-approval": {
     button: "Ask for Approval",
     does: "draft a Slack message asking each reviewer it still waits on for approval (you send it)",
@@ -89,6 +98,12 @@ const CONFIRMS: Partial<Record<BoardAction, (target: StepTarget) => Confirm>> = 
     title: `Fix CI on ${ref}?`,
     message: "Asks the session in charge to find out why CI failed, then retry flaky jobs or push a fix.",
     button: "Fix CI",
+    destructive: false,
+  }),
+  "address-feedback": ({ ref }) => ({
+    title: `Address the feedback on ${ref}?`,
+    message: "Asks the session in charge to fix what reviewers asked with new commits, and draft a reply to each. It posts nothing on GitHub until you say so.",
+    button: "Address Feedback",
     destructive: false,
   }),
   "ask-approval": ({ ref, approval }) => ({
@@ -164,7 +179,7 @@ export interface DetailView {
 }
 
 /** What a status row is about; the app picks each kind's symbol. */
-export type RowKind = "ci" | "agent" | "approvals" | "slack";
+export type RowKind = "ci" | "feedback" | "agent" | "approvals" | "slack";
 
 /** One line of a row that lists several things, like each Slack ask for the PR's approval. */
 export interface RowItemView {
@@ -298,7 +313,7 @@ export function timeAgo(iso: string, now: Date): string {
   return hours < 24 ? `${hours}h ago` : `${Math.round(hours / 24)}d ago`;
 }
 
-const LABELS: Record<RowKind, string> = { ci: "CI", agent: "Agent", approvals: "Approvals", slack: "Slack" };
+const LABELS: Record<RowKind, string> = { ci: "CI", feedback: "Feedback", agent: "Agent", approvals: "Approvals", slack: "Slack" };
 
 function row(kind: RowKind, tone: Tone, value: string, extra: Partial<Omit<RowView, "kind" | "label" | "tone" | "value">> = {}): RowView {
   return { kind, label: LABELS[kind], value, tone, hint: null, running: false, action: null, detail: null, link: null, items: [], ...extra };
@@ -317,16 +332,54 @@ function stepAction(action: AgentAction, target: StepTarget, hint: string, stall
   return { action, label, hint, running: STEPS[action].running, confirm: CONFIRMS[action]?.(target) ?? null, stalled };
 }
 
-function ciFixDetail(fix: Extract<CiFixState, { status: "fixed" | "not-fixed" }>): DetailView {
-  return {
-    title: "CI fix",
-    verdict: fix.status === "fixed" ? "Fixed" : "Couldn't fix",
-    tone: fix.status === "fixed" ? "ok" : "bad",
-    commit: fix.headSha.slice(0, 7),
-    at: fix.recordedAt,
-    note: null,
-    summary: fix.summary,
-  };
+/** How a step's recorded result reads when its row or notice is clicked. */
+const RESULT_VERDICTS: Record<"fixed" | "not-fixed" | "addressed" | "not-addressed", [string, Tone]> = {
+  fixed: ["Fixed", "ok"],
+  "not-fixed": ["Couldn't fix", "bad"],
+  addressed: ["Addressed", "ok"],
+  "not-addressed": ["Couldn't address", "bad"],
+};
+
+function stepResultDetail(title: string, result: Exclude<CiFixState | FeedbackFixState, { status: "not-run" }>): DetailView {
+  const [verdict, tone] = RESULT_VERDICTS[result.status];
+  return { title, verdict, tone, commit: result.headSha.slice(0, 7), at: result.recordedAt, note: null, summary: result.summary };
+}
+
+function clipped(text: string, max: number): string {
+  return text.length > max ? `${text.slice(0, max - 1)}…` : text;
+}
+
+/** The feedback row: what reviewers asked that the PR hasn't answered, a line each, opening it on GitHub. Requested changes come in red. */
+function feedbackRow(feedback: FeedbackItem[], now: Date): RowView | null {
+  const items = feedback.map((item): RowItemView => {
+    const said = item.body.replace(/\s+/g, " ").trim();
+    return {
+      text: said ? `${item.author}: ${clipped(said, 60)}` : `${item.author} requested changes`,
+      note: timeAgo(item.at, now),
+      tone: item.kind === "changes-requested" ? "bad" : "warn",
+      hint: `${clipped(said, 300) || "Requested changes"}\n\nOpen${item.path ? ` on ${item.path}` : ""} on GitHub`,
+      link: item.url,
+      done: false,
+    };
+  });
+  const [first] = items;
+  return first ? row("feedback", first.tone, `${feedback.length} to address`, { hint: first.hint, link: first.link, items }) : null;
+}
+
+/**
+ * What the session did about the feedback, as a notice that opens its write-up: its fixes often
+ * clear the feedback, but the replies it drafted still wait on you. The result gives way to newer
+ * commits, newer feedback, or a newer request. One that addressed it stays while any feedback it
+ * covered is still open, and once none is, until you reply.
+ */
+function feedbackFixNotice(card: BoardCard): NoticeView | null {
+  const { pr, feedback, feedbackFix, requests } = card;
+  if (requests["address-feedback"] !== "none" || feedbackFix.status === "not-run" || feedbackFix.stale) return null;
+  if (feedback.some((item) => item.at > feedbackFix.recordedAt)) return null;
+  const detail = stepResultDetail("Feedback fix", feedbackFix);
+  if (feedbackFix.status === "not-addressed") return notice("bad", "Agent couldn't address the feedback", { hint: "See why the agent couldn't address it", detail });
+  if (feedback.length === 0 && authorRepliedSince(pr, feedbackFix.recordedAt)) return null;
+  return notice("warn", "Agent addressed feedback: replies to post", { hint: "See what the agent changed and the replies it drafted", detail });
 }
 
 /**
@@ -342,7 +395,7 @@ function ciParts(card: BoardCard, target: StepTarget, owner: CardOwner | undefin
   const fixHint = owner?.live ? "Ask the session to fix CI" : "Reopen the session in relay and ask it to fix CI";
   // A CI-fix result speaks only for the commit it was recorded at, and a newer request outranks it.
   const fix = requests["fix-ci"] === "none" && ciFix.status !== "not-run" && !ciFix.stale ? ciFix : null;
-  const fixDetail = fix ? ciFixDetail(fix) : null;
+  const fixDetail = fix ? stepResultDetail("CI fix", fix) : null;
   const fixedHint = "An agent fixed CI on this commit: see what it did";
 
   if (requests["fix-ci"] === "running") return { row: row("ci", "wait", `${value} · agent fixing…`, { hint: "The session is fixing CI", running: true }), notices: [] };
@@ -502,7 +555,7 @@ function cardBase(pr: PullRequest, now: Date, chips: Map<string, TaskChipView>):
 
 /** Lanes whose cards show the agent review, and the ones that show people's approvals. */
 const AGENT_LANES: Lane[] = ["agent-review", "human-review"];
-const APPROVAL_LANES: Lane[] = ["human-review", "approved-blocked", "ready"];
+const APPROVAL_LANES: Lane[] = ["changes-requested", "human-review", "approved-blocked", "ready"];
 
 /** A menu control that acts right away, without a session. */
 function menuAction(action: "skip-review" | "require-review", label: string, hint: string): ActionView {
@@ -516,6 +569,7 @@ function laneCard(boardCard: BoardCard, lane: Lane, owners: Board["owners"], chi
   const owner = owners[ref];
   const offered: AgentAction[] = [];
   if (lane === "agent-review") offered.push("review");
+  if (lane === "changes-requested") offered.push("address-feedback");
   if (lane === "ready") offered.push("merge");
   // Human review moves on through Slack: ask each reviewer once, then bump the asks still waiting.
   if (lane === "human-review") offered.push(approvalStep(boardCard.approval));
@@ -523,10 +577,14 @@ function laneCard(boardCard: BoardCard, lane: Lane, owners: Board["owners"], chi
   const busy = AGENT_ACTIONS.find((action) => requests[action] === "running") ?? null;
 
   const ci = ciParts(boardCard, target, owner, busy);
+  // A draft's feedback waits until it's ready for review; in later lanes it shows without holding the PR back.
+  const drafting = lane === "draft";
+  const feedbackFix = drafting ? null : feedbackFixNotice(boardCard);
   const showsAgent = AGENT_LANES.includes(lane);
   const approvals = APPROVAL_LANES.includes(lane) ? approvalsParts(boardCard, lane) : null;
   const rows = [
     ci.row,
+    drafting ? null : feedbackRow(boardCard.feedback, now),
     showsAgent ? agentRow(boardCard.agentReview, requests.review, boardCard.agentReviewSkippedAt !== null) : null,
     approvals?.row ?? null,
     lane === "human-review" ? slackRow(boardCard.approval, now) : null,
@@ -535,7 +593,7 @@ function laneCard(boardCard: BoardCard, lane: Lane, owners: Board["owners"], chi
   // A stopped request needs you while its step is still the card's next one, which then offers it again.
   // One for a step the PR has moved past (or back from) is moot. A stopped CI fix is the CI row's or its own notice.
   const stalled = offered.filter((action) => requests[action] === "stalled").map((action) => notice("warn", STEPS[action].stalled));
-  const notices = [...ci.notices, ...stalled, ...(approvals?.notices ?? [])];
+  const notices = [...ci.notices, ...(feedbackFix ? [feedbackFix] : []), ...stalled, ...(approvals?.notices ?? [])];
 
   // A step's request shows where its button was, so the card keeps its shape; a CI fix, in the CI row it was asked from.
   const running = busy && busy !== "fix-ci" ? STEPS[busy].running : null;

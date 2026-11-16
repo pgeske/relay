@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { DATA_DIR } from "../paths.ts";
 import { createTaskTables } from "./taskStore.ts";
 
-/** State GitHub doesn't know about lives here: agent reviews and CI fixes, approval asks in Slack, which session owns each PR, what the board asked of it, which PRs skip their agent review, and your tasks. */
+/** State GitHub doesn't know about lives here: agent reviews, CI fixes, and feedback fixes, approval asks in Slack, which PR comments ask for a change, which session owns each PR, what the board asked of it, which PRs skip their agent review, and your tasks. */
 export const BOARD_DB_PATH = join(DATA_DIR, "board.db");
 
 export type AgentVerdict = "passed" | "findings";
@@ -55,8 +55,22 @@ interface CiFixRow {
   recorded_at: string;
 }
 
+export type FeedbackVerdict = "addressed" | "not-addressed";
+
+/** What an agent reported after the board asked it to address reviewers' feedback on a PR. */
+export interface FeedbackFix {
+  repo: string;
+  number: number;
+  /** The PR's head commit when the result was recorded: after pushed fixes, the last of them. */
+  headSha: string;
+  verdict: FeedbackVerdict;
+  /** What it changed for each piece of feedback, and the replies it drafted for the user to post. Null when recorded without one. */
+  summary: string | null;
+  recordedAt: string;
+}
+
 /** The steps a board button asks a PR's session to take. */
-export const AGENT_ACTIONS = ["review", "merge", "fix-ci", "ask-approval", "bump"] as const;
+export const AGENT_ACTIONS = ["review", "merge", "fix-ci", "address-feedback", "ask-approval", "bump"] as const;
 export type AgentAction = (typeof AGENT_ACTIONS)[number];
 
 /** When the board last sent each kind of request to a PR's session. */
@@ -154,6 +168,31 @@ export function openBoardStore(path = BOARD_DB_PATH): Database {
     summary TEXT,
     recorded_at TEXT NOT NULL,
     PRIMARY KEY (repo, number, head_sha)
+  )`);
+  // What an agent reported after the board asked it to address reviewers' feedback, per commit it was recorded at.
+  db.run(`CREATE TABLE IF NOT EXISTS feedback_fixes (
+    repo TEXT NOT NULL,
+    number INTEGER NOT NULL,
+    head_sha TEXT NOT NULL,
+    verdict TEXT NOT NULL CHECK (verdict IN ('addressed', 'not-addressed')),
+    summary TEXT,
+    recorded_at TEXT NOT NULL,
+    PRIMARY KEY (repo, number, head_sha)
+  )`);
+  // Whether a PR comment asks its author for a change, as relay's model judged it, once per comment.
+  db.run(`CREATE TABLE IF NOT EXISTS comment_verdicts (
+    url TEXT PRIMARY KEY,
+    asks_change INTEGER NOT NULL,
+    judged_at TEXT NOT NULL
+  )`);
+  // Reviewer agents relay's watcher looked at in a session's log, so each is matched to a PR once,
+  // even across restarts: by session file, run id, and when it started.
+  db.run(`CREATE TABLE IF NOT EXISTS reviewer_runs_seen (
+    session_file TEXT NOT NULL,
+    run_id TEXT NOT NULL,
+    started_at TEXT NOT NULL,
+    seen_at TEXT NOT NULL,
+    PRIMARY KEY (session_file, run_id, started_at)
   )`);
   // The latest time the board sent a PR's session each kind of request. Whether it has finished is
   // read from elsewhere: a review, CI fix, approval ask, or bump recorded after it, or the PR merging.
@@ -281,6 +320,57 @@ export function latestCiFixes(db: Database): Map<string, CiFix> {
       },
     ]),
   );
+}
+
+/** Records a feedback-fix result; recording again at the same commit replaces the earlier one. */
+export function recordFeedbackFix(db: Database, fix: FeedbackFix): void {
+  db.query(
+    `INSERT OR REPLACE INTO feedback_fixes (repo, number, head_sha, verdict, summary, recorded_at)
+     VALUES ($repo, $number, $headSha, $verdict, $summary, $recordedAt)`,
+  ).run({
+    $repo: fix.repo,
+    $number: fix.number,
+    $headSha: fix.headSha,
+    $verdict: fix.verdict,
+    $summary: fix.summary,
+    $recordedAt: fix.recordedAt,
+  });
+}
+
+/** The most recent feedback-fix result of every PR, keyed by "owner/repo#number". */
+export function latestFeedbackFixes(db: Database): Map<string, FeedbackFix> {
+  const rows = db
+    .query<{ repo: string; number: number; head_sha: string; verdict: FeedbackVerdict; summary: string | null; recorded_at: string }, []>(
+      `SELECT * FROM feedback_fixes f WHERE recorded_at = (
+         SELECT MAX(recorded_at) FROM feedback_fixes WHERE repo = f.repo AND number = f.number)`,
+    )
+    .all();
+  return new Map(
+    rows.map((row) => [
+      `${row.repo}#${row.number}`,
+      { repo: row.repo, number: row.number, headSha: row.head_sha, verdict: row.verdict, summary: row.summary, recordedAt: row.recorded_at },
+    ]),
+  );
+}
+
+export function recordCommentVerdict(db: Database, url: string, asksChange: boolean, judgedAt: string): void {
+  db.query("INSERT OR REPLACE INTO comment_verdicts (url, asks_change, judged_at) VALUES (?, ?, ?)").run(url, asksChange ? 1 : 0, judgedAt);
+}
+
+/** Whether each judged PR comment asks for a change, keyed by the comment's URL. */
+export function commentVerdicts(db: Database): Map<string, boolean> {
+  const rows = db.query<{ url: string; asks_change: number }, []>("SELECT url, asks_change FROM comment_verdicts").all();
+  return new Map(rows.map((row) => [row.url, row.asks_change === 1]));
+}
+
+/** Which of these reviewer runs of a session the watcher looked at already, as "runId|startedAt". */
+export function seenReviewerRuns(db: Database, sessionFile: string): Set<string> {
+  const rows = db.query<{ run_id: string; started_at: string }, [string]>("SELECT run_id, started_at FROM reviewer_runs_seen WHERE session_file = ?").all(sessionFile);
+  return new Set(rows.map((row) => `${row.run_id}|${row.started_at}`));
+}
+
+export function markReviewerRunSeen(db: Database, sessionFile: string, run: { id: string; startedAt: string }, seenAt: string): void {
+  db.query("INSERT OR IGNORE INTO reviewer_runs_seen (session_file, run_id, started_at, seen_at) VALUES (?, ?, ?, ?)").run(sessionFile, run.id, run.startedAt, seenAt);
 }
 
 /**

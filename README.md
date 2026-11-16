@@ -82,11 +82,17 @@ The board's second view lines up your open PRs by how close they are to shipping
 |---|---|---|
 | **Draft** | Still being shaped | — |
 | **Agent review** | Ready, but no reviewer agent has passed it yet | **Review** |
+| **Changes requested** | A reviewer asked for something you haven't answered yet | **Address Feedback** |
 | **Human review** | Waiting on people's approvals | **Ask for Approval**, then **Bump** |
 | **Approved · blocked** | Approved, but CI or GitHub isn't happy yet | Fix what's blocking it |
 | **Ready to merge** | Good to go | **Merge** |
 
-Every button hands the work to the agent session that opened the PR, so its whole history stays in one place. Red CI gets a **Fix CI** button in any lane. Approval asks and bumps are always **Slack drafts**: you read them and hit send yourself.
+Every button hands the work to the agent session that opened the PR, so its whole history stays in one place. Red CI gets a **Fix CI** button in any lane. Approval asks and bumps are always **Slack drafts**: you read them and hit send yourself. **Address Feedback** works the same way: the agent pushes fixes, but only drafts its replies to reviewers, for you to post.
+
+The PR board keeps itself current like the task board does:
+
+- **Feedback shows up on its own.** A card lists each open request for changes, review thread, and comment that asks for something, linking to it. Relay's small model reads plain comments once each, so a "LGTM" doesn't count. Bots and your own comments never do. Push a fix or reply, and the PR goes back to Human review.
+- **Reviews count even when you didn't press Review.** If an agent runs a reviewer on its PR on its own and forgets to record it, relay spots the reviewer's report when the session stops and records it for the board.
 
 ## 🖥️ Terminal
 

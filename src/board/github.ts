@@ -40,10 +40,41 @@ export interface PullRequest {
   /** Reviewers (people, or teams by slug) still asked to review. */
   waitingOn: string[];
   headSha: string;
+  /** When the head commit was made; null when the query left it out. A stand-in for when it was pushed. */
+  headCommittedAt: string | null;
   updatedAt: string;
   mergedAt: string | null;
   /** Checks on the head commit. */
   checks: Check[];
+  /** What reviewers said: empty when the query left it out (merged PRs). See feedback.ts for what counts as still to address. */
+  discussion: Discussion;
+}
+
+/** One comment on a PR: on its conversation, a review's own text, or the start or end of a review thread. */
+export interface PrComment {
+  author: string;
+  authorIsBot: boolean;
+  body: string;
+  url: string;
+  at: string;
+}
+
+/** A conversation about some lines of the PR's code. */
+export interface ReviewThread {
+  resolved: boolean;
+  /** The lines it's about changed since, as after a fix. */
+  outdated: boolean;
+  path: string;
+  first: PrComment;
+  last: PrComment;
+}
+
+export interface Discussion {
+  /** Each reviewer's latest review, when it asked for changes. */
+  changeRequests: PrComment[];
+  threads: ReviewThread[];
+  /** People's conversation comments, and reviews that only commented, with text (no bots'): oldest first. */
+  comments: PrComment[];
 }
 
 /** The pull requests one board shows, before they are sorted into lanes. */
@@ -66,6 +97,21 @@ const REVIEW_FIELDS = `
   reviewDecision
   latestOpinionatedReviews(first: 30) { nodes { state author { login } onBehalfOf(first: 10) { nodes { slug } } } }
   reviewRequests(first: 30) { nodes { requestedReviewer { __typename ... on User { login } ... on Team { slug } } } }`;
+
+const COMMENT_FIELDS = "author { __typename login } body url";
+
+/**
+ * What reviewers said, and when the head commit was made, to tell what's still to address. Its own
+ * search, run alongside the others like REVIEW_FIELDS: review threads are heavy.
+ */
+const DISCUSSION_FIELDS = `
+  headCommit: commits(last: 1) { nodes { commit { committedDate } } }
+  changeRequests: latestOpinionatedReviews(first: 30) { nodes { state submittedAt ${COMMENT_FIELDS} } }
+  reviewThreads(last: 50) { nodes { isResolved isOutdated path
+    first: comments(first: 1) { nodes { createdAt ${COMMENT_FIELDS} } }
+    last: comments(last: 1) { nodes { createdAt ${COMMENT_FIELDS} } } } }
+  comments(last: 30) { nodes { createdAt ${COMMENT_FIELDS} } }
+  commentReviews: reviews(last: 30, states: [COMMENTED]) { nodes { submittedAt ${COMMENT_FIELDS} } }`;
 
 /**
  * Slower still (about 2s across every open PR), and only an approved PR's lane depends on it, so a
@@ -94,11 +140,11 @@ function searchQuery(fields: string, pageSize: number): string {
 const MAX_SEARCH_PAGES = 10;
 
 /**
- * One PR's state, head commit, and reviews: all that re-reading a lagging search result, recording a
- * result, or a step asking for approval needs.
+ * One PR's state, head commit, reviews, and discussion: all that re-reading a lagging search result,
+ * recording a result, or a step asking for approval or to address feedback needs.
  */
 const PR_QUERY = `query($owner: String!, $name: String!, $number: Int!) {
-  repository(owner: $owner, name: $name) { pullRequest(number: $number) { ${BASE_FIELDS} ${REVIEW_FIELDS} } }
+  repository(owner: $owner, name: $name) { pullRequest(number: $number) { ${BASE_FIELDS} ${REVIEW_FIELDS} ${DISCUSSION_FIELDS} } }
 }`;
 
 const FAILED_CONCLUSIONS: Record<string, true> = {
@@ -127,7 +173,19 @@ interface RawReviewFields {
   reviewRequests?: { nodes: { requestedReviewer: { __typename: string; login?: string; slug?: string } | null }[] };
 }
 
-interface RawPullRequest extends RawReviewFields {
+type RawAuthor = { __typename: string; login: string } | null;
+type RawComment = { author: RawAuthor; body: string; url: string; createdAt?: string; submittedAt?: string | null };
+
+/** The fields DISCUSSION_FIELDS reads, all absent when the query left them out. */
+interface RawDiscussionFields {
+  headCommit?: { nodes: { commit: { committedDate: string } }[] };
+  changeRequests?: { nodes: (RawComment & { state: string })[] };
+  reviewThreads?: { nodes: { isResolved: boolean; isOutdated: boolean; path: string; first: { nodes: RawComment[] }; last: { nodes: RawComment[] } }[] };
+  comments?: { nodes: RawComment[] };
+  commentReviews?: { nodes: RawComment[] };
+}
+
+interface RawPullRequest extends RawReviewFields, RawDiscussionFields {
   number: number;
   title: string;
   url: string;
@@ -137,8 +195,36 @@ interface RawPullRequest extends RawReviewFields {
   mergedAt: string | null;
   headRefOid: string;
   repository: { nameWithOwner: string };
-  author: { __typename: string; login: string } | null;
+  author: RawAuthor;
   commits?: { nodes: { commit: { statusCheckRollup: { contexts: { nodes: RawContext[] } } | null } }[] };
+}
+
+function isBot(author: RawAuthor): boolean {
+  return author?.__typename === "Bot" || (author?.login.endsWith("[bot]") ?? false);
+}
+
+function toComment(raw: RawComment): PrComment {
+  return { author: raw.author?.login ?? "ghost", authorIsBot: isBot(raw.author), body: raw.body, url: raw.url, at: raw.submittedAt ?? raw.createdAt ?? "" };
+}
+
+function toDiscussion(raw: RawDiscussionFields): Discussion {
+  // Bots' words (CI reports, plans, automated reviews) are never feedback, and can be long: threads
+  // a bot had the last word in, and bots' comments, are left out.
+  const threads = (raw.reviewThreads?.nodes ?? []).flatMap((thread) => {
+    const [first] = thread.first.nodes;
+    const [last] = thread.last.nodes;
+    if (!first || !last || isBot(last.author)) return [];
+    return [{ resolved: thread.isResolved, outdated: thread.isOutdated, path: thread.path, first: toComment(first), last: toComment(last) }];
+  });
+  const comments = [...(raw.comments?.nodes ?? []), ...(raw.commentReviews?.nodes ?? [])]
+    .filter((comment) => comment.body.trim() && !isBot(comment.author))
+    .map(toComment)
+    .toSorted((a, b) => a.at.localeCompare(b.at));
+  return {
+    changeRequests: (raw.changeRequests?.nodes ?? []).filter((review) => review.state === "CHANGES_REQUESTED").map(toComment),
+    threads,
+    comments,
+  };
 }
 
 function toCheck(context: RawContext): Check {
@@ -161,7 +247,7 @@ function toPullRequest(raw: RawPullRequest): PullRequest {
     title: raw.title,
     url: raw.url,
     author: raw.author?.login ?? "ghost",
-    authorIsBot: raw.author?.__typename === "Bot" || (raw.author?.login.endsWith("[bot]") ?? false),
+    authorIsBot: isBot(raw.author),
     isDraft: raw.isDraft,
     state: raw.state,
     reviewDecision: raw.reviewDecision ?? null,
@@ -173,9 +259,11 @@ function toPullRequest(raw: RawPullRequest): PullRequest {
       return name ? [name] : [];
     }),
     headSha: raw.headRefOid,
+    headCommittedAt: raw.headCommit?.nodes[0]?.commit.committedDate ?? null,
     updatedAt: raw.updatedAt,
     mergedAt: raw.mergedAt,
     checks: (rollup?.contexts.nodes ?? []).map(toCheck),
+    discussion: toDiscussion(raw),
   };
 }
 
@@ -230,18 +318,21 @@ async function search(source: BoardSource, filters: string, fields: string): Pro
 }
 
 /**
- * PRs with their CI, plus their reviews and (for approved ones) merge status from searches run
- * alongside: see REVIEW_FIELDS and MERGE_STATE.
+ * PRs with their CI, plus their reviews, discussion, and (for approved ones) merge status from
+ * searches run alongside: see REVIEW_FIELDS, DISCUSSION_FIELDS, and MERGE_STATE.
  */
 async function searchWithChecks(source: BoardSource, filters: string): Promise<PullRequest[]> {
-  const [prs, reviews, mergeStates] = await Promise.all([
+  const [prs, reviews, discussions, mergeStates] = await Promise.all([
     searchNodes<RawPullRequest>(source, filters, BASE_FIELDS + CHECK_FIELDS, 30),
     searchNodes<RawReviewFields & { url: string }>(source, filters, `url ${REVIEW_FIELDS}`, 100),
+    // Comment bodies can be long, so pages stay small.
+    searchNodes<RawDiscussionFields & { url: string }>(source, filters, `url ${DISCUSSION_FIELDS}`, 30),
     searchNodes<{ url: string; mergeStateStatus: MergeState }>(source, `${filters} review:approved`, `url ${MERGE_STATE}`, 100),
   ]);
   const reviewsByUrl = new Map(reviews.map((pr) => [pr.url, pr]));
+  const discussionsByUrl = new Map(discussions.map((pr) => [pr.url, pr]));
   const mergeStateByUrl = new Map(mergeStates.map((pr) => [pr.url, pr.mergeStateStatus]));
-  return prs.map((raw) => toPullRequest({ ...raw, ...reviewsByUrl.get(raw.url), mergeStateStatus: mergeStateByUrl.get(raw.url) }));
+  return prs.map((raw) => toPullRequest({ ...raw, ...reviewsByUrl.get(raw.url), ...discussionsByUrl.get(raw.url), mergeStateStatus: mergeStateByUrl.get(raw.url) }));
 }
 
 function uniqueByUrl(prs: PullRequest[]): PullRequest[] {

@@ -156,7 +156,7 @@ ${fields}
 }
 
 /** The first JSON object in a model's reply, which may wrap it in prose or a code fence. */
-function jsonObject(reply: string): Record<string, unknown> | null {
+export function jsonObject(reply: string): Record<string, unknown> | null {
   const start = reply.indexOf("{");
   const end = reply.lastIndexOf("}");
   if (start === -1 || end <= start) return null;
@@ -225,20 +225,27 @@ function applyToCurrent(db: Database, seen: Task, decision: StatusDecision & { a
   return `${decision.stage}: ${decision.status}${waits}`;
 }
 
-/** The PR steps whose results the watcher can record when the session forgot: a review, and a CI fix. */
-export type RecordableStep = "review" | "fix-ci";
+/** The PR steps whose results the watcher can record when the session forgot: a review, a CI fix, and addressing feedback. */
+export type RecordableStep = "review" | "fix-ci" | "address-feedback";
 
-export type StepOutcome = { done: false } | { done: true; step: "review"; findings: number } | { done: true; step: "fix-ci"; fixed: boolean };
+export type StepOutcome =
+  | { done: false }
+  | { done: true; step: "review"; findings: number }
+  /** `fixed`: CI is fixed, or the feedback addressed. */
+  | { done: true; step: "fix-ci" | "address-feedback"; fixed: boolean };
+
+const STEP_ASKS: Record<RecordableStep, (url: string) => string> = {
+  review: (url) => `The user asked the agent to run a reviewer agent on the pull request ${url} and record the result. Did the review finish, and how many actionable findings (issues worth changing the code for) did it report?
+Reply with only a JSON object: {"done": true, "findings": <number>} once the review finished (0 when it found nothing to change), or {"done": false} if it didn't finish.`,
+  "fix-ci": (url) => `The user asked the agent to fix the failing CI on the pull request ${url}: retry flaky jobs, or fix a real failure with a new commit, and record the result. Did it finish, and is CI fixed?
+Reply with only a JSON object: {"done": true, "fixed": true} once it fixed CI or retried the failing jobs, {"done": true, "fixed": false} if it concluded it can't fix it, or {"done": false} if it didn't finish.`,
+  "address-feedback": (url) => `The user asked the agent to address reviewers' feedback on the pull request ${url}: fix what they asked with new commits, draft replies for the user to post, and record the result. Did it finish, and did it address the feedback?
+Reply with only a JSON object: {"done": true, "fixed": true} once it went through the feedback (fixing it, or drafting a reply explaining why not), {"done": true, "fixed": false} if it concluded it can't address it, or {"done": false} if it didn't finish.`,
+};
 
 /** What the watcher asks the model about a PR step the board asked a session for, which stopped without recording a result. */
 export function stepPrompt(step: RecordableStep, url: string, transcript: string): string {
-  const ask =
-    step === "review"
-      ? `The user asked the agent to run a reviewer agent on the pull request ${url} and record the result. Did the review finish, and how many actionable findings (issues worth changing the code for) did it report?
-Reply with only a JSON object: {"done": true, "findings": <number>} once the review finished (0 when it found nothing to change), or {"done": false} if it didn't finish.`
-      : `The user asked the agent to fix the failing CI on the pull request ${url}: retry flaky jobs, or fix a real failure with a new commit, and record the result. Did it finish, and is CI fixed?
-Reply with only a JSON object: {"done": true, "fixed": true} once it fixed CI or retried the failing jobs, {"done": true, "fixed": false} if it concluded it can't fix it, or {"done": false} if it didn't finish.`;
-  return `An AI agent works for the user in a terminal session and just stopped. ${ask}
+  return `An AI agent works for the user in a terminal session and just stopped. ${STEP_ASKS[step](url)}
 
 The session, oldest first, up to now:
 ${transcript}`;
@@ -254,4 +261,38 @@ export function parseStepOutcome(reply: string, step: RecordableStep): StepOutco
     return typeof findings === "number" && Number.isInteger(findings) && findings >= 0 ? { done: true, step, findings } : null;
   }
   return typeof answer.fixed === "boolean" ? { done: true, step, fixed: answer.fixed } : null;
+}
+
+/** A reviewer agent a session ran on its own, as the watcher found it: what it was asked, and what it said. */
+export interface ReviewerRun {
+  assignment: string;
+  output: string;
+}
+
+/** What the watcher asks the model about a reviewer agent a session ran without the board asking: which of the session's PRs it reviewed. */
+export function reviewerRunPrompt(run: ReviewerRun, prUrls: string[]): string {
+  return `An AI agent working for the user ran a reviewer agent. Was it reviewing one of these pull requests, and if so, how many actionable findings (issues worth changing the code for) did it report?
+${prUrls.map((url) => `- ${url}`).join("\n")}
+
+What the reviewer was asked:
+"""
+${clip(run.assignment, 3000)}
+"""
+
+What it reported:
+"""
+${clip(run.output, 6000)}
+"""
+
+Reply with only a JSON object: {"pr": "<one of the URLs above>", "findings": <number>} (0 when it found nothing to change), or {"pr": null} if it reviewed something else, or you can't tell which.`;
+}
+
+/** Reads the model's answer about a reviewer run: the PR it reviewed and what it found, `pr` null for none of them; null when unusable. */
+export function parseReviewerRun(reply: string, prUrls: string[]): { pr: string; findings: number } | { pr: null } | null {
+  const answer = jsonObject(reply);
+  if (!answer) return null;
+  if (answer.pr === null) return { pr: null };
+  const pr = prUrls.find((url) => url === answer.pr);
+  const findings = answer.findings;
+  return pr && typeof findings === "number" && Number.isInteger(findings) && findings >= 0 ? { pr, findings } : null;
 }

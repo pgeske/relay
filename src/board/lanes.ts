@@ -1,8 +1,20 @@
+import { openFeedback, type FeedbackItem } from "./feedback.ts";
 import type { BoardData, Check, PullRequest } from "./github.ts";
-import { AGENT_ACTIONS, type AgentAction, type AgentRequests, type AgentReview, type ApprovalAsk, type AskSource, type CiFix } from "./store.ts";
+import {
+  AGENT_ACTIONS,
+  type AgentAction,
+  type AgentRequests,
+  type AgentReview,
+  type ApprovalAsk,
+  type AskSource,
+  type CiFix,
+  type CiFixVerdict,
+  type FeedbackFix,
+  type FeedbackVerdict,
+} from "./store.ts";
 
 /** Where a PR sits on its way from draft to merged, in the order work moves through them. */
-export type Lane = "draft" | "agent-review" | "human-review" | "approved-blocked" | "ready";
+export type Lane = "draft" | "agent-review" | "changes-requested" | "human-review" | "approved-blocked" | "ready";
 
 export type CiState = "passed" | "failed" | "running" | "none";
 
@@ -11,10 +23,14 @@ export type AgentReviewState =
   /** `stale`: commits landed after the review, so it no longer covers the code. */
   | { status: "passed" | "findings"; findings: number; stale: boolean; reviewedAt: string; headSha: string; summary: string | null };
 
-export type CiFixState =
+/** What an agent recorded after the board asked it to take a step, like fixing CI. */
+export type StepResultState<Verdict extends string> =
   | { status: "not-run" }
   /** `stale`: commits landed after the result was recorded, so it is about older code. */
-  | { status: "fixed" | "not-fixed"; stale: boolean; recordedAt: string; headSha: string; summary: string | null };
+  | { status: Verdict; stale: boolean; recordedAt: string; headSha: string; summary: string | null };
+
+export type CiFixState = StepResultState<CiFixVerdict>;
+export type FeedbackFixState = StepResultState<FeedbackVerdict>;
 
 /** One ask the PR's session recorded, and whether the reviewer it asked has approved since. */
 export interface ApprovalAskState {
@@ -60,6 +76,10 @@ export interface BoardCard {
   agentReviewSkippedAt: string | null;
   /** The latest result an agent recorded after the board asked it to fix CI. */
   ciFix: CiFixState;
+  /** What reviewers asked that the PR's author hasn't answered yet, oldest first. See feedback.ts. */
+  feedback: FeedbackItem[];
+  /** The latest result an agent recorded after the board asked it to address that feedback. */
+  feedbackFix: FeedbackFixState;
   /** The Slack messages the PR's session drafted asking its reviewers for approval, and who still has none. */
   approval: ApprovalState;
   /** Where each request the board sent the PR's session stands. */
@@ -90,11 +110,12 @@ const REQUEST_START_GRACE_MS = 90_000;
 /** Requests older than this are forgotten, so a long-abandoned one doesn't linger on the card. */
 export const REQUEST_MAX_AGE_MS = 6 * 60 * 60 * 1000;
 
-/** What can answer a request: a review, CI fix, approval ask, or bump recorded after it was sent, or the PR merging. */
+/** What can answer a request: a review, CI fix, feedback fix, approval ask, or bump recorded after it was sent, or the PR merging. */
 export interface RequestResults {
   mergedAt: string | null;
   review?: AgentReview;
   ciFix?: CiFix;
+  feedbackFix?: FeedbackFix;
   approval?: ApprovalState;
 }
 
@@ -104,6 +125,8 @@ function answered(action: AgentAction, requestedAt: string, results: RequestResu
       return results.review !== undefined && results.review.reviewedAt >= requestedAt;
     case "fix-ci":
       return results.ciFix !== undefined && results.ciFix.recordedAt >= requestedAt;
+    case "address-feedback":
+      return results.feedbackFix !== undefined && results.feedbackFix.recordedAt >= requestedAt;
     case "merge":
       return results.mergedAt !== null;
     case "ask-approval": {
@@ -173,14 +196,14 @@ export function agentReviewState(pr: PullRequest, review: AgentReview | undefine
   };
 }
 
-export function ciFixState(pr: PullRequest, fix: CiFix | undefined): CiFixState {
-  if (!fix) return { status: "not-run" };
+export function stepResultState<Verdict extends string>(pr: PullRequest, result: { verdict: Verdict; headSha: string; recordedAt: string; summary: string | null } | undefined): StepResultState<Verdict> {
+  if (!result) return { status: "not-run" };
   return {
-    status: fix.verdict,
-    stale: fix.headSha !== pr.headSha,
-    recordedAt: fix.recordedAt,
-    headSha: fix.headSha,
-    summary: fix.summary,
+    status: result.verdict,
+    stale: result.headSha !== pr.headSha,
+    recordedAt: result.recordedAt,
+    headSha: result.headSha,
+    summary: result.summary,
   };
 }
 
@@ -244,14 +267,17 @@ export function mergeBlocker(pr: PullRequest, gateChecks: string[]): string | nu
 /**
  * A PR stays with people until it has every approval it needs: GitHub's own review decision, and
  * a merge gate that can ask for more. Before anyone approved, it waits on its agent review until a
- * review of its current commit passed, or the user skipped it. Fully approved, it is ready once
- * nothing else (CI, a gate, conflicts) stops GitHub from merging it.
+ * review of its current commit passed, or the user skipped it. Feedback its author hasn't answered
+ * yet puts it in Changes requested, until a fix is pushed or the author replies. Fully approved, it
+ * is ready once nothing else (CI, a gate, conflicts) stops GitHub from merging it; feedback left
+ * then shows on its card without holding it back.
  */
 export function laneFor(card: BoardCard): Lane {
-  const { pr, ci, mergeBlocker, agentReview, agentReviewSkippedAt } = card;
+  const { pr, ci, mergeBlocker, agentReview, agentReviewSkippedAt, feedback } = card;
   if (pr.isDraft) return "draft";
   const fullyApproved = pr.reviewDecision === "APPROVED" && !WAITING_ON_PEOPLE.test(mergeBlocker ?? "");
   if (!fullyApproved) {
+    if (feedback.length > 0) return "changes-requested";
     const peopleStarted = pr.approvedBy.length > 0 || pr.reviewDecision === "APPROVED";
     const agentDone = agentReviewSkippedAt !== null || (agentReview.status === "passed" && !agentReview.stale);
     return peopleStarted || agentDone ? "human-review" : "agent-review";
@@ -268,6 +294,9 @@ function botName(login: string): string {
 export interface LocalState {
   reviews?: Map<string, AgentReview>;
   ciFixes?: Map<string, CiFix>;
+  feedbackFixes?: Map<string, FeedbackFix>;
+  /** Whether each PR comment relay's model judged asks for a change, keyed by its URL. */
+  commentVerdicts?: Map<string, boolean>;
   /** Each PR's approval asks, oldest first. */
   approvals?: Map<string, ApprovalAsk[]>;
   requests?: Map<string, AgentRequests>;
@@ -284,8 +313,18 @@ export interface LocalState {
  * also what finishes a merge request on it.
  */
 export function buildBoard(data: BoardData, gateChecks: string[], local: LocalState = {}): Board {
-  const { reviews = new Map(), ciFixes = new Map(), approvals = new Map(), requests = new Map(), reviewSkips = new Map(), owners = {}, now = new Date() } = local;
-  const lanes: Record<Lane, BoardCard[]> = { draft: [], "agent-review": [], "human-review": [], "approved-blocked": [], ready: [] };
+  const {
+    reviews = new Map(),
+    ciFixes = new Map(),
+    feedbackFixes = new Map(),
+    commentVerdicts = new Map(),
+    approvals = new Map(),
+    requests = new Map(),
+    reviewSkips = new Map(),
+    owners = {},
+    now = new Date(),
+  } = local;
+  const lanes: Record<Lane, BoardCard[]> = { draft: [], "agent-review": [], "changes-requested": [], "human-review": [], "approved-blocked": [], ready: [] };
   const merged = new Map(data.merged.map((pr) => [pr.url, pr]));
   for (const pr of data.mine) {
     if (pr.state === "MERGED") merged.set(pr.url, pr);
@@ -293,6 +332,7 @@ export function buildBoard(data: BoardData, gateChecks: string[], local: LocalSt
     const key = `${pr.repo}#${pr.number}`;
     const review = reviews.get(key);
     const ciFix = ciFixes.get(key);
+    const feedbackFix = feedbackFixes.get(key);
     const approval = approvalState(pr, approvals.get(key) ?? []);
     const card: BoardCard = {
       pr,
@@ -300,9 +340,11 @@ export function buildBoard(data: BoardData, gateChecks: string[], local: LocalSt
       mergeBlocker: mergeBlocker(pr, gateChecks),
       agentReview: agentReviewState(pr, review),
       agentReviewSkippedAt: reviewSkips.get(key) ?? null,
-      ciFix: ciFixState(pr, ciFix),
+      ciFix: stepResultState(pr, ciFix),
+      feedback: openFeedback(pr, commentVerdicts),
+      feedbackFix: stepResultState(pr, feedbackFix),
       approval,
-      requests: requestProgress(requests.get(key), { mergedAt: pr.mergedAt, review, ciFix, approval }, owners[key]?.live ?? null, now),
+      requests: requestProgress(requests.get(key), { mergedAt: pr.mergedAt, review, ciFix, feedbackFix, approval }, owners[key]?.live ?? null, now),
     };
     lanes[laneFor(card)].push(card);
   }

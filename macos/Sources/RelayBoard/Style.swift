@@ -38,6 +38,7 @@ extension Lane {
         switch id {
         case "draft": "pencil.line"
         case "agent-review": "sparkle.magnifyingglass"
+        case "changes-requested": "text.bubble.fill"
         case "human-review": "person.2.fill"
         case "approved-blocked": "hand.raised.fill"
         case "ready": "checkmark.seal.fill"
@@ -50,6 +51,7 @@ extension Lane {
         switch id {
         case "draft": .gray
         case "agent-review": .boardPurple
+        case "changes-requested": .boardRed
         case "human-review": .boardBlue
         case "approved-blocked": .boardOrange
         case "ready": .boardGreen
@@ -71,6 +73,7 @@ extension Row {
     var symbol: String {
         switch kind {
         case "ci": "checklist"
+        case "feedback": "text.bubble"
         case "agent": "sparkles"
         case "approvals": "person.2"
         case "slack": "bubble.left"
@@ -88,6 +91,7 @@ extension BoardAction {
         case "bump": "bell"
         case "merge": "arrow.triangle.merge"
         case "fix-ci": "wrench.and.screwdriver"
+        case "address-feedback": "text.bubble"
         case "start": "play.fill"
         case "approve-plan": "checkmark.circle.fill"
         case "ship": "paperplane.fill"
@@ -113,6 +117,7 @@ extension BoardAction {
         if stalled == true { return .boardOrange }
         return switch action {
         case "review": .boardPurple
+        case "address-feedback": .boardRed
         case "merge", "approve-plan", "ship": .boardGreen
         default: .boardBlue
         }
