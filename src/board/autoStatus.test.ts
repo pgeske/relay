@@ -30,6 +30,8 @@ test("a model answer is read out of prose or a code fence, and one the board can
   // While the agent works, what it waits on isn't asked, so an answer naming it anyway doesn't count.
   expect(parseStatusDecision('{"accurate": false, "stage": "doing", "status": "Fixing tests", "waiting_on": "me", "reason": "?"}', "working")).toMatchObject({ waitingOn: null, reason: null });
   expect(parseStatusDecision("I can't tell", "stopped")).toBeNull();
+  // Something moving along on its own is an answer of its own.
+  expect(parseStatusDecision('{"accurate": false, "stage": "doing", "status": "Upgrading the staging cluster", "waiting_on": "progress", "reason": "Upgrade underway"}', "stopped")).toMatchObject({ waitingOn: "progress", reason: "Upgrade underway" });
 });
 
 test("a stopped agent's forgotten blocker lands on the card marked as relay's, until the agent reports itself", () => {
@@ -61,6 +63,14 @@ test("while the agent works, a refresh moves the stage and status but keeps what
   const seen = reportTask(db, id, { blocked: { on: "others", reason: "Storage team approval" }, at: "2026-11-04T10:05:00Z" });
   applyStatusDecision(db, seen, { accurate: false, stage: "doing", status: "Applying in staging", waitingOn: null, reason: null }, null, "2026-11-04T10:30:00Z");
   expect(getTask(db, id)).toMatchObject({ stage: "doing", status: "Applying in staging", blockedOn: "others", blockedReason: "Storage team approval", blockedAt: "2026-11-04T10:05:00Z" });
+});
+
+test("a working agent isn't waiting on you, so a refresh clears that block", () => {
+  const db = openBoardStore(":memory:");
+  const { id } = createTask(db, base);
+  const seen = reportTask(db, id, { blocked: { on: "me", reason: "CI failed" }, at: "2026-11-04T10:05:00Z" });
+  expect(applyStatusDecision(db, seen, { accurate: false, stage: "doing", status: "Pushing a CI fix", waitingOn: null, reason: null }, null, "2026-11-04T10:30:00Z")).toBe("doing: Pushing a CI fix");
+  expect(getTask(db, id)).toMatchObject({ blockedOn: null, blockedReason: null });
 });
 
 test("an agent that says it's done without handing it over goes to Ready to ship with its last message as the note", () => {

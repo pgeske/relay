@@ -44,6 +44,11 @@ const MAX_TASK_BODY_BYTES = 30 * 1024 * 1024;
 const FINISH_ASK =
   "When it's finished, run `relay task done --summary -` with what you did and how you checked it (on stdin, through a heredoc): I look it over and ship it from the board before it counts as done.";
 
+/** How the board's prompts ask an agent to say what it stops for, so "Needs you" only shows when the user really has a move. */
+const WAIT_ASK =
+  "whenever you stop, say first what the task waits on: `relay task update --blocked-on me` only when nothing moves until I act, " +
+  "`--blocked-on others` when it waits on someone else, or `--in-progress` when something is already moving it along (CI, a rollout, a background job) and you'll pick it back up.";
+
 function startPrompt(task: Task): string {
   const plan = task.approvePlan
     ? "When you have a plan, record it with `relay task plan --summary -` (the plan on stdin, through a heredoc) and stop there: I approve it on the board before you carry it out."
@@ -53,13 +58,13 @@ function startPrompt(task: Task): string {
   return (
     `I started ${taskRef(task.id)} from the relay board${request}` +
     `This session is on it already. Follow the Tasks section of the relay skill: relay keeps the card's stage and status current on its own, ` +
-    `and whenever you stop to wait on me or on others, say so first with \`relay task update --blocked-on me\` or \`--blocked-on others\`. ` +
+    `and ${WAIT_ASK} ` +
     `${plan} ${FINISH_ASK}`
   );
 }
 
 function approvePrompt(task: Task): string {
-  return `I approved your plan for ${taskRef(task.id)} on the relay board. Go ahead and carry it out; whenever you stop to wait on me or on others, say so first with \`relay task update --blocked-on me\` or \`--blocked-on others\`. ${FINISH_ASK}`;
+  return `I approved your plan for ${taskRef(task.id)} on the relay board. Go ahead and carry it out; ${WAIT_ASK} ${FINISH_ASK}`;
 }
 
 /**
@@ -71,7 +76,7 @@ function refreshPrompt(task: Task): string {
     `I pressed Refresh on ${taskRef(task.id)} on the relay board: its card may be out of date. Things may have changed outside this session since you last reported: ` +
     `I may have sent a Slack message you drafted or done something else you asked of me, and CI, reviewers, or other teams may have moved. ` +
     `Check where the task stands now by looking things up, not from memory, then bring the card up to date as the relay skill's Tasks section says: ` +
-    `\`relay task update --status "<where it stands>"\`, with \`--blocked-on me\` or \`--blocked-on others\` while it still waits, or \`relay task done --summary -\` if it's finished. ` +
+    `\`relay task update --status "<where it stands>"\`, with \`--blocked-on me\`, \`--blocked-on others\`, or \`--in-progress\` while it still waits, or \`relay task done --summary -\` if it's finished. ` +
     `If that frees you to carry on with work I already gave you the go-ahead for, carry on; otherwise just report.`
   );
 }

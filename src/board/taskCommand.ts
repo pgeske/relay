@@ -47,9 +47,12 @@ Usage:
                                       Register a task and put this session on it; prints its id
   relay task link <task>              Put this session on a task too
   relay task update [<task>] [--stage <stage>] [--status <text>]
-                    [--blocked-on me|others --reason <text>] [--pr <pr>] [--project <name>]
-                                      Report where it stands. An update without --blocked-on
-                                      clears a block; --pr makes a PR part of it
+                    [--blocked-on me|others | --in-progress] [--reason <text>] [--pr <pr>]
+                    [--project <name>]
+                                      Report where it stands. --blocked-on: stopped until you
+                                      (me) or someone else (others) acts; --in-progress: moving
+                                      on its own (a rollout, CI) until it picks back up. An update
+                                      with neither clears them; --pr makes a PR part of it
   relay task plan [<task>] --summary <text|->
                                       Record the plan; unless the task skips plan approval,
                                       it waits for you to approve it on the board
@@ -138,16 +141,22 @@ function parseStage(value: string | undefined): TaskStage | undefined {
   return value as TaskStage;
 }
 
+/** What the update says the task waits on: `--blocked-on me|others`, or `--in-progress` for something moving along on its own. */
 function parseBlocker(args: string[]): { on: BlockedOn; reason: string | null } | null {
-  const on = flagValue(args, "--blocked-on");
+  const named = flagValue(args, "--blocked-on");
+  const inProgress = args.includes("--in-progress");
   const reason = flagValue(args, "--reason") ?? null;
+  if (named !== undefined && inProgress) throw new Error("--blocked-on and --in-progress say different things; pick one");
+  const on = inProgress ? "progress" : named;
   if (on === undefined) {
-    if (reason !== null) throw new Error("--reason goes with --blocked-on me|others");
+    if (reason !== null) throw new Error("--reason goes with --blocked-on me|others or --in-progress");
     return null;
   }
-  if (!(BLOCKERS as readonly string[]).includes(on)) throw new Error(`--blocked-on is me or others, not ${on}`);
+  if (!inProgress && (on === "progress" || !(BLOCKERS as readonly string[]).includes(on))) throw new Error(`--blocked-on is me or others, not ${on} (something moving along on its own is --in-progress)`);
   return { on: on as BlockedOn, reason };
 }
+
+const BLOCK_TEXT: Record<BlockedOn, string> = { me: "blocked on you", others: "blocked on others", progress: "in progress" };
 
 /** Puts the session this runs in on the task, so the board follows it; quietly does nothing outside relay. */
 async function linkThisSession(db: Database, taskId: number, at: string): Promise<boolean> {
@@ -223,7 +232,7 @@ async function update(args: string[]): Promise<void> {
     }
     const updated = reportTask(db, task.id, { stage, status, blocked, projectId: projectName ? ensureProject(db, projectName, at).id : undefined, at });
     await joinIfFree(db, task.id, at);
-    const block = updated.blockedOn ? `, blocked on ${updated.blockedOn === "me" ? "you" : "others"}` : "";
+    const block = updated.blockedOn ? `, ${BLOCK_TEXT[updated.blockedOn]}` : "";
     console.log(`${taskRef(task.id)} is in ${STAGE_LABELS[updated.stage]}${block}${updated.status ? `: ${updated.status}` : ""}`);
   } finally {
     db.close();

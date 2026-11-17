@@ -85,6 +85,21 @@ describe("whose move a task waits on", () => {
     expect(placeTask(task(), [session("idle")], prs, now)).toMatchObject({ turn: "you", reason: "api#2 needs an agent review" });
   });
 
+  test("an approved PR that can't merge yet needs you only when someone has to fix something", () => {
+    const approved = (ci: "failed" | "running" | "passed", mergeBlocker: string | null = null) => [{ ref: "acme/api#1", lane: "approved-blocked" as const, ci, mergeBlocker }];
+    expect(placeTask(task(), [session("idle")], approved("running"), now)).toMatchObject({ turn: "progress", reason: "api#1: CI running" });
+    expect(placeTask(task(), [session("idle")], approved("failed"), now)).toMatchObject({ turn: "you", reason: "api#1: CI failed" });
+    expect(placeTask(task(), [session("idle")], approved("passed", "Merge conflicts"), now)).toMatchObject({ turn: "you", reason: "api#1: merge conflicts" });
+    expect(placeTask(task(), [session("idle")], approved("passed", "Blocked by branch rules"), now)).toMatchObject({ turn: "others", reason: "api#1: blocked by branch rules" });
+  });
+
+  test("something moving along on its own is in progress, not your move", () => {
+    const upgrading = task({ blockedOn: "progress", blockedReason: "Cluster upgrade in staging underway", blockedAt: minutesAgo(15) });
+    expect(placeTask(upgrading, [session("idle")], [], now)).toMatchObject({ turn: "progress", reason: "Cluster upgrade in staging underway", since: "15m" });
+    // A PR you can merge still comes first.
+    expect(placeTask(upgrading, [session("idle")], [{ ref: "acme/api#1", lane: "ready" }], now).turn).toBe("you");
+  });
+
   test("a session that moved on to another task doesn't count as working on this one", () => {
     expect(placeTask(task(), [session("working", 1, false)], [], now)).toMatchObject({ turn: "idle", reason: "Its session moved on to another task" });
   });
@@ -169,7 +184,7 @@ describe("the columns", () => {
     expect(boardOf([]).columns.map((column) => column.id)).toEqual(["idea", "research", "plan", "doing", "ship", "blocked", "done"]);
   });
 
-  test("hold each task in its stage's column, except one waiting on others or one you blocked", () => {
+  test("hold each task in its stage's column while it moves, and in Blocked once it stopped until someone acts or you blocked it", () => {
     const tasks = [
       task({ id: 1, stage: "idea" }),
       task({ id: 2, stage: "research", pausedAt: minutesAgo(5) }),
@@ -178,28 +193,31 @@ describe("the columns", () => {
       task({ id: 5, stage: "done", doneAt: minutesAgo(5) }),
       // Its agent is still at it, so it hasn't stopped to wait yet.
       task({ id: 6, stage: "doing", blockedOn: "others", blockedAt: minutesAgo(5) }),
+      task({ id: 7, stage: "doing", blockedOn: "progress", blockedAt: minutesAgo(5) }),
     ];
     const view = boardOf(tasks, [{ taskId: 6, info: { ...session("working"), sessionFile: "/sessions/6.jsonl" } }]);
     const where = new Map(view.columns.flatMap((column) => column.cards.map((card) => [card.id, column.id])));
-    expect(Object.fromEntries(where)).toEqual({ 1: "idea", 2: "blocked", 3: "blocked", 4: "plan", 5: "done", 6: "doing" });
+    expect(Object.fromEntries(where)).toEqual({ 1: "idea", 2: "blocked", 3: "blocked", 4: "blocked", 5: "done", 6: "doing", 7: "doing" });
   });
 
-  test("put your move on top, then the agent's, then others', then what's parked", () => {
+  test("put your move on top, then what's moving, then others', then what's parked", () => {
     const tasks = [
       task({ id: 1 }),
       task({ id: 2, blockedOn: "others", blockedAt: minutesAgo(5) }),
       task({ id: 3, blockedOn: "me", blockedAt: minutesAgo(5) }),
       task({ id: 4 }),
       task({ id: 5, pausedAt: minutesAgo(5) }),
+      task({ id: 6, blockedOn: "progress", blockedAt: minutesAgo(5) }),
     ];
     const view = boardOf(tasks, [{ taskId: 4, info: { ...session("working"), sessionFile: "/sessions/4.jsonl" } }]);
     const cardsOf = (id: string) => view.columns.find((column) => column.id === id)!.cards.map((card) => [card.id, card.turn.id]);
     expect(cardsOf("doing")).toEqual([
-      [3, "you"],
       [4, "agent"],
+      [6, "progress"],
       [1, "idle"],
     ]);
     expect(cardsOf("blocked")).toEqual([
+      [3, "you"],
       [2, "others"],
       [5, "blocked"],
     ]);

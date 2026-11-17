@@ -10,9 +10,14 @@ import type { Database } from "bun:sqlite";
 export const TASK_STAGES = ["idea", "research", "plan", "doing", "done"] as const;
 export type TaskStage = (typeof TASK_STAGES)[number];
 
-/** Who a blocked task waits on: you (an answer, a decision), or anyone else (a team, a deploy, a reviewer). */
-export const BLOCKERS = ["me", "others"] as const;
+/**
+ * What a task waits on: you (an answer, a decision), anyone else (a team, a reviewer, an approval),
+ * or `progress`: nobody, because something is already moving it along on its own (a rollout, CI,
+ * the agent's own background job) and the agent picks it back up when that ends.
+ */
+export const BLOCKERS = ["me", "others", "progress"] as const;
 export type BlockedOn = (typeof BLOCKERS)[number];
+const BLOCKED_ON_CHECK = `CHECK (blocked_on IN (${BLOCKERS.map((on) => `'${on}'`).join(", ")}))`;
 
 /** A named group of tasks. Projects nest: a subproject's `parentId` is the project it sits in. */
 export interface Project {
@@ -79,6 +84,7 @@ export type TaskEventKind =
   | "status"
   | "blocked"
   | "unblocked"
+  | "in-progress"
   | "plan"
   | "plan-approved"
   | "finished"
@@ -170,7 +176,7 @@ export function createTaskTables(db: Database): void {
     stage TEXT NOT NULL ${STAGE_CHECK},
     status TEXT,
     status_at TEXT,
-    blocked_on TEXT CHECK (blocked_on IN ('me', 'others')),
+    blocked_on TEXT ${BLOCKED_ON_CHECK},
     blocked_reason TEXT,
     blocked_at TEXT,
     approve_plan INTEGER NOT NULL,
@@ -203,6 +209,17 @@ export function createTaskTables(db: Database): void {
   }
   // Only agents reported on tasks before relay's watcher filled in for them.
   if (!taskColumns.some((column) => column.name === "auto_reported_at")) db.run("ALTER TABLE tasks ADD COLUMN auto_reported_at TEXT");
+  // Tasks could once only wait on you or others; SQLite can't change a CHECK in place, so rebuild the table.
+  const tasksSql = db.query<{ sql: string }, []>("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'tasks'").get()?.sql ?? "";
+  const oldCheck = /CHECK \(blocked_on IN \([^)]*\)\)/.exec(tasksSql);
+  if (oldCheck && oldCheck[0] !== BLOCKED_ON_CHECK) {
+    db.transaction(() => {
+      db.run(`CREATE TABLE tasks_rebuilt (${tasksSql.slice(tasksSql.indexOf("(") + 1, tasksSql.lastIndexOf(")")).replace(oldCheck[0], BLOCKED_ON_CHECK)})`);
+      db.run("INSERT INTO tasks_rebuilt SELECT * FROM tasks");
+      db.run("DROP TABLE tasks");
+      db.run("ALTER TABLE tasks_rebuilt RENAME TO tasks");
+    })();
+  }
   db.run(`CREATE TABLE IF NOT EXISTS task_events (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     task_id INTEGER NOT NULL,
@@ -366,8 +383,8 @@ export function reportTask(db: Database, id: number, report: TaskReport): Task {
     const auto = report.auto === true;
     if (stage !== task.stage) addEvent(db, id, report.at, stage === "done" ? "done" : task.stage === "done" ? "reopened" : "stage", stage, null, auto);
     if (report.status !== undefined) addEvent(db, id, report.at, "status", stage, report.status, auto);
-    if (blocked && (task.blockedOn !== blocked.on || task.blockedReason !== blocked.reason)) addEvent(db, id, report.at, "blocked", stage, blocked.reason, auto);
-    if (!blocked && task.blockedOn) addEvent(db, id, report.at, "unblocked", stage, null, auto);
+    if (blocked && (task.blockedOn !== blocked.on || task.blockedReason !== blocked.reason)) addEvent(db, id, report.at, blocked.on === "progress" ? "in-progress" : "blocked", stage, blocked.reason, auto);
+    if (!blocked && task.blockedOn && task.blockedOn !== "progress") addEvent(db, id, report.at, "unblocked", stage, null, auto);
     return getTask(db, id)!;
   })();
 }

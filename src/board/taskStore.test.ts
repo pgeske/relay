@@ -116,6 +116,23 @@ test("a board from before tasks were checked gains the columns, keeping its task
   expect(finishTask(db, 1, { note: "Done at last", at: "2026-11-04T10:00:00Z" })).toMatchObject({ title: "Old task", finishedAt: "2026-11-04T10:00:00Z", finishNote: "Done at last" });
 });
 
+test("a board from before tasks could be in progress lets them be, keeping its tasks and their blocks", () => {
+  const db = new Database(":memory:");
+  db.run(`CREATE TABLE tasks (
+    id INTEGER PRIMARY KEY AUTOINCREMENT, title TEXT NOT NULL, details TEXT, project_id INTEGER, stage TEXT NOT NULL, status TEXT, status_at TEXT,
+    blocked_on TEXT CHECK (blocked_on IN ('me', 'others')), blocked_reason TEXT, blocked_at TEXT, approve_plan INTEGER NOT NULL, plan TEXT, plan_at TEXT,
+    plan_approved_at TEXT, cwd TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL, done_at TEXT
+  )`);
+  db.run("INSERT INTO tasks (title, stage, blocked_on, blocked_reason, approve_plan, created_at, updated_at) VALUES ('Old task', 'doing', 'me', 'Which region?', 1, '2026-11-01T00:00:00Z', '2026-11-01T00:00:00Z')");
+  createTaskTables(db);
+  expect(getTask(db, 1)).toMatchObject({ title: "Old task", blockedOn: "me", blockedReason: "Which region?" });
+  const moving = reportTask(db, 1, { blocked: { on: "progress", reason: "Rollout underway" }, at: "2026-11-04T10:00:00Z" });
+  expect(moving).toMatchObject({ blockedOn: "progress", blockedReason: "Rollout underway" });
+  // Opening it again leaves it alone.
+  createTaskTables(db);
+  expect(getTask(db, 1)?.blockedOn).toBe("progress");
+});
+
 test("projects nest by path, and a name only has to be unique among its siblings", () => {
   const db = openBoardStore(":memory:");
   const at = "2026-11-07T10:00:00Z";

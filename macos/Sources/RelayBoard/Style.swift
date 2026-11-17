@@ -150,11 +150,11 @@ extension TaskColumn {
 }
 
 extension Turn {
-    /// Orange when it's your move, purple while the agent works, blue while others have it, gray while nobody does.
+    /// Orange when it's your move, purple while the agent works or something moves it along, blue while others have it, gray while nobody does.
     var tint: Color {
         switch id {
         case "you": .boardOrange
-        case "agent": .boardPurple
+        case "agent", "progress": .boardPurple
         case "others": .boardBlue
         case "done": .boardGreen
         default: .secondary
@@ -165,6 +165,7 @@ extension Turn {
         switch id {
         case "you": "hand.raised.fill"
         case "agent": "sparkles"
+        case "progress": "arrow.triangle.2.circlepath"
         case "others": "hourglass"
         case "blocked": "nosign"
         case "idle": "moon.zzz.fill"

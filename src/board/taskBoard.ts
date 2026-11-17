@@ -1,5 +1,5 @@
 import type { PullRequest } from "./github.ts";
-import type { Board, Lane } from "./lanes.ts";
+import type { Board, CiState, Lane } from "./lanes.ts";
 import { followsSession, projectPaths, taskRef, type Project, type Task, type TaskEvent, type TaskPr, type TaskSession, type TaskStage } from "./taskStore.ts";
 import { timeAgo, type Confirm, type Tone } from "./view.ts";
 
@@ -10,9 +10,10 @@ import { timeAgo, type Confirm, type Tone } from "./view.ts";
  */
 
 /**
- * Columns in the order work moves (Relay Board stacks them top to bottom): a task sits in its stage's column until its agent
- * delivers (Ready to ship), then in Shipped once you ship it. One waiting on others (a team, reviewers) sits in Blocked,
- * since nobody here can move it, and so does one you blocked, until you unblock it.
+ * Columns in the order work moves (Relay Board stacks them top to bottom): a task sits in its stage's column while
+ * it moves along, until its agent delivers (Ready to ship), then in Shipped once you ship it. One that stopped until
+ * someone acts sits in Blocked, its pill saying who: you (an answer, a plan to approve, a PR to move along) or
+ * others (a team, reviewers). So does one you blocked, until you unblock it.
  */
 export type TaskColumn = "idea" | "research" | "plan" | "doing" | "ship" | "blocked" | "done";
 
@@ -22,20 +23,22 @@ const COLUMNS: { id: TaskColumn; title: string; hint: string }[] = [
   { id: "plan", title: "Plan", hint: "Deciding how to do it" },
   { id: "doing", title: "Doing", hint: "Making the change" },
   { id: "ship", title: "Ready to ship", hint: "Its agent delivered: look it over, then ship it" },
-  { id: "blocked", title: "Blocked", hint: "Waiting on others, or set aside until you unblock it" },
+  { id: "blocked", title: "Blocked", hint: "Stopped until you or someone else acts, or set aside until you unblock it" },
   { id: "done", title: "Shipped", hint: "Shipped in the last two weeks" },
 ];
 
 /**
  * Whose move a task waits on, said at the top of its card: you (a plan to approve, a question, a PR
- * to move along, an agent that stopped, a delivery to ship), its agent while it works, anyone else (a
- * team, reviewers), or nobody: you blocked it, no session is open, or it hasn't started.
+ * to move along, an agent that stopped, a delivery to ship), its agent while it works, nobody because
+ * something is moving it along on its own (a rollout, CI), anyone else (a team, reviewers), or nobody
+ * at all: you blocked it, no session is open, or it hasn't started.
  */
-export type Turn = "you" | "agent" | "others" | "blocked" | "idle" | "idea" | "done";
+export type Turn = "you" | "agent" | "progress" | "others" | "blocked" | "idle" | "idea" | "done";
 
 const TURN_LABELS: Record<Turn, string> = {
   you: "Needs you",
   agent: "Agent working",
+  progress: "In progress",
   others: "Waiting on others",
   blocked: "Blocked",
   idle: "Idle",
@@ -43,8 +46,8 @@ const TURN_LABELS: Record<Turn, string> = {
   done: "Shipped",
 };
 
-/** A column's cards, top to bottom: your move first, then the agent's, then others', then what's parked. */
-const TURN_ORDER: Turn[] = ["you", "agent", "others", "blocked", "idle", "idea", "done"];
+/** A column's cards, top to bottom: your move first, then what's moving, then others', then what's parked. */
+const TURN_ORDER: Turn[] = ["you", "agent", "progress", "others", "blocked", "idle", "idea", "done"];
 
 const DONE_SHOWN_MS = 14 * 24 * 60 * 60 * 1000;
 
@@ -249,10 +252,12 @@ export function taskHue(id: number): number {
   return (id * 3) % HUES;
 }
 
-/** Where a PR is on the PR board. */
+/** Where a PR is on the PR board, and what holds it there. */
 interface PrPlace {
   pr: PullRequest;
   lane: Lane | "merged";
+  ci: CiState;
+  mergeBlocker: string | null;
 }
 
 /** Where each of your PRs is on the PR board, keyed by "owner/repo#number". */
@@ -260,10 +265,30 @@ function prPlaces(board: Board | null): Map<string, PrPlace> {
   const places = new Map<string, PrPlace>();
   if (!board) return places;
   for (const [lane, cards] of Object.entries(board.lanes) as [Lane, Board["lanes"][Lane]][]) {
-    for (const card of cards) places.set(`${card.pr.repo}#${card.pr.number}`, { pr: card.pr, lane });
+    for (const card of cards) places.set(`${card.pr.repo}#${card.pr.number}`, { pr: card.pr, lane, ci: card.ci, mergeBlocker: card.mergeBlocker });
   }
-  for (const pr of board.merged) places.set(`${pr.repo}#${pr.number}`, { pr, lane: "merged" });
+  for (const pr of board.merged) places.set(`${pr.repo}#${pr.number}`, { pr, lane: "merged", ci: "none", mergeBlocker: null });
   return places;
+}
+
+/** A task's PR as placing the task reads it: its lane, and for an approved one, what still stops it merging. */
+export interface TaskPrPlace {
+  ref: string;
+  lane: Lane | "merged" | null;
+  ci?: CiState;
+  mergeBlocker?: string | null;
+}
+
+/**
+ * Why an approved PR can't merge yet, and whose move that is: red CI or conflicts need someone to fix
+ * them (you, or the agent you ask); running CI just needs time; a merge gate or branch rule waits on others.
+ */
+function approvedButBlocked(pr: TaskPrPlace): { turn: Turn; reason: string } {
+  const ref = short(pr.ref);
+  if (pr.ci === "failed") return { turn: "you", reason: `${ref}: CI failed` };
+  if (pr.mergeBlocker === "Merge conflicts" || pr.mergeBlocker === "Behind its base branch") return { turn: "you", reason: `${ref}: ${pr.mergeBlocker.toLowerCase()}` };
+  if (pr.mergeBlocker) return { turn: "others", reason: `${ref}: ${pr.mergeBlocker.charAt(0).toLowerCase()}${pr.mergeBlocker.slice(1)}` };
+  return { turn: "progress", reason: `${ref}: CI running` };
 }
 
 function short(ref: string): string {
@@ -289,17 +314,14 @@ interface Placement {
 /**
  * Whose move a task waits on. One you blocked stays blocked, whatever its sessions do, until you
  * unblock it; its card says the stage it was in. Otherwise a working agent needs nothing from you yet, so that comes first.
- * Then a task its agent delivered, for you to look over and ship. Then what the agent
- * said it's waiting on (your approval of its plan, your answer), then PRs that
- * need a click from you, then what it's waiting on elsewhere. An agent that stopped without saying
- * anything is waiting on you too: that's how a task you meant to finish in fifteen minutes gets forgotten.
+ * Then a task its agent delivered, for you to look over and ship. Then what the agent said it's
+ * waiting on (your approval of its plan, your answer), then PRs that need a move from you, then
+ * what's moving along on its own and what's waiting elsewhere. "Needs you" means nothing moves until
+ * you do: CI that's still running or a rollout the agent is watching isn't your move. An agent that
+ * stopped without saying anything is waiting on you too: that's how a task you meant to finish in
+ * fifteen minutes gets forgotten.
  */
-export function placeTask(
-  task: Task,
-  sessions: TaskSessionLink[],
-  prs: { ref: string; lane: Lane | "merged" | null }[],
-  now: Date,
-): Placement {
+export function placeTask(task: Task, sessions: TaskSessionLink[], prs: TaskPrPlace[], now: Date): Placement {
   const ago = (iso: string | null) => since(iso, now);
   const place = (turn: Turn, reason: string | null, at: string, sinceAt: string | null = null): Placement => ({ turn, reason, since: ago(sinceAt), delivered: false, at });
   if (task.stage === "done") return place("done", timeAgo(task.doneAt ?? task.updatedAt, now), task.doneAt ?? task.updatedAt);
@@ -317,14 +339,18 @@ export function placeTask(
   const open = prs.filter((pr) => pr.lane !== null && pr.lane !== "merged");
   const ready = open.find((pr) => pr.lane === "ready");
   if (ready) return place("you", `${short(ready.ref)} is ready to merge`, task.updatedAt);
-  const blockedPr = open.find((pr) => pr.lane === "approved-blocked");
-  if (blockedPr) return place("you", `${short(blockedPr.ref)} is approved but blocked`, task.updatedAt);
+  const approved = open.filter((pr) => pr.lane === "approved-blocked").map(approvedButBlocked);
+  const fixNeeded = approved.find((blocker) => blocker.turn === "you");
+  if (fixNeeded) return place("you", fixNeeded.reason, task.updatedAt);
   const feedbackPr = open.find((pr) => pr.lane === "changes-requested");
   if (feedbackPr) return place("you", `${short(feedbackPr.ref)} has feedback to address`, task.updatedAt);
+  if (task.blockedOn === "progress") return place("progress", task.blockedReason, task.blockedAt ?? task.updatedAt, task.blockedAt);
   if (task.blockedOn === "others") return place("others", task.blockedReason, task.blockedAt ?? task.updatedAt, task.blockedAt);
-  // A PR waiting for a click from you comes before one waiting on reviewers.
+  // A PR waiting for a click from you comes before one waiting on CI or reviewers.
   const needsReview = open.find((pr) => pr.lane === "agent-review");
   if (needsReview) return place("you", `${short(needsReview.ref)} needs an agent review`, task.updatedAt);
+  const waiting = approved[0];
+  if (waiting) return place(waiting.turn, waiting.reason, task.updatedAt);
   const inReview = open.find((pr) => pr.lane === "human-review");
   if (inReview) return place("others", `${short(inReview.ref)} is waiting on reviewers`, task.updatedAt);
 
@@ -394,6 +420,7 @@ const EVENT_TEXT: Record<TaskEvent["kind"], (event: TaskEvent) => string> = {
   stage: (event) => `Moved to ${STAGE_LABELS[event.stage]}`,
   status: (event) => event.text ?? "Status update",
   blocked: (event) => `Blocked${event.text ? `: ${event.text}` : ""}`,
+  "in-progress": (event) => `In progress${event.text ? `: ${event.text}` : ""}`,
   unblocked: () => "Unblocked",
   plan: () => "Wrote a plan",
   "plan-approved": () => "You approved the plan",
@@ -412,7 +439,7 @@ function taskCard(task: Task, inputs: TaskInputs, places: Map<string, PrPlace>, 
   const { now } = inputs;
   const linked = [...inputs.prs.values()].filter((pr) => pr.taskId === task.id).map((pr) => `${pr.repo}#${pr.number}`);
   const prs = linked.map((ref) => ({ ref, place: places.get(ref) ?? null }));
-  const placement = placeTask(task, sessions, prs.map(({ ref, place }) => ({ ref, lane: place?.lane ?? null })), now);
+  const placement = placeTask(task, sessions, prs.map(({ ref, place }) => ({ ref, lane: place?.lane ?? null, ci: place?.ci, mergeBlocker: place?.mergeBlocker })), now);
   const primary = primarySession(sessions);
   const project = task.projectId !== null ? projects.get(task.projectId) : undefined;
   const ref = taskRef(task.id);
@@ -522,7 +549,9 @@ function taskCard(task: Task, inputs: TaskInputs, places: Map<string, PrPlace>, 
     updatedAt: task.updatedAt,
     sortKey: placement.at,
   };
-  const column: TaskColumn = placement.delivered ? "ship" : task.pausedAt || placement.turn === "others" ? "blocked" : task.stage;
+  // Stopped until someone acts, you or others, is Blocked; the stage columns hold what's moving.
+  const stopped = task.pausedAt || placement.turn === "you" || placement.turn === "others";
+  const column: TaskColumn = placement.delivered ? "ship" : stopped ? "blocked" : task.stage;
   return { card, column };
 }
 
