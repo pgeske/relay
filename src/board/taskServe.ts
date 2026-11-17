@@ -20,6 +20,7 @@ import {
   deleteTask,
   dismissSession,
   ensureProject,
+  followsSession,
   getProject,
   getTask,
   linkSession,
@@ -34,6 +35,7 @@ import {
   type Task,
   type TaskSession,
 } from "./taskStore.ts";
+import { refreshWorkingSession } from "./watcher.ts";
 
 /** A new task's details can run long, and its screenshots longer; anything past this isn't a task. */
 const MAX_TASK_BODY_BYTES = 30 * 1024 * 1024;
@@ -58,6 +60,20 @@ function startPrompt(task: Task): string {
 
 function approvePrompt(task: Task): string {
   return `I approved your plan for ${taskRef(task.id)} on the relay board. Go ahead and carry it out; whenever you stop to wait on me or on others, say so first with \`relay task update --blocked-on me\` or \`--blocked-on others\`. ${FINISH_ASK}`;
+}
+
+/**
+ * What Refresh asks a task's idle session. The watcher only reads the session, which can't show what
+ * changed outside it (a draft you sent, CI finishing), so the agent checks the world for itself.
+ */
+function refreshPrompt(task: Task): string {
+  return (
+    `I pressed Refresh on ${taskRef(task.id)} on the relay board: its card may be out of date. Things may have changed outside this session since you last reported: ` +
+    `I may have sent a Slack message you drafted or done something else you asked of me, and CI, reviewers, or other teams may have moved. ` +
+    `Check where the task stands now by looking things up, not from memory, then bring the card up to date as the relay skill's Tasks section says: ` +
+    `\`relay task update --status "<where it stands>"\`, with \`--blocked-on me\` or \`--blocked-on others\` while it still waits, or \`relay task done --summary -\` if it's finished. ` +
+    `If that frees you to carry on with work I already gave you the go-ahead for, carry on; otherwise just report.`
+  );
 }
 
 const TRACK_PROMPT =
@@ -208,6 +224,9 @@ export async function runTaskAction(action: string, target: TaskActionTarget): P
         case "unblock":
           resumeTask(db, id, at);
           return { status: 200, message: `Unblocked ${taskRef(id)}` };
+        case "refresh":
+          if (!followsSession(task)) return { status: 409, message: `${taskRef(id)} has nothing for its session to refresh` };
+          break;
         case "resume":
           resumeTask(db, id, at);
           break;
@@ -228,12 +247,13 @@ export async function runTaskAction(action: string, target: TaskActionTarget): P
       return { status: 200, message: session ? await showSession(session.sessionFile, session.live, session.name) : await startTask(task) };
     }
     if (action === "ship" || action === "done") return { status: 200, message: await completeTask(id) };
-    const session = taskSession(id, await liveSessions(), action === "approve-plan");
+    const session = taskSession(id, await liveSessions(), action === "approve-plan" || action === "refresh");
     if (!session) {
       if (action === "send-back") return { status: 200, message: `Sent ${taskRef(id)} back; it has no session to open` };
       return { status: 409, message: action === "approve-plan" ? `${taskRef(id)} has no session to carry out its plan` : `${taskRef(id)} has no session yet` };
     }
     if (action === "open" || action === "send-back") return { status: 200, message: await showSession(session.sessionFile, session.live, session.name) };
+    if (action === "refresh") return { status: 200, message: await refreshTask(task, session) };
 
     // approve-plan: only the plan you read. One revised since waits for you to read it.
     if (!task.plan || task.planApprovedAt) return { status: 409, message: `${taskRef(id)} has no plan waiting for approval` };
@@ -251,6 +271,16 @@ export async function runTaskAction(action: string, target: TaskActionTarget): P
     if (error instanceof ActionError) return { status: error.status, message: error.message };
     throw error;
   }
+}
+
+/**
+ * Brings a task's card up to date. A working session can't take a prompt, so the watcher reads it
+ * right away; an idle or closed one is asked to check where the task stands and report.
+ */
+async function refreshTask(task: Task, session: SessionPlace): Promise<string> {
+  if (session.live?.status === "working") return `"${session.name}" is working, so relay read its session: ${await refreshWorkingSession(session.sessionFile)}`;
+  const reopened = await promptSession(session.sessionFile, session.live, session.name, refreshPrompt(task));
+  return `Asked "${session.name}" to check where ${taskRef(task.id)} stands${reopened ? " (reopened it in a new relay tab)" : ""}`;
 }
 
 async function runSessionAction(action: SessionAction, sessionFile: string | undefined): Promise<BoardActionResult> {

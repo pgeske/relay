@@ -108,6 +108,17 @@ describe("whose move a task waits on", () => {
     expect(menuOf(task({ stage: "idea" }))).not.toContain("block");
   });
 
+  test("Refresh Status is offered on a task in play with a session on it, not one delivered, set aside, awaiting plan approval, or without a session", () => {
+    const menuWith = (t: Task, sessions: TaskSessionLink[]) =>
+      boardOf([t], sessions.map((info) => ({ taskId: t.id, info }))).columns.flatMap((column) => column.cards)[0].menu.map((item) => item.action);
+    expect(menuWith(task({ blockedOn: "me", blockedAt: minutesAgo(5) }), [session("idle")])).toContain("refresh");
+    expect(menuWith(task(), [session("working")])).toContain("refresh");
+    expect(menuWith(task(), [])).not.toContain("refresh");
+    expect(menuWith(task({ finishedAt: minutesAgo(5) }), [session("idle")])).not.toContain("refresh");
+    expect(menuWith(task({ pausedAt: minutesAgo(5) }), [session("idle")])).not.toContain("refresh");
+    expect(menuWith(task({ stage: "plan", plan: "1. Turn it on", planAt: minutesAgo(5) }), [session("idle")])).not.toContain("refresh");
+  });
+
   test("an agent that stopped without saying anything is your turn", () => {
     const placed = placeTask(task(), [session("idle", 7)], [{ ref: "acme/api#1", lane: "merged" }], now);
     expect(placed).toMatchObject({ turn: "you", reason: "The agent stopped", since: "7m" });

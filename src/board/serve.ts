@@ -28,6 +28,7 @@ import {
 } from "./store.ts";
 import { assembleTasks } from "./taskCommand.ts";
 import { bringRelayTerminalToFront } from "./terminalApp.ts";
+import { refreshWorkingSession } from "./watcher.ts";
 
 const MAX_ACTION_BODY_BYTES = 4096;
 /** How long a reopened session may take to load before a button gives up on it. */
@@ -213,6 +214,18 @@ export function bumpPrompt(url: string, { approval, approvedBy }: Pick<PromptCon
   );
 }
 
+/**
+ * What Refresh asks the session in charge of a PR, when it's idle. GitHub's side of the card is read
+ * fresh anyway; what goes stale is what only the session can record, or check outside GitHub.
+ */
+function refreshPrompt(url: string): string {
+  return [
+    `I pressed Refresh on ${url} on the relay board: its card may be out of date. Check where the PR stands now by looking things up, not from memory, and record what the board is missing as the relay skill says:`,
+    `a reviewer agent's result for its current commit, a Fix CI or Address Feedback result, or an approval ask for a reviewer the board lists none for (I may have sent a draft you wrote, or asked in Slack myself; search for it).`,
+    `Don't record again what the board already has. Then bring this session's task card up to date too, if it's on one. ${DRAFT_ONLY} Don't post on GitHub.`,
+  ].join(" ");
+}
+
 /** What each step button pastes into the PR's session, and how the board words it. */
 const REQUESTS: Record<AgentAction, { prompt: (url: string, context: PromptContext) => string; asked: string; running: string }> = {
   review: { prompt: reviewPrompt, asked: "review", running: "reviewing" },
@@ -310,8 +323,9 @@ export async function showSession(sessionFile: string, live: { windowId: string 
 /**
  * `open` shows the PR's session in relay. `review`, `merge`, `fix-ci`, `ask-approval`, and `bump` ask
  * that session to take the PR's next step, reopening it in a background tab first if it's closed, and
- * note the request so the card can follow it until it's done. `close` closes the PR on GitHub, and
- * `skip-review` and `require-review` change whether it waits on an agent review; those need no session.
+ * note the request so the card can follow it until it's done. `refresh` asks the session to record
+ * what the card is missing, or, while it's busy, has relay's watcher read it. `close` closes the PR
+ * on GitHub, and `skip-review` and `require-review` change whether it waits on an agent review; those need no session.
  */
 export async function runBoardAction(action: string, prRef: string): Promise<BoardActionResult> {
   if (!isBoardAction(action)) return { status: 404, message: `no such action: ${action}` };
@@ -352,6 +366,11 @@ export async function runBoardAction(action: string, prRef: string): Promise<Boa
 
   try {
     if (action === "open") return { status: 200, message: await showSession(owner.sessionFile, card.live, name) };
+    if (action === "refresh") {
+      if (card.live?.status === "working") return { status: 200, message: `"${name}" is working, so relay read its session: ${await refreshWorkingSession(owner.sessionFile)}` };
+      const reopened = await promptSession(owner.sessionFile, card.live, name, refreshPrompt(`https://github.com/${repo}/pull/${number}`));
+      return { status: 200, message: `Asked "${name}" to check where ${repo}#${number} stands${reopened ? " (reopened it in a new relay tab)" : ""}` };
+    }
 
     // The card may be older than the PR: a step on one that already merged or closed would only confuse its session.
     // If GitHub doesn't answer, the session checks the PR itself before acting, and works out who to ask for approval.

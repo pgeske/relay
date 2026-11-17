@@ -108,6 +108,7 @@ extension BoardAction {
         case "delete": "trash"
         case "skip-review": "forward"
         case "require-review": "arrow.uturn.backward"
+        case "refresh": "arrow.clockwise"
         default: "arrow.right"
         }
     }

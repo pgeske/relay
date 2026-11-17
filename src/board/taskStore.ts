@@ -62,6 +62,15 @@ export interface Task {
   autoReportedAt: string | null;
 }
 
+/**
+ * Whether a task's card follows its session, so relay's watcher and the board's Refresh may update
+ * it: one in play, not shipped, set aside, delivered, or waiting on your plan approval.
+ */
+export function followsSession(task: Task): boolean {
+  const planAwaiting = task.approvePlan && task.plan !== null && task.planApprovedAt === null;
+  return task.stage !== "done" && task.pausedAt === null && task.finishedAt === null && !planAwaiting;
+}
+
 /** One step in a task's history, as its card's details list it. */
 export type TaskEventKind =
   | "created"

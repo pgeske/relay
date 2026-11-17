@@ -34,7 +34,7 @@ export const REFRESH_SECONDS = 60;
 export const ACTIVE_REFRESH_SECONDS = 10;
 
 /** What a card's controls can ask relay's server to do: `POST /api/board/actions/<action>` with the card's `ref`. */
-export const BOARD_ACTIONS = ["open", "close", "skip-review", "require-review", ...AGENT_ACTIONS] as const;
+export const BOARD_ACTIONS = ["open", "refresh", "close", "skip-review", "require-review", ...AGENT_ACTIONS] as const;
 export type BoardAction = (typeof BOARD_ACTIONS)[number];
 
 /** Lanes left to right in the order work moves; `hot` lanes are the ones waiting on you to act. */
@@ -562,6 +562,14 @@ function menuAction(action: "skip-review" | "require-review", label: string, hin
   return { action, label, hint, running: null, confirm: null, stalled: false };
 }
 
+/** Refresh, for what only the PR's session can record: a review it ran, an ask you sent from its draft. */
+function refreshAction(owner: CardOwner): ActionView {
+  const hint = owner.live?.status === "working"
+    ? "Have relay read its working session now and update the card"
+    : `Ask its session to check where the PR stands and record what the card is missing${owner.live ? "" : ", reopening it in a new relay tab"}`;
+  return { action: "refresh", label: "Refresh Status", hint, running: null, confirm: null, stalled: false };
+}
+
 function laneCard(boardCard: BoardCard, lane: Lane, owners: Board["owners"], chips: Map<string, TaskChipView>, now: Date): CardView {
   const { requests } = boardCard;
   const ref = `${boardCard.pr.repo}#${boardCard.pr.number}`;
@@ -597,8 +605,9 @@ function laneCard(boardCard: BoardCard, lane: Lane, owners: Board["owners"], chi
 
   // A step's request shows where its button was, so the card keeps its shape; a CI fix, in the CI row it was asked from.
   const running = busy && busy !== "fix-ci" ? STEPS[busy].running : null;
-  // Not every PR needs a reviewer agent: one waiting on it can skip straight to people, and a skipped one can wait on it again.
   const menu: ActionView[] = [];
+  if (owner) menu.push(refreshAction(owner));
+  // Not every PR needs a reviewer agent: one waiting on it can skip straight to people, and a skipped one can wait on it again.
   if (lane === "agent-review") menu.push(menuAction("skip-review", "Skip Agent Review", "Send this PR to Human review without a reviewer agent"));
   if (lane === "human-review" && boardCard.agentReviewSkippedAt !== null) {
     menu.push(menuAction("require-review", "Require Agent Review", "Stop skipping the agent review: wait on a reviewer agent again"));

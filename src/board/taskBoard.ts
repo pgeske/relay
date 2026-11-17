@@ -1,6 +1,6 @@
 import type { PullRequest } from "./github.ts";
 import type { Board, Lane } from "./lanes.ts";
-import { projectPaths, taskRef, type Project, type Task, type TaskEvent, type TaskPr, type TaskSession, type TaskStage } from "./taskStore.ts";
+import { followsSession, projectPaths, taskRef, type Project, type Task, type TaskEvent, type TaskPr, type TaskSession, type TaskStage } from "./taskStore.ts";
 import { timeAgo, type Confirm, type Tone } from "./view.ts";
 
 /**
@@ -49,7 +49,7 @@ const TURN_ORDER: Turn[] = ["you", "agent", "others", "blocked", "idle", "idea",
 const DONE_SHOWN_MS = 14 * 24 * 60 * 60 * 1000;
 
 /** What a task card's controls ask relay's server: `POST /api/board/tasks/actions/<action>` with the card's `id`. */
-export const TASK_ACTIONS = ["start", "approve-plan", "open", "ship", "send-back", "block", "resume", "unblock", "done", "reopen", "delete"] as const;
+export const TASK_ACTIONS = ["start", "approve-plan", "open", "refresh", "ship", "send-back", "block", "resume", "unblock", "done", "reopen", "delete"] as const;
 export type TaskAction = (typeof TASK_ACTIONS)[number];
 /** What an untracked session's controls ask: the same endpoint, with the session's `sessionFile`. */
 export const SESSION_ACTIONS = ["open-session", "track", "dismiss", "close-session"] as const;
@@ -449,6 +449,15 @@ function taskCard(task: Task, inputs: TaskInputs, places: Map<string, PrPlace>, 
   }
 
   const menu: TaskActionView[] = [];
+  // The watcher only sees the session; Refresh also has the agent check what changed outside it, like a draft you sent.
+  const onTaskSession = primarySession(sessions.filter((session) => session.onTask));
+  if (followsSession(task) && onTaskSession) {
+    const hint =
+      onTaskSession.live?.status === "working"
+        ? "Have relay read its working session now and update the card"
+        : `Ask its session to check where the task stands and update the card${onTaskSession.live ? "" : ", reopening it in a new relay tab"}`;
+    menu.push(action("refresh", "Refresh Status", hint));
+  }
   if (task.stage === "done") menu.push(action("reopen", "Reopen Task", "Put it back in progress"));
   else if (!placement.delivered) menu.push(action("done", "Mark Shipped", "Move it to Shipped and close its idle sessions"));
   if (task.pausedAt) menu.push(action("unblock", "Unblock", "Put it back in its stage without opening a session"));

@@ -396,8 +396,11 @@ describe("Agent review", () => {
     expect(view.steps).toMatchObject([{ action: "review", stalled: true }]);
   });
 
+  // Refresh is on every card with a session in charge; these are about the review controls beside it.
+  const reviewMenu = (view: CardView) => view.menu.filter((item) => item.action !== "refresh");
+
   test("can be skipped from the card's menu, which sends the PR to Human review", () => {
-    expect(card(pr()).menu).toMatchObject([{ action: "skip-review", label: "Skip Agent Review", confirm: null }]);
+    expect(reviewMenu(card(pr()))).toMatchObject([{ action: "skip-review", label: "Skip Agent Review", confirm: null }]);
     const skipped = card(pr(), { skippedAt: minutesAgo(5) });
     expect(skipped.lane).toBe("human-review");
     expect(rowOf(skipped, "agent")).toMatchObject({ value: "Skipped", tone: "muted" });
@@ -407,7 +410,7 @@ describe("Agent review", () => {
     const skipped = card(pr({ headSha: "bbb" }), { skippedAt: minutesAgo(5), review: passed });
     expect(skipped.lane).toBe("human-review");
     expect(rowOf(skipped, "agent")).toMatchObject({ value: "Skipped" });
-    expect(skipped.menu).toMatchObject([{ action: "require-review", label: "Require Agent Review" }]);
+    expect(reviewMenu(skipped)).toMatchObject([{ action: "require-review", label: "Require Agent Review" }]);
   });
 
   test("a skipped PR's review of its current commit still shows what it found", () => {
@@ -416,7 +419,12 @@ describe("Agent review", () => {
   });
 
   test("a PR reviewed without a skip offers nothing to take back", () => {
-    expect(card(pr({ checks: green }), { review: passed }).menu).toEqual([]);
+    expect(reviewMenu(card(pr({ checks: green }), { review: passed }))).toEqual([]);
+  });
+
+  test("Refresh Status is offered only when a session is in charge of the PR", () => {
+    expect(card(pr()).menu.map((item) => item.action)).toContain("refresh");
+    expect(card(pr(), { owner: null }).menu.map((item) => item.action)).not.toContain("refresh");
   });
 });
 

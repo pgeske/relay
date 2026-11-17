@@ -37,7 +37,7 @@ import {
   seenReviewerRuns,
   type AgentReview,
 } from "./store.ts";
-import { currentTask, getTask, taskRef, type Task } from "./taskStore.ts";
+import { currentTask, followsSession, getTask, taskRef, type Task } from "./taskStore.ts";
 
 /**
  * When relay's watcher looks at a session (see autoStatus.ts for what it does then). Spotting an
@@ -68,43 +68,63 @@ export interface Track {
   logSize: number;
 }
 
-/** Whether a task's card is the watcher's to correct: one in play, not shipped, paused, delivered, or waiting on your plan approval. */
-function watchable(task: Task): boolean {
-  const planAwaiting = task.approvePlan && task.plan !== null && task.planApprovedAt === null;
-  return task.stage !== "done" && task.pausedAt === null && task.finishedAt === null && !planAwaiting;
-}
-
 /**
  * `stillCurrent` says whether what the model read is still the session's latest: an answer about a
  * stop the user has since moved past (a new turn began) is dropped.
  */
 async function checkTask(sessionFile: string, moment: Moment, messages: Message[], model: string, stillCurrent: () => Promise<boolean>): Promise<void> {
+  const task = sessionTask(sessionFile);
+  if (!task || !followsSession(task)) return;
+  if (moment === "working" && Date.now() - Date.parse(task.updatedAt) < QUIET_MS) return;
+  if (moment === "stopped" && agentSaidWhatItWaitsOn(messages, task.id)) return;
+  const change = await correctCard(task, moment, messages, model, stillCurrent);
+  if (change !== undefined) console.log(`watcher: ${taskRef(task.id)} ${change ? `→ ${change}` : "card already right"} (${moment})`);
+}
+
+function sessionTask(sessionFile: string): Task | null {
   const db = openBoardStore();
-  let task: Task | null;
   try {
     const id = currentTask(db, sessionFile);
-    task = id === null ? null : getTask(db, id);
+    return id === null ? null : getTask(db, id);
   } finally {
     db.close();
   }
-  if (!task || !watchable(task)) return;
-  if (moment === "working" && Date.now() - Date.parse(task.updatedAt) < QUIET_MS) return;
-  if (moment === "stopped" && agentSaidWhatItWaitsOn(messages, task.id)) return;
+}
 
+/**
+ * Has the model read the session and corrects the task's card from its answer. Says what changed:
+ * null for nothing, undefined when there was no usable answer or it's no longer current.
+ */
+async function correctCard(task: Task, moment: Moment, messages: Message[], model: string, stillCurrent: () => Promise<boolean>): Promise<string | null | undefined> {
   const reply = await askModel(statusPrompt(task, moment, renderTranscript(messages), new Date()), model, SYSTEM_PROMPT);
   const decision = parseStatusDecision(reply, moment);
   if (!decision) {
     console.error(`watcher: no usable answer for ${taskRef(task.id)}: ${reply.trim().slice(0, 200)}`);
-    return;
+    return undefined;
   }
-  if (!(await stillCurrent())) return;
+  if (!(await stillCurrent())) return undefined;
   const store = openBoardStore();
   try {
-    const change = applyStatusDecision(store, task, decision, lastAgentText(messages), new Date().toISOString());
-    console.log(`watcher: ${taskRef(task.id)} ${change ? `→ ${change}` : "card already right"} (${moment})`);
+    return applyStatusDecision(store, task, decision, lastAgentText(messages), new Date().toISOString());
   } finally {
     store.close();
   }
+}
+
+/**
+ * The board's Refresh, for a session that's busy working (an idle one is asked to check for itself):
+ * the watcher reads it right away, instead of waiting for its next quiet-work look. Says what it did, in words.
+ */
+export async function refreshWorkingSession(sessionFile: string): Promise<string> {
+  const task = sessionTask(sessionFile);
+  if (!task) return "it isn't on a task, so there's no card to update";
+  if (!followsSession(task)) return `${taskRef(task.id)}'s card isn't one relay updates right now`;
+  const { messages } = await readMessagePage(sessionFile, () => "", { limit: MESSAGES_READ });
+  if (messages.length === 0) return "its session has nothing to read yet";
+  const change = await correctCard(task, "working", messages, loadBoardConfig().autoStatus.model, async () => true);
+  console.log(`watcher: refresh of ${taskRef(task.id)} ${change ? `→ ${change}` : "left the card as it was"}`);
+  if (change === undefined) return `couldn't tell from its session where ${taskRef(task.id)} stands; the card stays as it was`;
+  return change ? `updated ${taskRef(task.id)}: ${change}` : `${taskRef(task.id)}'s card is already right`;
 }
 
 interface ForgottenStep {
