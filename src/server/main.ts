@@ -323,7 +323,8 @@ function sendImage(res: ServerResponse, image: { bytes: Buffer; contentType: str
  * `POST /api/board/tasks` creates a task, and `POST /api/board/tasks/actions/<action>` with
  * `{ "task": 12 }` (or `{ "session": "<file>" }`) runs one of a task card's controls.
  * `POST /api/board/projects/<create|rename|delete>` with `{ "project": 3, "name": "…", "parent": 1 }`
- * manages the sidebar's projects.
+ * manages the sidebar's projects, and `POST /api/board/projects/move-task` with `{ "task": 12, "project": 3 }`
+ * puts a task in a project (or in none, without `project`).
  */
 async function routeBoard(req: IncomingMessage, res: ServerResponse, rest: string[]): Promise<void> {
   if (rest.length === 0) {
@@ -347,6 +348,7 @@ async function routeBoard(req: IncomingMessage, res: ServerResponse, rest: strin
       project: typeof body.project === "number" ? body.project : undefined,
       name: typeof body.name === "string" ? body.name : undefined,
       parent: typeof body.parent === "number" ? body.parent : undefined,
+      task: typeof body.task === "number" ? body.task : undefined,
     });
     sendJson(res, result.status, result.status < 300 ? { message: result.message } : { error: result.message });
     return;

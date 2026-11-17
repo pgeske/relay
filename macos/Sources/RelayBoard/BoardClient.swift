@@ -87,12 +87,14 @@ struct BoardClient: Sendable {
         try await post("api/board/tasks", body: try JSONEncoder().encode(task))
     }
 
-    /// Makes, renames, or deletes a project: `action` is create, rename, or delete.
-    func project(_ action: String, project: Int? = nil, name: String? = nil, parent: Int? = nil) async throws -> ActionResult {
+    /// Makes, renames, or deletes a project (`action` is create, rename, or delete), or moves `task`
+    /// into `project` (move-task; no `project` takes it out of every project).
+    func project(_ action: String, project: Int? = nil, name: String? = nil, parent: Int? = nil, task: Int? = nil) async throws -> ActionResult {
         var fields: [String: Any] = [:]
         if let project { fields["project"] = project }
         if let name { fields["name"] = name }
         if let parent { fields["parent"] = parent }
+        if let task { fields["task"] = task }
         return try await post("api/board/projects/\(action)", body: try JSONSerialization.data(withJSONObject: fields))
     }
 

@@ -650,9 +650,30 @@ struct TaskMenuItems: View {
             NSPasteboard.general.clearContents()
             NSPasteboard.general.setString(card.ref, forType: .string)
         }
+        if !projects.isEmpty {
+            Menu("Move to Project", systemImage: "folder") {
+                projectButton("No Project", id: nil)
+                Divider()
+                ForEach(projects) { project in projectButton(project.path, id: project.id) }
+            }
+        }
         Divider()
         ForEach(card.menu, id: \.self) { item in
             Button(item.label, systemImage: item.symbol, role: item.confirm?.destructive == true ? .destructive : nil) { model.request(item, on: .task(card.id)) }
+        }
+    }
+
+    private var projects: [Project] {
+        (model.board?.tasks?.projects ?? []).sorted { $0.path.localizedStandardCompare($1.path) == .orderedAscending }
+    }
+
+    /// Puts the task in the project `id` (none when nil), checked when it's already there.
+    private func projectButton(_ title: String, id: Int?) -> some View {
+        Button {
+            guard id != card.project?.id else { return }
+            Task { await model.project("move-task", project: id, task: card.id) }
+        } label: {
+            if id == card.project?.id { Label(title, systemImage: "checkmark") } else { Text(title) }
         }
     }
 }

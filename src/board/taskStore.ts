@@ -499,6 +499,13 @@ export function deleteTask(db: Database, id: number): void {
   })();
 }
 
+/** Puts a task in a project, or in none when `projectId` is null; throws when either isn't there. */
+export function setTaskProject(db: Database, id: number, projectId: number | null): Task {
+  if (projectId !== null && !getProject(db, projectId)) throw new Error(`no project ${projectId}`);
+  if (db.query("UPDATE tasks SET project_id = ? WHERE id = ?").run(projectId, id).changes === 0) throw new Error(`no task ${taskRef(id)}`);
+  return getTask(db, id)!;
+}
+
 /** Each task's history, newest first, keyed by task id. */
 export function taskEvents(db: Database): Map<number, TaskEvent[]> {
   const rows = db

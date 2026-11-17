@@ -145,10 +145,10 @@ final class BoardModel {
 
     var isCreating: Bool { sending.contains("new-task") }
 
-    /// Makes, renames, or deletes a project from the sidebar; true once the server did it.
-    func project(_ action: String, project: Int? = nil, name: String? = nil, parent: Int? = nil) async -> Bool {
+    /// Makes, renames, or deletes a project from the sidebar, or moves a task into one; true once the server did it.
+    func project(_ action: String, project: Int? = nil, name: String? = nil, parent: Int? = nil, task: Int? = nil) async -> Bool {
         do {
-            let result = try await client.project(action, project: project, name: name, parent: parent)
+            let result = try await client.project(action, project: project, name: name, parent: parent, task: task)
             toast = Toast(message: result.message, failed: !result.ok)
             if result.ok { schedule(after: .zero) }
             return result.ok

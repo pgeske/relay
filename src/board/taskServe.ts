@@ -24,12 +24,15 @@ import {
   getProject,
   getTask,
   linkSession,
+  listProjects,
   markStarted,
   pauseTask,
+  projectPaths,
   reportTask,
   renameProject,
   resumeTask,
   sendBack,
+  setTaskProject,
   taskRef,
   taskSessions,
   type Task,
@@ -376,18 +379,21 @@ export async function createTaskFromBoard(request: NewTaskRequest): Promise<Boar
   }
 }
 
-/** What the board's sidebar asks of projects: `POST /api/board/projects/<action>`. */
-export const PROJECT_ACTIONS = ["create", "rename", "delete"] as const;
+/** What the board asks of projects: `POST /api/board/projects/<action>`. */
+export const PROJECT_ACTIONS = ["create", "rename", "delete", "move-task"] as const;
 
 /** The body of a project control: the project to act on, its new name, and where a new one goes. */
 export interface ProjectActionRequest {
+  /** For move-task, where the task goes; left out to take it out of every project. */
   project?: number;
   name?: string;
   /** A new project's parent; left out for a top-level one. */
   parent?: number;
+  /** For move-task: the task to move. */
+  task?: number;
 }
 
-/** Makes, renames, or deletes a project from the board's sidebar. */
+/** Makes, renames, or deletes a project from the board's sidebar, or moves a task into one from its card. */
 export function runProjectAction(action: string, request: ProjectActionRequest): BoardActionResult {
   if (!(PROJECT_ACTIONS as readonly string[]).includes(action)) return { status: 404, message: `no project action ${action}` };
   const db = openBoardStore();
@@ -396,6 +402,12 @@ export function runProjectAction(action: string, request: ProjectActionRequest):
       const project = createProject(db, request.name ?? "", request.parent ?? null, new Date().toISOString());
       const parent = project.parentId !== null ? getProject(db, project.parentId) : null;
       return { status: 200, message: parent ? `Made ${project.name} inside ${parent.name}` : `Made ${project.name}` };
+    }
+    if (action === "move-task") {
+      if (request.task === undefined) return { status: 400, message: "which task?" };
+      const task = setTaskProject(db, request.task, request.project ?? null);
+      const path = task.projectId !== null ? projectPaths(listProjects(db)).get(task.projectId) : undefined;
+      return { status: 200, message: path ? `Moved ${taskRef(task.id)} to ${path}` : `Took ${taskRef(task.id)} out of its project` };
     }
     if (request.project === undefined) return { status: 400, message: "which project?" };
     const project = getProject(db, request.project);
