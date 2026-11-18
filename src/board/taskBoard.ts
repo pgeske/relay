@@ -409,7 +409,6 @@ function displayFolder(cwd: string | null, home: string): string | null {
   return cwd.startsWith(`${home}/`) ? `~${cwd.slice(home.length)}` : cwd;
 }
 
-/** The card's session's own control, which shows it in your terminal; Go to Session and Resume reuse it. */
 function openAction(session: TaskSessionInfo): TaskActionView {
   return action("open", "Open in Terminal", session.live ? "Show this session in your terminal" : "Reopen this session in a new relay tab");
 }
@@ -465,13 +464,7 @@ function taskCard(task: Task, inputs: TaskInputs, places: Map<string, PrPlace>, 
       action("ship", "Ship It", "Move it to Shipped and close its idle session tabs; omp keeps their conversations"),
       action("send-back", "Not Yet", "Put it back in progress and show its session in your terminal, so you can tell the agent what's missing"),
     );
-  } else if (placement.turn === "idea") {
-    steps.push(action("start", "Start", `Open a new session${task.cwd ? ` in ${task.cwd}` : ""} and hand it this task`, { running: "Starting…" }));
-  } else if (placement.turn === "you" && primary) {
-    steps.push({ ...openAction(primary), label: "Go to Session" });
-  } else if (placement.turn === "idle" && primary?.onTask) {
-    steps.push({ ...openAction(primary), label: "Resume" });
-  } else if (placement.turn === "idle") {
+  } else if (placement.turn === "idea" || (placement.turn === "idle" && !primary?.onTask)) {
     steps.push(action("start", "Start", `Open a new session${task.cwd ? ` in ${task.cwd}` : ""} and hand it this task`, { running: "Starting…" }));
   }
 

@@ -146,6 +146,12 @@ describe("whose move a task waits on", () => {
     expect(placeTask(task({ stage: "research" }), [], [], now).turn).toBe("idle");
   });
 
+  test.each(["idle", null] as const)("a linked session (%s) opens from its row, without a second footer action", (status) => {
+    const card = boardOf([task()], [{ taskId: 1, info: session(status) }]).columns.flatMap((column) => column.cards)[0];
+    expect(card.session?.open.action).toBe("open");
+    expect(card.steps).toEqual([]);
+  });
+
   test("a task whose only session made it and moved on offers Start, not that other task's session", () => {
     const info: TaskSessionInfo = { sessionFile: "/sessions/a.jsonl", title: "Other work", cwd: null, live: { paneId: "%1", windowId: "@1", status: "working" }, activeAt: minutesAgo(1) };
     // The session registered task 2, then went back to task 1.
