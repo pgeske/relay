@@ -70,7 +70,7 @@ flowchart LR
 - **You never chase an agent.** Relay keeps each card's stage and status current by reading the end of the agent's session with a small, fast model, marked **auto**. The agent itself only speaks up at the moments that matter: when it starts, when it has a plan, when it stops waiting on you or others, and when it's done.
 - **A card looks stale? Refresh it.** **Refresh Status** in any task or PR card's menu asks its idle session to check where things stand (say, whether you sent the Slack draft it wrote) and report; for a session still working, relay reads it right away instead.
 - **Just say what you want.** A new task is what you write, nothing more: relay titles the card for you.
-- **Pick a model in a few keys.** In a new task, ⇧⌘M opens a finder like omp's `/switch`: type `op55` or `gpt 6.2`, Tab through thinking levels, press Return. Models you picked lately come first.
+- **Pick a model in a few keys.** In a new task, ⇧⌘M opens a finder like omp's `/switch`: type `op55` or `gpt 6.2`, Tab through thinking levels, press Return. Models you picked lately come first, and the next new task starts on the last one you picked.
 - **Nothing ships without you.** A finished task lands in **Ready to ship** with a note on what the agent did and how it checked. One click on **Ship It** and it's shipped.
 - **Plans wait for you,** unless you say the task can skip that step.
 - **Park what can wait.** **Mark Blocked** from a task's menu and it moves to **Blocked**, saying which stage it was in, until you press **Resume** or **Unblock**.

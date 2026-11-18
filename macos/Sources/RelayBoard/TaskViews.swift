@@ -848,9 +848,12 @@ struct NewTaskSheet: View {
     /// Typing a new project's name, in place of the project chip.
     @State private var namingProject = false
     @State private var approvePlan = true
-    /// The model and thinking level its sessions start on; nil keeps omp's default.
+    /// The model and thinking level its sessions start on; nil keeps omp's default. They start on
+    /// the last ones picked for a new task, kept in `lastModel`/`lastLevel` ("" for omp's default).
     @State private var chosenModel: String?
     @State private var chosenLevel: String?
+    @AppStorage("newTaskModel") private var lastModel = ""
+    @AppStorage("newTaskThinkingLevel") private var lastLevel = ""
     @FocusState private var focus: Field?
 
     private enum Field { case projectName }
@@ -895,8 +898,21 @@ struct NewTaskSheet: View {
         }
         .font(.zoomed(.body))
         .frame(width: 640 * Zoom.shared.scale)
-        .onAppear { projectName = project?.path ?? "" }
-        .task { await model.loadModelChoices() }
+        .onAppear {
+            projectName = project?.path ?? ""
+            chosenModel = lastModel.isEmpty ? nil : lastModel
+            chosenLevel = lastLevel.isEmpty ? nil : lastLevel
+        }
+        .onChange(of: chosenModel) { lastModel = chosenModel ?? "" }
+        .onChange(of: chosenLevel) { lastLevel = chosenLevel ?? "" }
+        .task {
+            await model.loadModelChoices()
+            // A remembered model omp no longer offers falls back to its default.
+            if let choices = model.modelChoices, let chosen = chosenModel, choices.option(chosen) == nil {
+                chosenModel = nil
+                chosenLevel = nil
+            }
+        }
     }
 
     /// The task's options as chips under the details. They wrap onto another line rather than crowd
