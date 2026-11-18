@@ -14,7 +14,7 @@ The full reference for the Relay iPhone app and the phone server behind it. The 
 
 The server listens on port 7878 (`RELAY_PORT` to change), only answers loopback, private LAN, and Tailscale addresses, and requires the bearer token stored in `~/.config/relay/token`. `relay pair` prefers the computer's Tailscale address so the phone can reach it away from home.
 
-The background server starts outside any terminal, so on startup it asks your login shell (`$SHELL -l -i`) for its environment and gives that to every agent tab, whether the server starts relay's tmux or relay is already running: agents see what you export in `~/.zshenv`, `~/.zprofile`, `~/.zshrc` and the like, as in a terminal. While it asks, `RELAY_RESOLVING_ENVIRONMENT=1` is set, so your rc files can skip slow steps. Restart the server (`relay server install`) after changing those files.
+The background server starts outside any terminal, so on startup it asks your login shell (`$SHELL -l -i`) for its environment and gives that to every agent tab, whether the server starts relay's tmux or relay is already running: agents see what you export in `~/.zshenv`, `~/.zprofile`, `~/.zshrc` and the like, as in a terminal. The shell starts from only what a terminal would hand it (`HOME`, `USER`, `PATH`, the locale), and that result replaces tmux's whole global environment, so variables from wherever the server itself was started (an agent tab, a test sandbox's `XDG_DATA_HOME`) never reach the tabs. While it asks, `RELAY_RESOLVING_ENVIRONMENT=1` is set, so your rc files can skip slow steps. Restart the server (`relay server install`) after changing those files.
 
 ## Live voice (Mac only)
 

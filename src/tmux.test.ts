@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { configFor, setEnvironmentArgs, splitFields, tmuxEnvFrom } from "./tmux.ts";
+import { configFor, globalEnvironmentKeys, setEnvironmentArgs, splitFields, tmuxEnvFrom } from "./tmux.ts";
 
 test("tmux before 3.4 gets the theme without the underline colour it would reject", () => {
   for (const version of ["tmux 3.2a", "tmux 3.3a"]) {
@@ -30,4 +30,14 @@ test("the global environment is set in one tmux call, keeping values that end in
   expect(setEnvironmentArgs({ A: "1", B: "x;", C: undefined })).toEqual([
     "set-environment", "-g", "A", "1", ";", "set-environment", "-g", "B", "x\\;",
   ]);
+});
+
+test("variables the new environment lacks are removed from tmux's global one", () => {
+  expect(setEnvironmentArgs({ A: "1" }, ["A", "XDG_DATA_HOME"])).toEqual([
+    "set-environment", "-gu", "XDG_DATA_HOME", ";", "set-environment", "-g", "A", "1",
+  ]);
+});
+
+test("show-environment output yields set variable names, skipping removed ones and multi-line values", () => {
+  expect(globalEnvironmentKeys("A=1\n-B\nMULTI=line1\nline2 has = in it\nC=\n")).toEqual(["A", "MULTI", "C"]);
 });

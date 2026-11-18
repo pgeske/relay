@@ -41,6 +41,20 @@ test("the login shell's exported variables come back, and rc files can tell rela
   expect(env?.PWD).toBeUndefined();
 });
 
+test("the login shell starts from a terminal's variables, not relay's own environment", async () => {
+  process.env.SHELL = fakeShell('shift 3; eval "$1"');
+  const originalPort = process.env.RELAY_PORT;
+  process.env.RELAY_PORT = "7991";
+  try {
+    const env = await loginShellEnv();
+    expect(env?.HOME).toBe(process.env.HOME);
+    expect(env?.RELAY_PORT).toBeUndefined();
+  } finally {
+    if (originalPort === undefined) delete process.env.RELAY_PORT;
+    else process.env.RELAY_PORT = originalPort;
+  }
+});
+
 test("a shell that never prints the environment yields nothing", async () => {
   process.env.SHELL = fakeShell("exit 1");
   expect(await loginShellEnv()).toBeNull();

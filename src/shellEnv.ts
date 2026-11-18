@@ -39,6 +39,23 @@ function userShell(): string {
   }
 }
 
+/**
+ * What the login shell starts from: only what a terminal hands a new shell, so the result
+ * is what the rc files make of it. The rest of relay's own environment stays out: a relay
+ * started from an agent tab, or with a sandbox's XDG_DATA_HOME and RELAY_PORT, would
+ * otherwise pass those to every tab through tmux's global environment.
+ */
+const INHERITED = ["HOME", "USER", "LOGNAME", "SHELL", "PATH", "TMPDIR", "LANG", "LC_ALL", "LC_CTYPE"];
+
+function startingEnv(): Record<string, string> {
+  const env: Record<string, string> = { [RESOLVING_VARIABLE]: "1" };
+  for (const key of INHERITED) {
+    const value = process.env[key];
+    if (value !== undefined) env[key] = value;
+  }
+  return env;
+}
+
 /** The user's login-shell environment, or null when the shell fails or takes over 10 seconds. */
 export function loginShellEnv(): Promise<Record<string, string> | null> {
   const { promise, resolve } = Promise.withResolvers<Record<string, string> | null>();
@@ -47,7 +64,7 @@ export function loginShellEnv(): Promise<Record<string, string> | null> {
   const child = spawn(userShell(), ["-l", "-i", "-c", script], {
     cwd: homedir(),
     detached: true,
-    env: { ...process.env, [RESOLVING_VARIABLE]: "1" },
+    env: startingEnv(),
     stdio: ["ignore", "pipe", "ignore"],
   });
   const chunks: Buffer[] = [];

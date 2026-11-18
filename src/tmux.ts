@@ -142,15 +142,18 @@ let serverEnv: Promise<NodeJS.ProcessEnv> = Promise.resolve(TMUX_ENV);
 /**
  * The phone server runs under launchd or systemd, whose bare environment would reach
  * every agent through a tmux server it starts. This switches its tmux calls to the
- * user's login-shell environment and copies that into an already running relay tmux
- * server, so new tabs see the variables a terminal has either way.
+ * user's login-shell environment and makes that the global environment of an already
+ * running relay tmux server, so new tabs see the variables a terminal has either way.
+ * Variables the login shell doesn't set are removed, so whatever the tmux server started
+ * with (say, a test sandbox's XDG_DATA_HOME) doesn't outlive a restart of relay.
  */
 export async function adoptLoginShellEnv(): Promise<void> {
   const resolved = loginShellEnv().then((env) => (env ? tmuxEnvFrom(env) : TMUX_ENV));
   serverEnv = resolved;
   const env = await resolved;
   if (env === TMUX_ENV || (await listTmuxSessions()).length === 0) return;
-  await tmux(setEnvironmentArgs(env));
+  const current = globalEnvironmentKeys(await tmux(["show-environment", "-g"]));
+  await tmux(setEnvironmentArgs(env, current));
 }
 
 /** The environment relay's agents get: the user's login-shell one once it's known. */
@@ -159,15 +162,24 @@ export function agentEnv(): Promise<NodeJS.ProcessEnv> {
 }
 
 /**
- * One tmux invocation that sets every variable in tmux's global environment. tmux reads
- * an argument ending in `;` as a command separator, and `\;` as a literal `;`.
+ * Names of the variables in `tmux show-environment -g` output. `-NAME` lines are already
+ * removed, and a line that isn't NAME=value is the rest of a multi-line value.
  */
-export function setEnvironmentArgs(env: NodeJS.ProcessEnv): string[] {
-  return Object.entries(env)
-    .flatMap(([key, value]) =>
-      value === undefined ? [] : [";", "set-environment", "-g", key, value.endsWith(";") ? `${value.slice(0, -1)}\\;` : value],
-    )
-    .slice(1);
+export function globalEnvironmentKeys(output: string): string[] {
+  return output.split("\n").flatMap((line) => line.match(/^([A-Za-z_][A-Za-z0-9_]*)=/)?.[1] ?? []);
+}
+
+/**
+ * One tmux invocation that makes `env` tmux's global environment: it sets every variable
+ * in `env` and removes those of `current` that `env` lacks. tmux reads an argument ending
+ * in `;` as a command separator, and `\;` as a literal `;`.
+ */
+export function setEnvironmentArgs(env: NodeJS.ProcessEnv, current: string[] = []): string[] {
+  const removals = current.filter((key) => env[key] === undefined).map((key) => [";", "set-environment", "-gu", key]);
+  const settings = Object.entries(env).flatMap(([key, value]) =>
+    value === undefined ? [] : [[";", "set-environment", "-g", key, value.endsWith(";") ? `${value.slice(0, -1)}\\;` : value]],
+  );
+  return [...removals, ...settings].flat().slice(1);
 }
 
 /** Runs tmux with an argv array. Never goes through a shell. */
