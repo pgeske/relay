@@ -1033,62 +1033,31 @@ struct NewTaskSheet: View {
     }
 }
 
-/// A session's model and thinking level, picked like omp's `/switch` and `/effort`. For a session
-/// yet to start, `offersDefault` adds omp's own default (nil) to both lists, and the chip stays
-/// untinted while it's on them, so a choice you made stands out. For one already running, it shows
-/// what it runs on and switches it.
+/// A session's model and thinking level, picked in a finder like omp's `/switch` (⇧⌘M opens it).
+/// For a session yet to start, `offersDefault` adds omp's own default (nil) to both lists, and the
+/// chip stays untinted while it's on them, so a choice you made stands out. For one already
+/// running, it shows what it runs on and switches it.
 struct ModelChip: View {
     let choices: ModelChoices
     @Binding var model: String?
     @Binding var level: String?
     var offersDefault = true
     let help: String
+    @State private var picking = false
 
     var body: some View {
-        Menu {
-            let levels = choices.option(model ?? choices.defaults.model)?.thinkingLevels ?? []
-            if !levels.isEmpty {
-                Section("Thinking") {
-                    if offersDefault { checkmarkButton("Default", selected: level == nil) { level = nil } }
-                    ForEach(levels, id: \.self) { option in
-                        checkmarkButton(ModelOption.levelLabel(option), selected: level == option) { level = option }
-                    }
-                }
-            }
-            Section("Model") {
-                if offersDefault { checkmarkButton("Default", selected: model == nil) { pick(nil) } }
-                ForEach(choices.providers, id: \.self) { provider in
-                    Menu(provider) {
-                        ForEach(choices.models.filter { $0.provider == provider }) { option in
-                            checkmarkButton(option.name, selected: model == option.selector) { pick(option.selector) }
-                        }
-                    }
-                }
-            }
-        } label: {
+        Button { picking.toggle() } label: {
             Label(label, systemImage: "cpu")
                 .lineLimit(1)
                 .modifier(Chip(on: offersDefault && (model != nil || level != nil)))
         }
-        .menuStyle(.button)
         .buttonStyle(.plain)
-        .menuIndicator(.hidden)
-        .menuOrder(.fixed)
+        .keyboardShortcut("m", modifiers: [.command, .shift])
         .fixedSize()
-        .help(help)
-    }
-
-    private func checkmarkButton(_ title: String, selected: Bool, action: @escaping () -> Void) -> some View {
-        Button(action: action) {
-            if selected { Label(title, systemImage: "checkmark") } else { Text(title) }
+        .help("\(help) (⇧⌘M)")
+        .popover(isPresented: $picking, arrowEdge: .bottom) {
+            ModelPicker(choices: choices, model: $model, level: $level, offersDefault: offersDefault) { picking = false }
         }
-    }
-
-    /// Switching models drops a thinking level the new one doesn't take, like omp's `/switch` would.
-    private func pick(_ selector: String?) {
-        model = selector
-        let levels = choices.option(selector ?? choices.defaults.model)?.thinkingLevels ?? []
-        if offersDefault, let chosen = level, !levels.contains(chosen) { level = nil }
     }
 
     /// "Opus 5.5 · Medium": what it runs on, defaults filled in.
