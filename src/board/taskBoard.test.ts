@@ -50,7 +50,7 @@ function session(status: "working" | "idle" | null, activeMinutesAgo = 5, onTask
 function boardOf(tasks: Task[], sessions: { taskId: number; info: TaskSessionInfo }[] = []) {
   const links = sessions.map(({ taskId, info }) => ({ taskId, sessionFile: info.sessionFile, linkedAt: minutesAgo(60) }));
   const sessionInfo = new Map(sessions.map(({ info }) => [info.sessionFile, info]));
-  return taskBoardView({ tasks, projects: [], events: new Map(), sessions: links, sessionInfo, prs: new Map(), board: null, dismissed: new Set(), now }, "/home");
+  return taskBoardView({ tasks, relations: new Map(), projects: [], events: new Map(), sessions: links, sessionInfo, prs: new Map(), board: null, dismissed: new Set(), now }, "/home");
 }
 
 describe("whose move a task waits on", () => {
@@ -160,7 +160,7 @@ describe("whose move a task waits on", () => {
       { taskId: 1, sessionFile: info.sessionFile, linkedAt: minutesAgo(5) },
     ];
     const stepsOf = (handedOff: Task) => {
-      const view = taskBoardView({ tasks: [task(), handedOff], projects: [], events: new Map(), sessions: links, sessionInfo: new Map([[info.sessionFile, info]]), prs: new Map(), board: null, dismissed: new Set(), now }, "/home");
+      const view = taskBoardView({ tasks: [task(), handedOff], relations: new Map(), projects: [], events: new Map(), sessions: links, sessionInfo: new Map([[info.sessionFile, info]]), prs: new Map(), board: null, dismissed: new Set(), now }, "/home");
       const card = view.columns.flatMap((column) => column.cards).find((c) => c.id === 2)!;
       return { turn: card.turn.id, steps: card.steps.map((step) => step.action) };
     };
@@ -234,7 +234,7 @@ describe("an untracked session", () => {
   function untracked(status: "working" | "idle") {
     const info: TaskSessionInfo = { ...session(status), sessionFile: "/sessions/loose.jsonl", title: "Quick question" };
     const view = taskBoardView(
-      { tasks: [], projects: [], events: new Map(), sessions: [], sessionInfo: new Map([[info.sessionFile, info]]), prs: new Map(), board: null, dismissed: new Set(), now },
+      { tasks: [], relations: new Map(), projects: [], events: new Map(), sessions: [], sessionInfo: new Map([[info.sessionFile, info]]), prs: new Map(), board: null, dismissed: new Set(), now },
       "/home",
     );
     return view.untracked[0];
@@ -255,7 +255,7 @@ test("a project counts and shows its subprojects' tasks, and cards name their pr
     { id: 4, name: "Docs", parentId: null, createdAt: at },
   ];
   const tasks = [task({ id: 1, projectId: 3 }), task({ id: 2, projectId: 1, blockedOn: "me", blockedAt: minutesAgo(5) })];
-  const view = taskBoardView({ tasks, projects, events: new Map(), sessions: [], sessionInfo: new Map(), prs: new Map(), board: null, dismissed: new Set(), now }, "/home");
+  const view = taskBoardView({ tasks, relations: new Map(), projects, events: new Map(), sessions: [], sessionInfo: new Map(), prs: new Map(), board: null, dismissed: new Set(), now }, "/home");
   const byName = new Map(view.projects.map((project) => [project.name, project]));
   expect(byName.get("Relay")).toMatchObject({ path: "Relay", ids: [1, 2, 3], open: 2, needsYou: 1 });
   expect(byName.get("Board")).toMatchObject({ path: "Relay/Board", parentId: 1, ids: [2, 3], open: 1, needsYou: 0 });

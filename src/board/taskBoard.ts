@@ -1,6 +1,6 @@
 import type { PullRequest } from "./github.ts";
 import type { Board, CiState, Lane } from "./lanes.ts";
-import { followsSession, projectPaths, taskRef, type Project, type Task, type TaskEvent, type TaskPr, type TaskSession, type TaskStage } from "./taskStore.ts";
+import { followsSession, projectPaths, taskRef, type Project, type Task, type TaskEvent, type TaskPr, type TaskRelations, type TaskSession, type TaskStage } from "./taskStore.ts";
 import { timeAgo, type Confirm, type Tone } from "./view.ts";
 
 /**
@@ -52,7 +52,7 @@ const TURN_ORDER: Turn[] = ["you", "agent", "progress", "others", "blocked", "id
 const DONE_SHOWN_MS = 14 * 24 * 60 * 60 * 1000;
 
 /** What a task card's controls ask relay's server: `POST /api/board/tasks/actions/<action>` with the card's `id`. */
-export const TASK_ACTIONS = ["start", "approve-plan", "open", "refresh", "ship", "send-back", "block", "resume", "unblock", "done", "reopen", "delete"] as const;
+export const TASK_ACTIONS = ["start", "approve-plan", "open", "refresh", "ship", "send-back", "block", "resume", "unblock", "done", "reopen", "delete", "add-dependency", "remove-dependency"] as const;
 export type TaskAction = (typeof TASK_ACTIONS)[number];
 /** What an untracked session's controls ask: the same endpoint, with the session's `sessionFile`. */
 export const SESSION_ACTIONS = ["open-session", "track", "dismiss", "close-session"] as const;
@@ -84,6 +84,7 @@ export interface TaskSessionInfo {
 
 export interface TaskInputs {
   tasks: Task[];
+  relations: Map<number, TaskRelations>;
   projects: Project[];
   events: Map<number, TaskEvent[]>;
   sessions: TaskSession[];
@@ -164,7 +165,7 @@ export interface HistoryView {
   auto: boolean;
 }
 
-export interface TaskCardView {
+export interface TaskCardView extends TaskRelations {
   id: number;
   /** "T-12": what the card's actions and the CLI name. */
   ref: string;
@@ -492,6 +493,7 @@ function taskCard(task: Task, inputs: TaskInputs, places: Map<string, PrPlace>, 
     id: task.id,
     ref,
     title: task.title,
+    ...(inputs.relations.get(task.id) ?? { dependsOn: [], neededBy: [] }),
     details: task.details,
     project: project ?? null,
     hue: taskHue(task.id),

@@ -42,6 +42,7 @@ struct BoardWindow: View {
             }
         }
         .sheet(isPresented: $model.composing) { NewTaskSheet(project: selectedProject) }
+        .sheet(item: $model.editingDependencies) { DependencySheet(card: $0) }
         .overlay { ShipCelebration() }
         .alert(model.confirming?.confirm.title ?? "", isPresented: confirmingBinding, presenting: model.confirming) { pending in
             if pending.confirm.destructive {

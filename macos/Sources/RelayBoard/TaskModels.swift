@@ -53,6 +53,9 @@ struct TaskCard: Decodable, Sendable, Identifiable {
     /// Why its agent says it's done, once it said so.
     var finish: Finish?
     var prs: [TaskPR]
+    /// Absent on servers predating task dependencies.
+    var dependsOn: [RelatedTask]?
+    var neededBy: [RelatedTask]?
     var session: TaskSession?
     var steps: [BoardAction]
     /// Said in the step's place for the moment between a control the window ran (Start, Approve
@@ -61,6 +64,13 @@ struct TaskCard: Decodable, Sendable, Identifiable {
     var menu: [BoardAction]
     var history: [HistoryItem]
     var updatedAt: Date
+}
+
+struct RelatedTask: Decodable, Sendable, Identifiable {
+    var id: Int
+    var ref: String
+    var title: String
+    var shipped: Bool
 }
 
 struct ProjectRef: Decodable, Sendable, Hashable {

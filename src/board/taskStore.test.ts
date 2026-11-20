@@ -3,16 +3,19 @@ import { expect, test } from "bun:test";
 import { openBoardStore } from "./store.ts";
 import {
   approvePlan,
+  changeDependency,
   createProject,
   createTask,
   createTaskTables,
   deleteProject,
+  deleteTask,
   ensureProject,
   finishTask,
   getTask,
   linkSession,
   linkSessionPrs,
   listProjects,
+  listTasks,
   pauseTask,
   projectPaths,
   recordPlan,
@@ -22,6 +25,7 @@ import {
   sendBack,
   setTaskProject,
   taskPrs,
+  taskRelations,
   type NewTask,
 } from "./taskStore.ts";
 
@@ -188,4 +192,39 @@ test("a board from before projects nested keeps its projects, and their tasks", 
   expect(listProjects(db)).toEqual([{ id: 1, name: "Relay", parentId: null, createdAt: "2026-11-01T00:00:00Z" }]);
   // The old table's name-wide uniqueness is gone: a Relay inside another project is fine now.
   expect(ensureProject(db, "Apps/Relay", "2026-11-07T10:00:00Z").id).not.toBe(1);
+});
+
+test("dependencies reject loops through other tasks without disturbing the existing links", () => {
+  const db = openBoardStore(":memory:");
+  const [a, b, c] = ["Publish", "Review", "Draft"].map((title) => createTask(db, { ...base, title }).id);
+  changeDependency(db, a, b, "add");
+  changeDependency(db, b, c, "add");
+  changeDependency(db, a, b, "add");
+  expect(() => changeDependency(db, c, a, "add")).toThrow(/already depends/);
+  expect(() => changeDependency(db, c, c, "add")).toThrow(/itself/);
+  expect(() => changeDependency(db, a, 999, "add")).toThrow(/no task/);
+  expect(taskRelations(db, listTasks(db)).get(b)).toEqual({
+    dependsOn: [{ id: c, ref: `T-${c}`, title: "Draft", shipped: false }],
+    neededBy: [{ id: a, ref: `T-${a}`, title: "Publish", shipped: false }],
+  });
+  changeDependency(db, a, b, "remove");
+  changeDependency(db, c, a, "add"); // The path from A to C no longer exists.
+  deleteTask(db, c); // Forget both the link from B and the one to A.
+  expect(db.query("SELECT * FROM task_dependencies").all()).toEqual([]);
+  db.close();
+});
+
+test("dependencies are satisfied by shipping, not delivery, and follow a reopened task", () => {
+  const db = openBoardStore(":memory:");
+  const a = createTask(db, base).id;
+  const b = createTask(db, base).id;
+  changeDependency(db, a, b, "add");
+  const shipped = () => taskRelations(db, listTasks(db)).get(a)!.dependsOn[0].shipped;
+  finishTask(db, b, { note: "Ready", at: base.at });
+  expect(shipped()).toBe(false);
+  reportTask(db, b, { blocked: null, stage: "done", at: base.at });
+  expect(shipped()).toBe(true);
+  reportTask(db, b, { blocked: null, stage: "doing", at: base.at });
+  expect(shipped()).toBe(false);
+  db.close();
 });

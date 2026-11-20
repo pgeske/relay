@@ -156,6 +156,9 @@ struct TaskCardView: View {
                     .help(card.title)
             }
             TurnLine(turn: card.turn)
+            if let links = card.dependsOn, let first = links.first(where: { !$0.shipped }) {
+                DependencyLine(card: card, first: first, others: links.count { !$0.shipped } - 1)
+            }
             if let finish = card.finish, finish.awaiting {
                 DeliveryNote(card: card, finish: finish)
             }
@@ -649,6 +652,9 @@ struct TaskMenuItems: View {
         Button("Copy ID", systemImage: "number") {
             NSPasteboard.general.clearContents()
             NSPasteboard.general.setString(card.ref, forType: .string)
+        }
+        if card.dependsOn != nil {
+            Button("Dependencies…", systemImage: "link") { model.editingDependencies = card }
         }
         if !projects.isEmpty {
             Menu("Move to Project", systemImage: "folder") {

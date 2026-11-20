@@ -14,6 +14,7 @@ import { SESSION_ACTIONS, TASK_ACTIONS, primarySession, sessionsByTask, type Ses
 import { readSessionInfo } from "./taskCommand.ts";
 import {
   approvePlan,
+  changeDependency,
   createProject,
   createTask,
   deleteProject,
@@ -192,6 +193,7 @@ function isSessionAction(action: string): action is SessionAction {
 /** The body of a task control: `{ "task": 12 }`, or `{ "session": "<file>" }` for an untracked session's. */
 export interface TaskActionTarget {
   task?: number;
+  prerequisite?: number;
   session?: string;
   /** For approve-plan: the plan's revision, as the card you approved from showed it. */
   plan?: string;
@@ -218,6 +220,18 @@ export async function runTaskAction(action: string, target: TaskActionTarget): P
       if (!task) return { status: 404, message: `no task ${taskRef(id)}` };
       const at = new Date().toISOString();
       switch (action) {
+        case "add-dependency":
+        case "remove-dependency": {
+          const other = target.prerequisite;
+          if (other === undefined || !Number.isSafeInteger(other) || other <= 0) return { status: 400, message: "which prerequisite task?" };
+          const adding = action === "add-dependency";
+          try {
+            changeDependency(db, id, other, adding ? "add" : "remove");
+          } catch (error) {
+            return { status: 400, message: error instanceof Error ? error.message : String(error) };
+          }
+          return { status: 200, message: `${taskRef(id)} ${adding ? "depends on" : "no longer depends on"} ${taskRef(other)}` };
+        }
         case "ship":
           if (!task.finishedAt) return { status: 409, message: `${taskRef(id)} isn't ready to ship` };
           break;

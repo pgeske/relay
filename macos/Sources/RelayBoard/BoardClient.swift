@@ -63,7 +63,7 @@ struct BoardClient: Sendable {
 
     /// Runs one of a card's controls. The server answers every outcome with a sentence to show,
     /// so only failing to reach it throws. `plan` names the plan an Approve Plan is for.
-    func perform(_ action: String, on target: ActionTarget, plan: String? = nil) async throws -> ActionResult {
+    func perform(_ action: String, on target: ActionTarget, plan: String? = nil, prerequisite: Int? = nil) async throws -> ActionResult {
         let path: String
         let body: Data
         switch target {
@@ -74,6 +74,7 @@ struct BoardClient: Sendable {
             path = "api/board/tasks/actions/\(action)"
             var fields: [String: Any] = ["task": id]
             if let plan { fields["plan"] = plan }
+            if let prerequisite { fields["prerequisite"] = prerequisite }
             body = try JSONSerialization.data(withJSONObject: fields)
         case .session(let file):
             path = "api/board/tasks/actions/\(action)"
