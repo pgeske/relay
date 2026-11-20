@@ -202,7 +202,19 @@ struct TaskCardView: View {
         .anchorPreference(key: TaskLinkAnchors.self, value: .bounds) { bounds in
             linked ? [card.id: bounds] : [:]
         }
-        .onHover { hovering = $0 }
+        .onHover { inside in
+            hovering = inside
+            // Hovering a linked card shows its links on the board.
+            guard linked else { return }
+            withAnimation(.easeOut(duration: 0.15)) {
+                if inside {
+                    linkFocus.wrappedValue = TaskLinkFocus(id: card.id, ref: card.ref, hue: card.hue, waitsOn: Set(waitsOn.map(\.id)), blocks: Set(blocks.map(\.id)))
+                } else if linkFocus.wrappedValue?.id == card.id {
+                    linkFocus.wrappedValue = nil
+                }
+            }
+        }
+        .onDisappear { if linkFocus.wrappedValue?.id == card.id { linkFocus.wrappedValue = nil } }
         .animation(.easeOut(duration: 0.15), value: hovering)
         .help("Show \(card.ref)'s details and history")
         .contextMenu { TaskMenuItems(card: card) }

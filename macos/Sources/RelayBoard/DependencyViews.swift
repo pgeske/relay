@@ -1,15 +1,14 @@
 import SwiftUI
 
 /// A card's unshipped links in plain words, "Waits on" and "Blocks", each task as a chip in its
-/// color. It names both sides even when the other card is folded or in another project. Hovering
-/// it shows the links on the board; clicking it edits them.
+/// color. It names both sides even when the other card is folded or in another project. Clicking
+/// it edits them.
 struct DependencyLine: View {
     let card: TaskCard
     let waitsOn: [RelatedTask]
     let blocks: [RelatedTask]
 
     @Environment(BoardModel.self) private var model
-    @Environment(\.taskLinkFocus) private var focus
 
     var body: some View {
         Button { model.editingDependencies = card } label: {
@@ -23,17 +22,7 @@ struct DependencyLine: View {
             .contentShape(.rect)
         }
         .buttonStyle(.plain)
-        .help("Hover to see these tasks on the board. Click to change \(card.ref)'s dependencies.")
-        .onHover { inside in
-            withAnimation(.easeOut(duration: 0.15)) {
-                if inside {
-                    focus.wrappedValue = TaskLinkFocus(id: card.id, ref: card.ref, hue: card.hue, waitsOn: Set(waitsOn.map(\.id)), blocks: Set(blocks.map(\.id)))
-                } else if focus.wrappedValue?.id == card.id {
-                    focus.wrappedValue = nil
-                }
-            }
-        }
-        .onDisappear { if focus.wrappedValue?.id == card.id { focus.wrappedValue = nil } }
+        .help("Change \(card.ref)'s dependencies")
     }
 
     @ViewBuilder private var groups: some View {

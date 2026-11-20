@@ -1,6 +1,6 @@
 import SwiftUI
 
-/// The task whose links you're looking at: hovering a card's dependency row focuses it. Its linked
+/// The task whose links you're looking at: hovering a linked card focuses it. Its linked
 /// cards light up and say how they relate, every other card fades, and arrows run from each
 /// prerequisite into the task that waits on it. Nothing is drawn otherwise, so a board with many
 /// links stays as calm as one without.
