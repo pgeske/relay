@@ -66,6 +66,12 @@ struct TaskCard: Decodable, Sendable, Identifiable {
     var updatedAt: Date
 }
 
+extension TaskCard {
+    var unshippedWaitsOn: [RelatedTask] { (dependsOn ?? []).filter { !$0.shipped } }
+    var unshippedBlocks: [RelatedTask] { (neededBy ?? []).filter { !$0.shipped } }
+    var hasUnshippedLinks: Bool { !unshippedWaitsOn.isEmpty || !unshippedBlocks.isEmpty }
+}
+
 struct RelatedTask: Decodable, Sendable, Identifiable {
     var id: Int
     /// Its card's color; absent on servers that predate it.

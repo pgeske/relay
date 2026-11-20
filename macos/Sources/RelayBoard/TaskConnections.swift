@@ -1,6 +1,6 @@
 import SwiftUI
 
-/// The task whose links you're looking at: hovering a linked card focuses it. Its linked
+/// The task whose links you're looking at: clicking a card's dependency row focuses it. Its linked
 /// cards light up and say how they relate, every other card fades, and arrows run from each
 /// prerequisite into the task that waits on it. Nothing is drawn otherwise, so a board with many
 /// links stays as calm as one without.
@@ -11,6 +11,18 @@ struct TaskLinkFocus: Equatable {
     /// Its unshipped prerequisites and dependents.
     let waitsOn: Set<Int>
     let blocks: Set<Int>
+
+    init?(card: TaskCard) {
+        guard card.stage != "done" else { return nil }
+        let waitsOn = Set(card.unshippedWaitsOn.map(\.id))
+        let blocks = Set(card.unshippedBlocks.map(\.id))
+        guard !waitsOn.isEmpty || !blocks.isEmpty else { return nil }
+        self.id = card.id
+        self.ref = card.ref
+        self.hue = card.hue
+        self.waitsOn = waitsOn
+        self.blocks = blocks
+    }
 }
 
 /// How a card relates to the focused task, so it can light up or fade.
@@ -38,22 +50,33 @@ struct TaskLinkAnchors: PreferenceKey {
 }
 
 private struct TaskLinkFocusKey: EnvironmentKey {
-    static let defaultValue: Binding<TaskLinkFocus?> = .constant(nil)
+    static let defaultValue: TaskLinkFocus? = nil
+}
+
+private struct TaskLinkFocusIdKey: EnvironmentKey {
+    static let defaultValue: Binding<Int?> = .constant(nil)
 }
 
 extension EnvironmentValues {
-    var taskLinkFocus: Binding<TaskLinkFocus?> {
+    var taskLinkFocus: TaskLinkFocus? {
         get { self[TaskLinkFocusKey.self] }
         set { self[TaskLinkFocusKey.self] = newValue }
+    }
+
+    var taskLinkFocusId: Binding<Int?> {
+        get { self[TaskLinkFocusIdKey.self] }
+        set { self[TaskLinkFocusIdKey.self] = newValue }
     }
 }
 
 struct TaskConnections: ViewModifier {
-    @Binding var focus: TaskLinkFocus?
+    let focus: TaskLinkFocus?
+    @Binding var focusedId: Int?
 
     func body(content: Content) -> some View {
         content
-            .environment(\.taskLinkFocus, $focus)
+            .environment(\.taskLinkFocus, focus)
+            .environment(\.taskLinkFocusId, $focusedId)
             .overlayPreferenceValue(TaskLinkAnchors.self) { anchors in
                 if let focus, let center = anchors[focus.id] {
                     GeometryReader { geometry in

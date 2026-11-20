@@ -2,16 +2,24 @@ import SwiftUI
 
 /// A card's unshipped links in plain words, "Waits on" and "Blocks", each task as a chip in its
 /// color. It names both sides even when the other card is folded or in another project. Clicking
-/// it edits them.
+/// it focuses the card's links on the board; clicking again clears the focus.
 struct DependencyLine: View {
     let card: TaskCard
     let waitsOn: [RelatedTask]
     let blocks: [RelatedTask]
 
-    @Environment(BoardModel.self) private var model
+    @Environment(\.taskLinkFocus) private var linkFocus
+    @Environment(\.taskLinkFocusId) private var focusedId
+    @State private var hovering = false
+
+    private var isFocused: Bool { linkFocus?.id == card.id }
 
     var body: some View {
-        Button { model.editingDependencies = card } label: {
+        Button {
+            withAnimation(.easeOut(duration: 0.15)) {
+                focusedId.wrappedValue = isFocused ? nil : card.id
+            }
+        } label: {
             // Both groups on one line when they fit, else one under the other.
             ViewThatFits(in: .horizontal) {
                 HStack(spacing: 12) { groups }
@@ -19,10 +27,30 @@ struct DependencyLine: View {
             }
             .font(.zoomed(.caption))
             .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.horizontal, 6)
+            .padding(.vertical, 3)
+            .background(backgroundFill, in: .rect(cornerRadius: 6))
+            .overlay {
+                if isFocused {
+                    RoundedRectangle(cornerRadius: 6, style: .continuous)
+                        .strokeBorder(taskColor(card.hue).opacity(0.35), lineWidth: 1)
+                }
+            }
+            .padding(.horizontal, -6)
+            .padding(.vertical, -2)
             .contentShape(.rect)
         }
         .buttonStyle(.plain)
-        .help("Change \(card.ref)'s dependencies")
+        .onHover { hovering = $0 }
+        .pointerStyle(.link)
+        .help(isFocused ? "Hide \(card.ref)'s links on the board" : "Show \(card.ref)'s links on the board")
+    }
+
+    private var backgroundFill: Color {
+        if isFocused {
+            return taskColor(card.hue).opacity(hovering ? 0.2 : 0.14)
+        }
+        return Color.primary.opacity(hovering ? 0.07 : 0)
     }
 
     @ViewBuilder private var groups: some View {
@@ -75,6 +103,106 @@ struct TaskLinkBadge: View {
             .foregroundStyle(.white)
             .padding(.horizontal, 7)
             .background(taskColor(focus.hue), in: .capsule)
+    }
+}
+
+/// Floating pill at the bottom of the Tasks view while one task's links are focused: names the
+/// task and its link counts, offers one-click editing, and clears focus on click or Escape.
+struct TaskLinkFocusBar: View {
+    let card: TaskCard
+    let focus: TaskLinkFocus
+    let clear: () -> Void
+
+    @Environment(BoardModel.self) private var model
+
+    var body: some View {
+        let zoom = Zoom.shared.scale
+        let tint = taskColor(focus.hue)
+        HStack(spacing: 10 * zoom) {
+            HStack(spacing: 6 * zoom) {
+                Circle().fill(tint).frame(width: 8 * zoom, height: 8 * zoom)
+                Text(focus.ref)
+                    .fontWeight(.semibold)
+                    .monospacedDigit()
+                Text(summary)
+                    .foregroundStyle(.secondary)
+            }
+            Divider().frame(height: 14 * zoom)
+            Button("Edit…") { model.editingDependencies = card }
+                .buttonStyle(.borderless)
+                .help("Add or remove \(focus.ref)'s dependencies")
+            Button("Done", action: clear)
+                .buttonStyle(.borderless)
+                .fontWeight(.medium)
+                .keyboardShortcut(.cancelAction)
+                .help("Clear link focus (Esc)")
+        }
+        .font(.zoomed(.callout))
+        .lineLimit(1)
+        .padding(.horizontal, 14 * zoom)
+        .padding(.vertical, 8 * zoom)
+        .glassEffect(.regular.tint(tint.opacity(0.08)).interactive(), in: .capsule)
+        .shadow(color: .black.opacity(0.18), radius: 14, y: 6)
+    }
+
+    private var summary: String {
+        var parts: [String] = []
+        if !focus.waitsOn.isEmpty { parts.append("Waits on \(focus.waitsOn.count)") }
+        if !focus.blocks.isEmpty { parts.append("Blocks \(focus.blocks.count)") }
+        return parts.joined(separator: " · ")
+    }
+}
+
+/// A task's unshipped dependencies inside its details popover, with controls to focus them on the
+/// board or open the editor.
+struct TaskDetailsDependencies: View {
+    let card: TaskCard
+    let waitsOn: [RelatedTask]
+    let blocks: [RelatedTask]
+    let isFocused: Bool
+    let toggleBoardFocus: () -> Void
+    let edit: () -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack {
+                Text("Dependencies")
+                    .font(.zoomed(.callout).weight(.semibold))
+                    .foregroundStyle(.secondary)
+                Spacer()
+                if card.stage != "done" {
+                    Button(isFocused ? "Hide Links" : "Show on Board", systemImage: "point.3.connected.trianglepath.dotted", action: toggleBoardFocus)
+                        .buttonStyle(.borderless)
+                        .font(.zoomed(.caption).weight(.medium))
+                }
+                Button("Edit…", action: edit)
+                    .buttonStyle(.borderless)
+                    .font(.zoomed(.caption).weight(.medium))
+            }
+            if !waitsOn.isEmpty {
+                relationRow("Waits on", waitsOn)
+            }
+            if !blocks.isEmpty {
+                relationRow("Blocks", blocks)
+            }
+        }
+    }
+
+    private func relationRow(_ label: String, _ tasks: [RelatedTask]) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text(label)
+                .font(.zoomed(.caption))
+                .foregroundStyle(.secondary)
+            ForEach(tasks) { task in
+                HStack(spacing: 6) {
+                    RelatedTaskChip(task: task)
+                    Text(task.title)
+                        .font(.zoomed(.caption))
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                }
+            }
+        }
     }
 }
 
