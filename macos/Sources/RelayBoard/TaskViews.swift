@@ -9,6 +9,7 @@ struct TasksView: View {
     let project: Project?
 
     @Environment(BoardModel.self) private var model
+    @State private var hoveredTask: Int?
 
     var body: some View {
         let columns = shownColumns
@@ -38,6 +39,7 @@ struct TasksView: View {
                 .padding(.top, 6)
                 .padding(.bottom, 16)
             }
+            .modifier(TaskConnections(hovered: $hoveredTask))
         }
     }
 
@@ -141,10 +143,14 @@ private struct UntrackedStrip: View {
 struct TaskCardView: View {
     let card: TaskCard
 
+    @Environment(\.hoveredTaskLink) private var hoveredTask
     @State private var hovering = false
     @State private var showingDetails = false
 
     var body: some View {
+        let needs = card.dependsOn ?? []
+        let neededBy = card.neededBy ?? []
+        let linked = needs.contains { !$0.shipped } || neededBy.contains { !$0.shipped }
         VStack(alignment: .leading, spacing: 9) {
             VStack(alignment: .leading, spacing: 5) {
                 header
@@ -156,9 +162,7 @@ struct TaskCardView: View {
                     .help(card.title)
             }
             TurnLine(turn: card.turn)
-            if let links = card.dependsOn, let first = links.first(where: { !$0.shipped }) {
-                DependencyLine(card: card, first: first, others: links.count { !$0.shipped } - 1)
-            }
+            if linked { DependencyLine(card: card, needs: needs, neededBy: neededBy) }
             if let finish = card.finish, finish.awaiting {
                 DeliveryNote(card: card, finish: finish)
             }
@@ -187,7 +191,15 @@ struct TaskCardView: View {
         .contentShape(.rect(cornerRadius: 12))
         .onTapGesture { showingDetails = true }
         .popover(isPresented: $showingDetails, arrowEdge: .trailing) { TaskDetailsPopover(card: card) }
-        .onHover { hovering = $0 }
+        .anchorPreference(key: TaskLinkAnchors.self, value: .bounds) { bounds in
+            linked ? [card.id: TaskLinkAnchor(bounds: bounds, prerequisites: needs, hue: card.hue)] : [:]
+        }
+        .onHover { inside in
+            hovering = inside
+            if inside && linked { hoveredTask.wrappedValue = card.id }
+            else if hoveredTask.wrappedValue == card.id { hoveredTask.wrappedValue = nil }
+        }
+        .onDisappear { if hoveredTask.wrappedValue == card.id { hoveredTask.wrappedValue = nil } }
         .animation(.easeOut(duration: 0.15), value: hovering)
         .help("Show \(card.ref)'s details and history")
         .contextMenu { TaskMenuItems(card: card) }
