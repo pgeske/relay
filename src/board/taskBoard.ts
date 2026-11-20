@@ -1,6 +1,6 @@
 import type { PullRequest } from "./github.ts";
 import type { Board, CiState, Lane } from "./lanes.ts";
-import { followsSession, projectPaths, taskRef, type Project, type Task, type TaskEvent, type TaskPr, type TaskRelations, type TaskSession, type TaskStage } from "./taskStore.ts";
+import { followsSession, projectPaths, taskRef, type Project, type RelatedTask, type Task, type TaskEvent, type TaskPr, type TaskRelations, type TaskSession, type TaskStage } from "./taskStore.ts";
 import { timeAgo, type Confirm, type Tone } from "./view.ts";
 
 /**
@@ -165,7 +165,12 @@ export interface HistoryView {
   auto: boolean;
 }
 
-export interface TaskCardView extends TaskRelations {
+/** Another task a card names: one it depends on or one that depends on it, in that task's color. */
+export interface RelatedTaskView extends RelatedTask {
+  hue: number;
+}
+
+export interface TaskCardView {
   id: number;
   /** "T-12": what the card's actions and the CLI name. */
   ref: string;
@@ -174,6 +179,8 @@ export interface TaskCardView extends TaskRelations {
   project: ProjectRefView | null;
   /** Its color, 0 to 7, so its card and its PRs on the PR board match. */
   hue: number;
+  dependsOn: RelatedTaskView[];
+  neededBy: RelatedTaskView[];
   stage: TaskStage;
   stageLabel: string;
   turn: TurnView;
@@ -247,6 +254,10 @@ export interface TaskChipView {
 }
 
 const HUES = 8;
+
+function withHue(task: RelatedTask): RelatedTaskView {
+  return { ...task, hue: taskHue(task.id) };
+}
 
 export function taskHue(id: number): number {
   // Neighboring ids land far apart on the color wheel.
@@ -493,7 +504,8 @@ function taskCard(task: Task, inputs: TaskInputs, places: Map<string, PrPlace>, 
     id: task.id,
     ref,
     title: task.title,
-    ...(inputs.relations.get(task.id) ?? { dependsOn: [], neededBy: [] }),
+    dependsOn: (inputs.relations.get(task.id)?.dependsOn ?? []).map(withHue),
+    neededBy: (inputs.relations.get(task.id)?.neededBy ?? []).map(withHue),
     details: task.details,
     project: project ?? null,
     hue: taskHue(task.id),

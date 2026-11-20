@@ -1,55 +1,91 @@
 import SwiftUI
 
-/// Name both sides, even when the other card is folded or in a different project.
+/// A card's unshipped links in plain words, "Waits on" and "Blocks", each task as a chip in its
+/// color. It names both sides even when the other card is folded or in another project. Hovering
+/// it shows the links on the board; clicking it edits them.
 struct DependencyLine: View {
     let card: TaskCard
-    let needs: [RelatedTask]
-    let neededBy: [RelatedTask]
+    let waitsOn: [RelatedTask]
+    let blocks: [RelatedTask]
 
     @Environment(BoardModel.self) private var model
-    @Environment(\.hoveredTaskLink) private var hoveredTask
+    @Environment(\.taskLinkFocus) private var focus
 
     var body: some View {
-        let focus = hoveredTask.wrappedValue
-        let prerequisite = needs.first { !$0.shipped && $0.id == focus }
-        let dependent = neededBy.first { !$0.shipped && $0.id == focus }
         Button { model.editingDependencies = card } label: {
-            HStack(spacing: 4) {
-                if let prerequisite {
-                    summary("Depends on", prerequisite, total: 1, showTitle: true)
-                } else if let dependent {
-                    summary("Prerequisite for", dependent, total: 1, showTitle: true)
-                } else {
-                    let upstream = needs.first { !$0.shipped }
-                    let downstream = neededBy.first { !$0.shipped }
-                    if let upstream {
-                        summary("After", upstream, total: needs.count { !$0.shipped }, showTitle: downstream == nil)
-                    }
-                    if let downstream {
-                        summary("Before", downstream, total: neededBy.count { !$0.shipped }, showTitle: upstream == nil)
-                    }
-                }
+            // Both groups on one line when they fit, else one under the other.
+            ViewThatFits(in: .horizontal) {
+                HStack(spacing: 12) { groups }
+                VStack(alignment: .leading, spacing: 5) { groups }
             }
             .font(.zoomed(.caption))
-            .foregroundStyle(.secondary)
+            .frame(maxWidth: .infinity, alignment: .leading)
             .contentShape(.rect)
         }
         .buttonStyle(.plain)
-        .help("The arrow points to the task that depends on the other. Click to see all dependencies.")
+        .help("Hover to see these tasks on the board. Click to change \(card.ref)'s dependencies.")
+        .onHover { inside in
+            withAnimation(.easeOut(duration: 0.15)) {
+                if inside {
+                    focus.wrappedValue = TaskLinkFocus(id: card.id, ref: card.ref, hue: card.hue, waitsOn: Set(waitsOn.map(\.id)), blocks: Set(blocks.map(\.id)))
+                } else if focus.wrappedValue?.id == card.id {
+                    focus.wrappedValue = nil
+                }
+            }
+        }
+        .onDisappear { if focus.wrappedValue?.id == card.id { focus.wrappedValue = nil } }
     }
 
-    private func summary(_ label: String, _ first: RelatedTask, total: Int, showTitle: Bool) -> some View {
-        HStack(spacing: 3) {
-            Text("\(label) \(first.ref)")
-                .font(.zoomed(.subheadline).weight(.semibold))
-                .foregroundStyle(.primary)
-                .lineLimit(1)
-                .padding(.horizontal, 5)
-                .padding(.vertical, 2)
-                .background(.quaternary, in: .rect(cornerRadius: 4))
-            if showTitle { Text(first.title).lineLimit(1).layoutPriority(-1) }
-            if total > 1 { Text("+\(total - 1)").fontWeight(.semibold).fixedSize() }
+    @ViewBuilder private var groups: some View {
+        if !waitsOn.isEmpty { group("Waits on", waitsOn) }
+        if !blocks.isEmpty { group("Blocks", blocks) }
+    }
+
+    private func group(_ label: String, _ tasks: [RelatedTask]) -> some View {
+        HStack(spacing: 4) {
+            Text(label).foregroundStyle(.secondary).fixedSize()
+            ForEach(tasks.prefix(3)) { RelatedTaskChip(task: $0) }
+            if tasks.count > 3 { Text("+\(tasks.count - 3)").fontWeight(.semibold).foregroundStyle(.secondary).fixedSize() }
+            // A lone link has room to say what the other task is.
+            if waitsOn.count + blocks.count == 1 {
+                Text(tasks[0].title).foregroundStyle(.secondary).lineLimit(1).layoutPriority(-1)
+            }
         }
+    }
+}
+
+/// Another task named on a card: a dot in its color and its id, like its own card's header.
+private struct RelatedTaskChip: View {
+    let task: RelatedTask
+
+    var body: some View {
+        let color = task.hue.map(taskColor) ?? .secondary
+        HStack(spacing: 3) {
+            Circle().fill(color).frame(width: 6 * Zoom.shared.scale)
+            Text(task.ref).monospacedDigit()
+        }
+        .fontWeight(.semibold)
+        .foregroundStyle(.primary)
+        .lineLimit(1)
+        .fixedSize()
+        .padding(.horizontal, 5)
+        .padding(.vertical, 1.5)
+        .background(color.opacity(0.16), in: .rect(cornerRadius: 4))
+        .help("\(task.ref): \(task.title)")
+    }
+}
+
+/// On a card linked to the focused task, how the two relate, in the focused task's color.
+struct TaskLinkBadge: View {
+    let focus: TaskLinkFocus
+    let role: TaskLinkRole
+
+    var body: some View {
+        Text(role == .prerequisite ? "\(focus.ref) waits on this" : "Waits on \(focus.ref)")
+            .fontWeight(.semibold)
+            .foregroundStyle(.white)
+            .padding(.horizontal, 7)
+            .background(taskColor(focus.hue), in: .capsule)
     }
 }
 
