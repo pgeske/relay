@@ -7,19 +7,27 @@ struct DependencyLine: View {
     let neededBy: [RelatedTask]
 
     @Environment(BoardModel.self) private var model
+    @Environment(\.hoveredTaskLink) private var hoveredTask
 
     var body: some View {
-        let upstream = needs.first { !$0.shipped }
-        let downstream = neededBy.first { !$0.shipped }
+        let focus = hoveredTask.wrappedValue
+        let prerequisite = needs.first { !$0.shipped && $0.id == focus }
+        let dependent = neededBy.first { !$0.shipped && $0.id == focus }
         Button { model.editingDependencies = card } label: {
             HStack(spacing: 4) {
-                Image(systemName: "link")
-                if let upstream {
-                    summary("Depends on", upstream, total: needs.count { !$0.shipped }, showTitle: downstream == nil)
-                }
-                if upstream != nil && downstream != nil { Text("·") }
-                if let downstream {
-                    summary("Needed by", downstream, total: neededBy.count { !$0.shipped }, showTitle: upstream == nil)
+                if let prerequisite {
+                    summary("Depends on", prerequisite, total: 1, showTitle: true)
+                } else if let dependent {
+                    summary("Prerequisite for", dependent, total: 1, showTitle: true)
+                } else {
+                    let upstream = needs.first { !$0.shipped }
+                    let downstream = neededBy.first { !$0.shipped }
+                    if let upstream {
+                        summary("After", upstream, total: needs.count { !$0.shipped }, showTitle: downstream == nil)
+                    }
+                    if let downstream {
+                        summary("Before", downstream, total: neededBy.count { !$0.shipped }, showTitle: upstream == nil)
+                    }
                 }
             }
             .font(.zoomed(.caption))
@@ -27,12 +35,18 @@ struct DependencyLine: View {
             .contentShape(.rect)
         }
         .buttonStyle(.plain)
-        .help("Hover to highlight connected cards. Click to see all dependencies.")
+        .help("The arrow points to the task that depends on the other. Click to see all dependencies.")
     }
 
     private func summary(_ label: String, _ first: RelatedTask, total: Int, showTitle: Bool) -> some View {
         HStack(spacing: 3) {
-            Text("\(label) \(first.ref)").fontWeight(.medium).lineLimit(1)
+            Text("\(label) \(first.ref)")
+                .font(.zoomed(.subheadline).weight(.semibold))
+                .foregroundStyle(.primary)
+                .lineLimit(1)
+                .padding(.horizontal, 5)
+                .padding(.vertical, 2)
+                .background(.quaternary, in: .rect(cornerRadius: 4))
             if showTitle { Text(first.title).lineLimit(1).layoutPriority(-1) }
             if total > 1 { Text("+\(total - 1)").fontWeight(.semibold).fixedSize() }
         }
