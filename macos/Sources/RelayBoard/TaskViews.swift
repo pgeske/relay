@@ -9,10 +9,13 @@ struct TasksView: View {
     let project: Project?
 
     @Environment(BoardModel.self) private var model
-    @State private var linkFocus: TaskLinkFocus?
+    @State private var focusedTaskId: Int?
+    @State private var viewportHeight: CGFloat = 0
 
     var body: some View {
         let columns = shownColumns
+        let focusedCard = focusedTaskId.flatMap { id in columns.lazy.flatMap(\.cards).first { $0.id == id } }
+        let linkFocus = focusedCard.flatMap(TaskLinkFocus.init)
         // Sessions no task knows about belong to no project.
         let untracked = project == nil ? model.untrackedSessions : []
         if columns.allSatisfy(\.cards.isEmpty) && untracked.isEmpty {
@@ -37,9 +40,35 @@ struct TasksView: View {
                     ForEach(columns) { StageSection(column: $0) }
                 }
                 .padding(.top, 6)
-                .padding(.bottom, 16)
+                .padding(.bottom, linkFocus != nil ? 76 : 16)
+                .frame(maxWidth: .infinity, minHeight: viewportHeight, alignment: .topLeading)
+                .background {
+                    if linkFocus != nil {
+                        Color.clear
+                            .contentShape(.rect)
+                            .onTapGesture {
+                                withAnimation(.easeOut(duration: 0.15)) { focusedTaskId = nil }
+                            }
+                    }
+                }
             }
-            .modifier(TaskConnections(focus: $linkFocus))
+            .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { viewportHeight = $0 }
+            .modifier(TaskConnections(focus: linkFocus, focusedId: $focusedTaskId))
+            .overlay(alignment: .bottom) {
+                if let linkFocus, let focusedCard {
+                    TaskLinkFocusBar(card: focusedCard, focus: linkFocus) {
+                        withAnimation(.easeOut(duration: 0.15)) { focusedTaskId = nil }
+                    }
+                    .padding(.bottom, model.toast == nil ? 22 : 78)
+                    .transition(.move(edge: .bottom).combined(with: .opacity))
+                }
+            }
+            .animation(.easeOut(duration: 0.15), value: linkFocus?.id)
+            .animation(.spring(duration: 0.35, bounce: 0.2), value: model.toast != nil)
+            .onChange(of: project?.id) { focusedTaskId = nil }
+            .onChange(of: linkFocus == nil) { _, cleared in
+                if cleared && focusedTaskId != nil { focusedTaskId = nil }
+            }
         }
     }
 
@@ -144,14 +173,15 @@ struct TaskCardView: View {
     let card: TaskCard
 
     @Environment(\.taskLinkFocus) private var linkFocus
+    @Environment(\.taskLinkFocusId) private var focusedTaskId
     @State private var hovering = false
     @State private var showingDetails = false
 
     var body: some View {
-        let waitsOn = (card.dependsOn ?? []).filter { !$0.shipped }
-        let blocks = (card.neededBy ?? []).filter { !$0.shipped }
-        let linked = !waitsOn.isEmpty || !blocks.isEmpty
-        let focus = linkFocus.wrappedValue
+        let waitsOn = card.unshippedWaitsOn
+        let blocks = card.unshippedBlocks
+        let linked = card.hasUnshippedLinks
+        let focus = linkFocus
         let role = focus?.role(of: card.id) ?? .unrelated
         VStack(alignment: .leading, spacing: 9) {
             VStack(alignment: .leading, spacing: 5) {
@@ -197,26 +227,21 @@ struct TaskCardView: View {
         // While you look at one task's links, the cards it has nothing to do with step back.
         .opacity(focus != nil && role == .unrelated ? 0.35 : 1)
         .contentShape(.rect(cornerRadius: 12))
-        .onTapGesture { showingDetails = true }
-        .popover(isPresented: $showingDetails, arrowEdge: .trailing) { TaskDetailsPopover(card: card) }
+        .onTapGesture {
+            if focus != nil && role == .unrelated {
+                withAnimation(.easeOut(duration: 0.15)) { focusedTaskId.wrappedValue = nil }
+            } else {
+                showingDetails = true
+            }
+        }
+        .popover(isPresented: $showingDetails, arrowEdge: .trailing) { TaskDetailsPopover(card: card, isPresented: $showingDetails) }
         .anchorPreference(key: TaskLinkAnchors.self, value: .bounds) { bounds in
             linked ? [card.id: bounds] : [:]
         }
-        .onHover { inside in
-            hovering = inside
-            // Hovering a linked card shows its links on the board.
-            guard linked else { return }
-            withAnimation(.easeOut(duration: 0.15)) {
-                if inside {
-                    linkFocus.wrappedValue = TaskLinkFocus(id: card.id, ref: card.ref, hue: card.hue, waitsOn: Set(waitsOn.map(\.id)), blocks: Set(blocks.map(\.id)))
-                } else if linkFocus.wrappedValue?.id == card.id {
-                    linkFocus.wrappedValue = nil
-                }
-            }
-        }
-        .onDisappear { if linkFocus.wrappedValue?.id == card.id { linkFocus.wrappedValue = nil } }
+        .onHover { hovering = $0 }
+        .onDisappear { if focusedTaskId.wrappedValue == card.id { focusedTaskId.wrappedValue = nil } }
         .animation(.easeOut(duration: 0.15), value: hovering)
-        .help("Show \(card.ref)'s details and history")
+        .help(focus != nil && role == .unrelated ? "Click to clear link focus" : "Show \(card.ref)'s details and history")
         .contextMenu { TaskMenuItems(card: card) }
     }
 
@@ -673,6 +698,8 @@ struct TaskMenuItems: View {
     let card: TaskCard
 
     @Environment(BoardModel.self) private var model
+    @Environment(\.taskLinkFocus) private var linkFocus
+    @Environment(\.taskLinkFocusId) private var focusedTaskId
 
     var body: some View {
         if let session = card.session {
@@ -684,6 +711,14 @@ struct TaskMenuItems: View {
         Button("Copy ID", systemImage: "number") {
             NSPasteboard.general.clearContents()
             NSPasteboard.general.setString(card.ref, forType: .string)
+        }
+        if card.hasUnshippedLinks && card.stage != "done" {
+            let focused = linkFocus?.id == card.id
+            Button(focused ? "Hide Links" : "Show Links", systemImage: "point.3.connected.trianglepath.dotted") {
+                withAnimation(.easeOut(duration: 0.15)) {
+                    focusedTaskId.wrappedValue = focused ? nil : card.id
+                }
+            }
         }
         if card.dependsOn != nil {
             Button("Dependencies…", systemImage: "link") { model.editingDependencies = card }
@@ -719,8 +754,16 @@ struct TaskMenuItems: View {
 /// Everything about a task: what you asked for, where it stands, and its history.
 private struct TaskDetailsPopover: View {
     let card: TaskCard
+    @Binding var isPresented: Bool
+
+    @Environment(BoardModel.self) private var model
+    @Environment(\.taskLinkFocus) private var linkFocus
+    @Environment(\.taskLinkFocusId) private var focusedTaskId
 
     var body: some View {
+        let waitsOn = card.unshippedWaitsOn
+        let blocks = card.unshippedBlocks
+        let isFocused = linkFocus?.id == card.id
         VStack(alignment: .leading, spacing: 10) {
             HStack(alignment: .firstTextBaseline, spacing: 6) {
                 Text(card.ref).foregroundStyle(.secondary).monospacedDigit()
@@ -733,6 +776,23 @@ private struct TaskDetailsPopover: View {
                 MarkdownText(text: details).foregroundStyle(.secondary)
             }
             TurnLine(turn: card.turn)
+            if !waitsOn.isEmpty || !blocks.isEmpty {
+                Divider()
+                TaskDetailsDependencies(
+                    card: card,
+                    waitsOn: waitsOn,
+                    blocks: blocks,
+                    isFocused: isFocused,
+                    toggleBoardFocus: {
+                        isPresented = false
+                        withAnimation(.easeOut(duration: 0.15)) { focusedTaskId.wrappedValue = isFocused ? nil : card.id }
+                    },
+                    edit: {
+                        isPresented = false
+                        model.editingDependencies = card
+                    }
+                )
+            }
             if let finish = card.finish, let text = finish.text {
                 Divider()
                 Text("What the agent delivered").font(.zoomed(.callout).weight(.semibold)).foregroundStyle(.secondary)
@@ -867,7 +927,7 @@ private struct DoneRow: View {
         .background(Color.primary.opacity(hovering ? 0.05 : 0))
         .contentShape(.rect)
         .onTapGesture { showingDetails = true }
-        .popover(isPresented: $showingDetails, arrowEdge: .bottom) { TaskDetailsPopover(card: card) }
+        .popover(isPresented: $showingDetails, arrowEdge: .bottom) { TaskDetailsPopover(card: card, isPresented: $showingDetails) }
         .onHover { hovering = $0 }
         .contextMenu { TaskMenuItems(card: card) }
     }
