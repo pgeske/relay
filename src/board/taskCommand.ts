@@ -12,6 +12,7 @@ import { STAGE_LABELS, taskBoardView, taskChips, type TaskBoardView, type TaskCh
 import {
   BLOCKERS,
   TASK_STAGES,
+  changeDependency,
   createTask,
   currentTask,
   dismissedSessions,
@@ -29,6 +30,7 @@ import {
   taskEvents,
   taskPrs,
   taskRef,
+  taskRelations,
   taskSessions,
   type BlockedOn,
   type Task,
@@ -46,6 +48,8 @@ Usage:
                  [--status <text>] [--skip-plan]
                                       Register a task and put this session on it; prints its id
   relay task link <task>              Put this session on a task too
+  relay task depend [<task>] <prerequisite>    Record that this task depends on another
+  relay task undepend [<task>] <prerequisite>  Remove that dependency
   relay task update [<task>] [--stage <stage>] [--status <text>]
                     [--blocked-on me|others | --in-progress] [--reason <text>] [--pr <pr>]
                     [--project <name>]
@@ -105,7 +109,7 @@ export function assembleTasks(board: Board | null, live: Map<string, Pane>, now:
     const prs = taskPrs(db);
     const sessionInfo = readSessionInfo([...sessions.map((link) => link.sessionFile), ...live.keys()], live);
     const view = taskBoardView(
-      { tasks, projects: listProjects(db), events: taskEvents(db), sessions, sessionInfo, prs, board, dismissed: dismissedSessions(db), now },
+      { tasks, relations: taskRelations(db, tasks), projects: listProjects(db), events: taskEvents(db), sessions, sessionInfo, prs, board, dismissed: dismissedSessions(db), now },
       homedir(),
     );
     return { view, chips: taskChips(tasks, prs) };
@@ -215,6 +219,19 @@ async function link(args: string[]): Promise<void> {
   }
 }
 
+async function dependency(command: "depend" | "undepend", args: string[]): Promise<void> {
+  if (args.length !== 1 && args.length !== 2) throw new Error(`usage: relay task ${command} [<task>] <prerequisite>`);
+  const prerequisite = parseTaskRef(args[args.length - 1]);
+  const db = openBoardStore();
+  try {
+    const task = await resolveTask(db, args.length === 2 ? args[0] : undefined);
+    changeDependency(db, task.id, prerequisite, command === "depend" ? "add" : "remove");
+    console.log(`${taskRef(task.id)} ${command === "depend" ? "depends on" : "no longer depends on"} ${taskRef(prerequisite)}`);
+  } finally {
+    db.close();
+  }
+}
+
 async function update(args: string[]): Promise<void> {
   const at = new Date().toISOString();
   const stage = parseStage(flagValue(args, "--stage"));
@@ -302,6 +319,8 @@ async function show(args: string[]): Promise<void> {
   }
   const lines = [`${card.ref}: ${card.title}${card.project ? `  [${card.project.path}]` : ""}`, `${column.title} · ${turnText(card.turn)}`];
   if (card.status) lines.push(`Status: ${card.status.text} (${card.status.ago}${card.status.auto ? ", filled in by relay" : ""})`);
+  for (const dependency of card.dependsOn) lines.push(`Depends on ${dependency.ref}: ${dependency.title}${dependency.shipped ? " (shipped)" : ""}`);
+  for (const dependent of card.neededBy) lines.push(`Needed by ${dependent.ref}: ${dependent.title}`);
   if (card.plan) lines.push(`Plan: ${card.plan.awaiting ? "waiting for approval" : card.plan.approved ? "approved" : "recorded"}`);
   if (card.finish) lines.push(`Delivery note${card.finish.awaiting ? " (ready for the user to ship)" : ""}: ${card.finish.text ?? "none"}`);
   for (const pr of card.prs) lines.push(`PR ${pr.ref}: ${pr.state}`);
@@ -340,6 +359,9 @@ export async function taskCommand(args: string[]): Promise<void> {
       return newTask(rest);
     case "link":
       return link(rest);
+    case "depend":
+    case "undepend":
+      return dependency(subcommand, rest);
     case "update":
       return update(rest);
     case "plan":

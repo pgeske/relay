@@ -36,6 +36,7 @@ final class BoardModel {
     var confirming: PendingAction?
     /// The New Task sheet is up.
     var composing = false
+    var editingDependencies: TaskCard?
     /// What the New Task sheet's model picker offers; nil until it first opens, or while omp can't list them.
     private(set) var modelChoices: ModelChoices?
     /// Controls on their way to the server, as "<target> <action>".
@@ -151,6 +152,19 @@ final class BoardModel {
             let result = try await client.project(action, project: project, name: name, parent: parent, task: task)
             toast = Toast(message: result.message, failed: !result.ok)
             if result.ok { schedule(after: .zero) }
+            return result.ok
+        } catch {
+            report(error)
+            return false
+        }
+    }
+
+    func changeDependency(on task: Int, prerequisite: Int, adding: Bool) async -> Bool {
+        do {
+            let action = adding ? "add-dependency" : "remove-dependency"
+            let result = try await client.perform(action, on: .task(task), prerequisite: prerequisite)
+            toast = Toast(message: result.message, failed: !result.ok)
+            if result.ok { refreshNow() }
             return result.ok
         } catch {
             report(error)

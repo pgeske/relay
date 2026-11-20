@@ -220,6 +220,11 @@ export function createTaskTables(db: Database): void {
       db.run("ALTER TABLE tasks_rebuilt RENAME TO tasks");
     })();
   }
+  db.run(`CREATE TABLE IF NOT EXISTS task_dependencies (
+    task_id INTEGER NOT NULL,
+    prerequisite_id INTEGER NOT NULL CHECK (prerequisite_id != task_id),
+    PRIMARY KEY (task_id, prerequisite_id)
+  )`);
   db.run(`CREATE TABLE IF NOT EXISTS task_events (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     task_id INTEGER NOT NULL,
@@ -495,8 +500,61 @@ export function retitleTask(db: Database, id: number, from: string, to: string):
 export function deleteTask(db: Database, id: number): void {
   db.transaction(() => {
     for (const table of ["task_events", "task_sessions", "task_prs"]) db.query(`DELETE FROM ${table} WHERE task_id = ?`).run(id);
+    db.query("DELETE FROM task_dependencies WHERE task_id = ? OR prerequisite_id = ?").run(id, id);
     db.query("DELETE FROM tasks WHERE id = ?").run(id);
   })();
+}
+
+export interface RelatedTask {
+  id: number;
+  ref: string;
+  title: string;
+  shipped: boolean;
+}
+
+export interface TaskRelations {
+  dependsOn: RelatedTask[];
+  neededBy: RelatedTask[];
+}
+
+/** Index both directions before old shipments are filtered off the board. */
+export function taskRelations(db: Database, tasks: Task[]): Map<number, TaskRelations> {
+  const byId = new Map(tasks.map((task) => [task.id, task]));
+  const result = new Map<number, TaskRelations>();
+  function relations(id: number): TaskRelations {
+    let links = result.get(id);
+    if (!links) result.set(id, links = { dependsOn: [], neededBy: [] });
+    return links;
+  }
+  function related(task: Task): RelatedTask {
+    return { id: task.id, ref: taskRef(task.id), title: task.title, shipped: task.stage === "done" };
+  }
+  for (const edge of db.query<{ task_id: number; prerequisite_id: number }, []>("SELECT task_id, prerequisite_id FROM task_dependencies ORDER BY task_id, prerequisite_id").all()) {
+    const task = byId.get(edge.task_id);
+    const prerequisite = byId.get(edge.prerequisite_id);
+    if (!task || !prerequisite) continue;
+    relations(task.id).dependsOn.push(related(prerequisite));
+    relations(prerequisite.id).neededBy.push(related(task));
+  }
+  return result;
+}
+
+/** The check and insert share a write lock: concurrent links cannot close a loop together. */
+export function changeDependency(db: Database, task: number, prerequisite: number, change: "add" | "remove"): void {
+  db.transaction(() => {
+    for (const id of [task, prerequisite]) if (!getTask(db, id)) throw new Error(`no task ${taskRef(id)}`);
+    if (change === "remove") {
+      db.query("DELETE FROM task_dependencies WHERE task_id = ? AND prerequisite_id = ?").run(task, prerequisite);
+      return;
+    }
+    if (task === prerequisite) throw new Error("a task cannot depend on itself");
+    const cycle = db.query(`WITH RECURSIVE upstream(id) AS (
+      SELECT prerequisite_id FROM task_dependencies WHERE task_id = ?
+      UNION SELECT prerequisite_id FROM task_dependencies JOIN upstream ON task_id = upstream.id
+    ) SELECT 1 FROM upstream WHERE id = ? LIMIT 1`).get(prerequisite, task);
+    if (cycle) throw new Error(`cannot add dependency: ${taskRef(prerequisite)} already depends on ${taskRef(task)}`);
+    db.query("INSERT OR IGNORE INTO task_dependencies (task_id, prerequisite_id) VALUES (?, ?)").run(task, prerequisite);
+  }).immediate();
 }
 
 /** Puts a task in a project, or in none when `projectId` is null; throws when either isn't there. */

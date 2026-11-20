@@ -387,6 +387,7 @@ async function routeTasks(req: IncomingMessage, res: ServerResponse, rest: strin
     ? await createTaskFromBoard(request)
     : await runTaskAction(rest[1], {
         task: typeof body.task === "number" ? body.task : undefined,
+        prerequisite: typeof body.prerequisite === "number" ? body.prerequisite : undefined,
         session: typeof body.session === "string" ? body.session : undefined,
         plan: typeof body.plan === "string" ? body.plan : undefined,
       });
