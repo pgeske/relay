@@ -1,27 +1,41 @@
 import SwiftUI
 
-/// Only open prerequisites take space on a card, and never more than one line.
+/// Name both sides, even when the other card is folded or in a different project.
 struct DependencyLine: View {
     let card: TaskCard
-    let first: RelatedTask
-    let others: Int
+    let needs: [RelatedTask]
+    let neededBy: [RelatedTask]
 
     @Environment(BoardModel.self) private var model
 
     var body: some View {
+        let upstream = needs.first { !$0.shipped }
+        let downstream = neededBy.first { !$0.shipped }
         Button { model.editingDependencies = card } label: {
             HStack(spacing: 4) {
                 Image(systemName: "link")
-                Text("Depends on \(first.ref)").fontWeight(.medium).fixedSize()
-                Text(first.title).lineLimit(1)
-                if others > 0 { Text("+\(others)").fontWeight(.semibold).fixedSize() }
+                if let upstream {
+                    summary("Depends on", upstream, total: needs.count { !$0.shipped }, showTitle: downstream == nil)
+                }
+                if upstream != nil && downstream != nil { Text("·") }
+                if let downstream {
+                    summary("Needed by", downstream, total: neededBy.count { !$0.shipped }, showTitle: upstream == nil)
+                }
             }
             .font(.zoomed(.caption))
             .foregroundStyle(.secondary)
             .contentShape(.rect)
         }
         .buttonStyle(.plain)
-        .help("Depends on \(first.ref): \(first.title) — show all dependencies")
+        .help("Hover to highlight connected cards. Click to see all dependencies.")
+    }
+
+    private func summary(_ label: String, _ first: RelatedTask, total: Int, showTitle: Bool) -> some View {
+        HStack(spacing: 3) {
+            Text("\(label) \(first.ref)").fontWeight(.medium).lineLimit(1)
+            if showTitle { Text(first.title).lineLimit(1).layoutPriority(-1) }
+            if total > 1 { Text("+\(total - 1)").fontWeight(.semibold).fixedSize() }
+        }
     }
 }
 
