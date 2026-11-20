@@ -9,7 +9,7 @@ struct TasksView: View {
     let project: Project?
 
     @Environment(BoardModel.self) private var model
-    @State private var hoveredTask: Int?
+    @State private var linkFocus: TaskLinkFocus?
 
     var body: some View {
         let columns = shownColumns
@@ -39,7 +39,7 @@ struct TasksView: View {
                 .padding(.top, 6)
                 .padding(.bottom, 16)
             }
-            .modifier(TaskConnections(hovered: $hoveredTask))
+            .modifier(TaskConnections(focus: $linkFocus))
         }
     }
 
@@ -143,17 +143,19 @@ private struct UntrackedStrip: View {
 struct TaskCardView: View {
     let card: TaskCard
 
-    @Environment(\.hoveredTaskLink) private var hoveredTask
+    @Environment(\.taskLinkFocus) private var linkFocus
     @State private var hovering = false
     @State private var showingDetails = false
 
     var body: some View {
-        let needs = card.dependsOn ?? []
-        let neededBy = card.neededBy ?? []
-        let linked = needs.contains { !$0.shipped } || neededBy.contains { !$0.shipped }
+        let waitsOn = (card.dependsOn ?? []).filter { !$0.shipped }
+        let blocks = (card.neededBy ?? []).filter { !$0.shipped }
+        let linked = !waitsOn.isEmpty || !blocks.isEmpty
+        let focus = linkFocus.wrappedValue
+        let role = focus?.role(of: card.id) ?? .unrelated
         VStack(alignment: .leading, spacing: 9) {
             VStack(alignment: .leading, spacing: 5) {
-                header
+                header(focus: focus, role: role)
                 Text(card.title)
                     .font(.zoomed(.body).weight(.semibold))
                     .lineLimit(2)
@@ -162,7 +164,7 @@ struct TaskCardView: View {
                     .help(card.title)
             }
             TurnLine(turn: card.turn)
-            if linked { DependencyLine(card: card, needs: needs, neededBy: neededBy) }
+            if linked { DependencyLine(card: card, waitsOn: waitsOn, blocks: blocks) }
             if let finish = card.finish, finish.awaiting {
                 DeliveryNote(card: card, finish: finish)
             }
@@ -185,27 +187,28 @@ struct TaskCardView: View {
                 .shadow(color: .black.opacity(hovering ? 0.14 : 0.06), radius: hovering ? 6 : 2, y: hovering ? 3 : 1)
         }
         .overlay {
-            RoundedRectangle(cornerRadius: 12, style: .continuous)
-                .strokeBorder(card.turn.needsYou ? card.turn.tint.opacity(hovering ? 0.6 : 0.4) : Color.primary.opacity(hovering ? 0.14 : 0.07), lineWidth: 1)
+            let shape = RoundedRectangle(cornerRadius: 12, style: .continuous)
+            if let focus, role != .unrelated {
+                shape.strokeBorder(taskColor(focus.hue), lineWidth: 2)
+            } else {
+                shape.strokeBorder(card.turn.needsYou ? card.turn.tint.opacity(hovering ? 0.6 : 0.4) : Color.primary.opacity(hovering ? 0.14 : 0.07), lineWidth: 1)
+            }
         }
+        // While you look at one task's links, the cards it has nothing to do with step back.
+        .opacity(focus != nil && role == .unrelated ? 0.35 : 1)
         .contentShape(.rect(cornerRadius: 12))
         .onTapGesture { showingDetails = true }
         .popover(isPresented: $showingDetails, arrowEdge: .trailing) { TaskDetailsPopover(card: card) }
         .anchorPreference(key: TaskLinkAnchors.self, value: .bounds) { bounds in
-            linked ? [card.id: TaskLinkAnchor(bounds: bounds, prerequisites: needs, hue: card.hue)] : [:]
+            linked ? [card.id: bounds] : [:]
         }
-        .onHover { inside in
-            hovering = inside
-            if inside && linked { hoveredTask.wrappedValue = card.id }
-            else if hoveredTask.wrappedValue == card.id { hoveredTask.wrappedValue = nil }
-        }
-        .onDisappear { if hoveredTask.wrappedValue == card.id { hoveredTask.wrappedValue = nil } }
+        .onHover { hovering = $0 }
         .animation(.easeOut(duration: 0.15), value: hovering)
         .help("Show \(card.ref)'s details and history")
         .contextMenu { TaskMenuItems(card: card) }
     }
 
-    private var header: some View {
+    private func header(focus: TaskLinkFocus?, role: TaskLinkRole) -> some View {
         HStack(spacing: 6) {
             Circle().fill(taskColor(card.hue)).frame(width: 7 * Zoom.shared.scale)
             Text(card.ref)
@@ -214,9 +217,14 @@ struct TaskCardView: View {
                 .foregroundStyle(.secondary)
             if let project = card.project { ProjectChip(project: project) }
             Spacer(minLength: 4)
-            Text(card.updatedAt, format: .relative(presentation: .numeric, unitsStyle: .narrow))
-                .foregroundStyle(.tertiary)
-                .help("Last update")
+            // While another task's links are shown, the time gives way to how this card relates to it.
+            if let focus, role == .prerequisite || role == .dependent {
+                TaskLinkBadge(focus: focus, role: role)
+            } else {
+                Text(card.updatedAt, format: .relative(presentation: .numeric, unitsStyle: .narrow))
+                    .foregroundStyle(.tertiary)
+                    .help("Last update")
+            }
             CardMenu { TaskMenuItems(card: card) }
         }
         .font(.zoomed(.caption))

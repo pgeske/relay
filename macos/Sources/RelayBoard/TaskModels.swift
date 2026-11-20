@@ -68,6 +68,8 @@ struct TaskCard: Decodable, Sendable, Identifiable {
 
 struct RelatedTask: Decodable, Sendable, Identifiable {
     var id: Int
+    /// Its card's color; absent on servers that predate it.
+    var hue: Int?
     var ref: String
     var title: String
     var shipped: Bool
