@@ -22,7 +22,7 @@ relay task new "Roll out the new cache to staging" --project "Faster search" --s
 
 - The title says the outcome in a few plain words. `--details -` takes a longer description on stdin.
 - By default the user approves your plan before you carry it out (below). Add `--skip-plan` when there's nothing to plan, or the user already told you exactly what to do.
-- `--project` names a project, creating it if needed; `Parent/Child` names a subproject inside another (`--project "Relay/Sidebar"`). Reuse an existing one (`relay task --json` lists projects, each with its `path`) rather than inventing a near-duplicate.
+- `--project` names a project, creating it if needed; `Parent/Child` names a subproject inside another (`--project "Relay/Sidebar"`). Reuse an existing one (`relay task --json` lists projects, each with its `path`) rather than inventing a near-duplicate. Leave it off when you're unsure: relay files a task without one into a project on its own.
 
 **2. Plans.** Unless the task skips plan approval, record your plan and then stop until the user approves it on the board (they press **Approve Plan**, which tells you to go ahead):
 

@@ -419,7 +419,7 @@ export function runProjectAction(action: string, request: ProjectActionRequest):
     }
     if (action === "move-task") {
       if (request.task === undefined) return { status: 400, message: "which task?" };
-      const task = setTaskProject(db, request.task, request.project ?? null);
+      const task = setTaskProject(db, request.task, request.project ?? null, new Date().toISOString());
       const path = task.projectId !== null ? projectPaths(listProjects(db)).get(task.projectId) : undefined;
       return { status: 200, message: path ? `Moved ${taskRef(task.id)} to ${path}` : `Took ${taskRef(task.id)} out of its project` };
     }

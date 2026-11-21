@@ -178,9 +178,9 @@ test("a task made without a project can go into one later, and back out", () => 
   const sidebar = ensureProject(db, "Relay/Sidebar", "2026-11-07T10:00:00Z");
   const { id } = createTask(db, base);
 
-  expect(setTaskProject(db, id, sidebar.id).projectId).toBe(sidebar.id);
-  expect(setTaskProject(db, id, null).projectId).toBeNull();
-  expect(() => setTaskProject(db, id, 999)).toThrow("no project 999");
+  expect(setTaskProject(db, id, sidebar.id, "2026-11-07T10:01:00Z").projectId).toBe(sidebar.id);
+  expect(setTaskProject(db, id, null, "2026-11-07T10:02:00Z").projectId).toBeNull();
+  expect(() => setTaskProject(db, id, 999, "2026-11-07T10:03:00Z")).toThrow("no project 999");
   expect(getTask(db, id)!.projectId).toBeNull();
 });
 

@@ -209,6 +209,8 @@ export function createTaskTables(db: Database): void {
   }
   // Only agents reported on tasks before relay's watcher filled in for them.
   if (!taskColumns.some((column) => column.name === "auto_reported_at")) db.run("ALTER TABLE tasks ADD COLUMN auto_reported_at TEXT");
+  // Tasks were only ever in a project you or an agent put them in.
+  if (!taskColumns.some((column) => column.name === "filed_at")) db.run("ALTER TABLE tasks ADD COLUMN filed_at TEXT");
   // Tasks could once only wait on you or others; SQLite can't change a CHECK in place, so rebuild the table.
   const tasksSql = db.query<{ sql: string }, []>("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'tasks'").get()?.sql ?? "";
   const oldCheck = /CHECK \(blocked_on IN \([^)]*\)\)/.exec(tasksSql);
@@ -257,6 +259,19 @@ export function createTaskTables(db: Database): void {
   db.run(`CREATE TABLE IF NOT EXISTS untracked_sessions (
     session_file TEXT PRIMARY KEY,
     dismissed_at TEXT NOT NULL
+  )`);
+  // Projects had no summary of where they stand.
+  const summaryColumns = db.query<{ name: string }, []>("SELECT name FROM pragma_table_info('projects')").all();
+  if (!summaryColumns.some((column) => column.name === "summary")) {
+    db.run("ALTER TABLE projects ADD COLUMN summary TEXT");
+    db.run("ALTER TABLE projects ADD COLUMN summary_at TEXT");
+    db.run("ALTER TABLE projects ADD COLUMN summary_basis TEXT");
+  }
+  // Short versions of long status lines and reasons, keyed by the text they shorten.
+  db.run(`CREATE TABLE IF NOT EXISTS text_briefs (
+    text TEXT PRIMARY KEY,
+    brief TEXT NOT NULL,
+    at TEXT NOT NULL
   )`);
 }
 
@@ -557,11 +572,66 @@ export function changeDependency(db: Database, task: number, prerequisite: numbe
   }).immediate();
 }
 
-/** Puts a task in a project, or in none when `projectId` is null; throws when either isn't there. */
-export function setTaskProject(db: Database, id: number, projectId: number | null): Task {
+/**
+ * Puts a task in a project, or in none when `projectId` is null; throws when either isn't there.
+ * Relay never files a task you placed by hand, even one you took out of every project.
+ */
+export function setTaskProject(db: Database, id: number, projectId: number | null, at: string): Task {
   if (projectId !== null && !getProject(db, projectId)) throw new Error(`no project ${projectId}`);
-  if (db.query("UPDATE tasks SET project_id = ? WHERE id = ?").run(projectId, id).changes === 0) throw new Error(`no task ${taskRef(id)}`);
+  if (db.query("UPDATE tasks SET project_id = ?, filed_at = ? WHERE id = ?").run(projectId, at, id).changes === 0) throw new Error(`no task ${taskRef(id)}`);
   return getTask(db, id)!;
+}
+
+/**
+ * Tasks relay may still file into a project: in none, never placed or filed before, and not long shipped
+ * (`doneSince`), oldest first.
+ */
+export function unfiledTasks(db: Database, doneSince: string, limit: number): Task[] {
+  return db
+    .query<TaskRow, [string, number]>("SELECT * FROM tasks WHERE project_id IS NULL AND filed_at IS NULL AND (stage != 'done' OR done_at >= ?) ORDER BY id LIMIT ?")
+    .all(doneSince, limit)
+    .map(toTask);
+}
+
+/**
+ * Files a task where relay's model put it (`projectId`), or marks it as looked at and left out
+ * (null). Says false when someone placed it meanwhile, which then stands.
+ */
+export function fileTask(db: Database, id: number, projectId: number | null, at: string): boolean {
+  return db.query("UPDATE tasks SET project_id = ?, filed_at = ? WHERE id = ? AND project_id IS NULL AND filed_at IS NULL").run(projectId, at, id).changes > 0;
+}
+
+/** A project's one-line summary of where it stands, and the inputs it was written from. */
+export interface ProjectSummary {
+  text: string;
+  at: string;
+  /** A fingerprint of what the summary read, so relay only writes a new one once that changes. */
+  basis: string;
+}
+
+export function projectSummaries(db: Database): Map<number, ProjectSummary> {
+  const rows = db
+    .query<{ id: number; summary: string; summary_at: string; summary_basis: string }, []>("SELECT id, summary, summary_at, summary_basis FROM projects WHERE summary IS NOT NULL")
+    .all();
+  return new Map(rows.map((row) => [row.id, { text: row.summary, at: row.summary_at, basis: row.summary_basis }]));
+}
+
+export function setProjectSummary(db: Database, id: number, summary: ProjectSummary): void {
+  db.query("UPDATE projects SET summary = ?, summary_at = ?, summary_basis = ? WHERE id = ?").run(summary.text, summary.at, summary.basis, id);
+}
+
+/** Short versions of long status lines and reasons, keyed by the text each shortens. */
+export function textBriefs(db: Database): Map<string, string> {
+  return new Map(db.query<{ text: string; brief: string }, []>("SELECT text, brief FROM text_briefs").all().map((row) => [row.text, row.brief]));
+}
+
+/** Keeps briefs written since `keepSince`, replacing any for the same texts; older ones go, since their texts have long changed. */
+export function saveTextBriefs(db: Database, briefs: Map<string, string>, at: string, keepSince: string): void {
+  db.transaction(() => {
+    db.query("DELETE FROM text_briefs WHERE at < ?").run(keepSince);
+    const insert = db.query("INSERT OR REPLACE INTO text_briefs (text, brief, at) VALUES (?, ?, ?)");
+    for (const [text, brief] of briefs) insert.run(text, brief, at);
+  })();
 }
 
 /** Each task's history, newest first, keyed by task id. */

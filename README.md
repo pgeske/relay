@@ -75,6 +75,7 @@ flowchart LR
 - **Plans wait for you,** unless you say the task can skip that step.
 - **Park what can wait.** **Mark Blocked** from a task's menu and it moves to **Blocked**, saying which stage it was in, until you press **Resume** or **Unblock**.
 - **PRs come along.** PRs a task's session opens join the task and wear its color on the PR board.
+- **Tasks file themselves.** A task nobody put in a project lands in one within a minute: relay's small model picks the project it belongs to, or starts a new one when none fits, and writes each project a one-line summary of where it stands. Move a task by hand and relay leaves it where you put it.
 
 ## 🔀 Pull requests
 
