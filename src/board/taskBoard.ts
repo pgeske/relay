@@ -293,7 +293,7 @@ export interface WorkstreamView {
   shipped: number;
 }
 
-/** A distinct piece of a workstream, like Workspaces rollout in Vaultless auth, with its open tasks. */
+/** A distinct piece of a workstream, like Indexing in Search rollout, with its open tasks. */
 export interface WorkstreamPartView {
   /** "Workstream › Part". */
   id: string;

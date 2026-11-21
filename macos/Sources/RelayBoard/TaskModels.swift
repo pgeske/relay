@@ -44,7 +44,7 @@ struct Workstream: Decodable, Sendable, Identifiable {
     var shipped: Int
 }
 
-/// A distinct piece of a workstream, like Workspaces rollout in Vaultless auth.
+/// A distinct piece of a workstream, like Indexing in Search rollout.
 struct WorkstreamPart: Decodable, Sendable, Identifiable {
     var id: String
     var name: String

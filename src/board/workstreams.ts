@@ -25,7 +25,7 @@ import {
  * doing without you filing anything. Relay keeps three things current in the background, asking omp's
  * models (see `GROUPING_MODEL` for which):
  * - it groups your tasks into workstreams, and a workstream with distinct parts into those parts
- *   ("Vaultless auth" › "Workspaces rollout"), keeping its grouping steady as new tasks come in;
+ *   ("Search rollout" › "Indexing"), keeping its grouping steady as new tasks come in;
  * - it writes each workstream a one-line summary of where it stands;
  * - it shortens long status lines and reasons, so a one-line row can show them.
  * Projects stay yours: the model reads them as a hint, and never makes or fills one.
@@ -135,7 +135,7 @@ Place every task above, old and new: give each its workstream as a list of names
 - ["Search rollout"] puts a task in a workstream; ["Search rollout", "Indexing"] puts it in a part of one. Two levels at most.
 - Keep the workstreams above, their exact names, and the tasks in them. Change them only when the new tasks make a better shape clear, like two workstreams that turn out to be parts of one broader effort.
 - A workstream is a broad effort later tasks can join, named in 1 to 4 plain words like "Search rollout" or "Task board app", never a single task. Tasks toward the same goal share one, even when nothing links them.
-- Split a workstream into parts only when its tasks fall into distinct pieces of work, each with a few tasks. Name a part for what it's for, like "Workspaces support", not for a kind of work, like "Investigations".
+- Split a workstream into parts only when its tasks fall into distinct pieces of work, each with a few tasks. Name a part for what it's for, like "Mobile support", not for a kind of work, like "Investigations".
 - Reviewing or approving someone else's work, and helping someone with a question, go together in one workstream for reviews and requests. Never put the person's own projects there.
 
 Reply with only a JSON object mapping each task id to its list, like {"T-12": ["Search rollout"], "T-14": ["Search rollout", "Indexing"]}.`;
