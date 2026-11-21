@@ -25,6 +25,7 @@ import {
   listProjects,
   listTasks,
   parseTaskRef,
+  projectSummaries,
   recordPlan,
   reportTask,
   taskEvents,
@@ -32,6 +33,7 @@ import {
   taskRef,
   taskRelations,
   taskSessions,
+  textBriefs,
   type BlockedOn,
   type Task,
   type TaskStage,
@@ -109,7 +111,20 @@ export function assembleTasks(board: Board | null, live: Map<string, Pane>, now:
     const prs = taskPrs(db);
     const sessionInfo = readSessionInfo([...sessions.map((link) => link.sessionFile), ...live.keys()], live);
     const view = taskBoardView(
-      { tasks, relations: taskRelations(db, tasks), projects: listProjects(db), events: taskEvents(db), sessions, sessionInfo, prs, board, dismissed: dismissedSessions(db), now },
+      {
+        tasks,
+        relations: taskRelations(db, tasks),
+        projects: listProjects(db),
+        events: taskEvents(db),
+        sessions,
+        sessionInfo,
+        prs,
+        board,
+        dismissed: dismissedSessions(db),
+        summaries: projectSummaries(db),
+        briefs: textBriefs(db),
+        now,
+      },
       homedir(),
     );
     return { view, chips: taskChips(tasks, prs) };

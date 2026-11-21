@@ -133,7 +133,7 @@ private struct StageCards: View {
 }
 
 /// Open sessions no task knows about, folded into one line above the board until you open it.
-private struct UntrackedStrip: View {
+struct UntrackedStrip: View {
     let sessions: [UntrackedSession]
 
     @AppStorage("tasks.untracked.open") private var open = false
@@ -752,7 +752,7 @@ struct TaskMenuItems: View {
 }
 
 /// Everything about a task: what you asked for, where it stands, and its history.
-private struct TaskDetailsPopover: View {
+struct TaskDetailsPopover: View {
     let card: TaskCard
     @Binding var isPresented: Bool
 
@@ -827,7 +827,7 @@ private struct TaskDetailsPopover: View {
 }
 
 /// Rows on one rounded surface, a divider between each, for sections with little to say per item.
-private struct RowList<Rows: View>: View {
+struct RowList<Rows: View>: View {
     @ViewBuilder let rows: Rows
 
     var body: some View {

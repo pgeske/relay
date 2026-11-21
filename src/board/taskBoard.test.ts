@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { placeTask, taskBoardView, type TaskSessionInfo, type TaskSessionLink } from "./taskBoard.ts";
+import { placeTask, taskBoardView, type TaskInputs, type TaskSessionInfo, type TaskSessionLink } from "./taskBoard.ts";
 import type { Task } from "./taskStore.ts";
 
 const now = new Date("2026-11-04T12:00:00Z");
@@ -50,7 +50,7 @@ function session(status: "working" | "idle" | null, activeMinutesAgo = 5, onTask
 function boardOf(tasks: Task[], sessions: { taskId: number; info: TaskSessionInfo }[] = []) {
   const links = sessions.map(({ taskId, info }) => ({ taskId, sessionFile: info.sessionFile, linkedAt: minutesAgo(60) }));
   const sessionInfo = new Map(sessions.map(({ info }) => [info.sessionFile, info]));
-  return taskBoardView({ tasks, relations: new Map(), projects: [], events: new Map(), sessions: links, sessionInfo, prs: new Map(), board: null, dismissed: new Set(), now }, "/home");
+  return taskBoardView({ tasks, relations: new Map(), projects: [], events: new Map(), sessions: links, sessionInfo, prs: new Map(), board: null, dismissed: new Set(), summaries: new Map(), briefs: new Map(), now }, "/home");
 }
 
 describe("whose move a task waits on", () => {
@@ -160,7 +160,7 @@ describe("whose move a task waits on", () => {
       { taskId: 1, sessionFile: info.sessionFile, linkedAt: minutesAgo(5) },
     ];
     const stepsOf = (handedOff: Task) => {
-      const view = taskBoardView({ tasks: [task(), handedOff], relations: new Map(), projects: [], events: new Map(), sessions: links, sessionInfo: new Map([[info.sessionFile, info]]), prs: new Map(), board: null, dismissed: new Set(), now }, "/home");
+      const view = taskBoardView({ tasks: [task(), handedOff], relations: new Map(), projects: [], events: new Map(), sessions: links, sessionInfo: new Map([[info.sessionFile, info]]), prs: new Map(), board: null, dismissed: new Set(), summaries: new Map(), briefs: new Map(), now }, "/home");
       const card = view.columns.flatMap((column) => column.cards).find((c) => c.id === 2)!;
       return { turn: card.turn.id, steps: card.steps.map((step) => step.action) };
     };
@@ -234,7 +234,7 @@ describe("an untracked session", () => {
   function untracked(status: "working" | "idle") {
     const info: TaskSessionInfo = { ...session(status), sessionFile: "/sessions/loose.jsonl", title: "Quick question" };
     const view = taskBoardView(
-      { tasks: [], relations: new Map(), projects: [], events: new Map(), sessions: [], sessionInfo: new Map([[info.sessionFile, info]]), prs: new Map(), board: null, dismissed: new Set(), now },
+      { tasks: [], relations: new Map(), projects: [], events: new Map(), sessions: [], sessionInfo: new Map([[info.sessionFile, info]]), prs: new Map(), board: null, dismissed: new Set(), summaries: new Map(), briefs: new Map(), now },
       "/home",
     );
     return view.untracked[0];
@@ -255,11 +255,66 @@ test("a project counts and shows its subprojects' tasks, and cards name their pr
     { id: 4, name: "Docs", parentId: null, createdAt: at },
   ];
   const tasks = [task({ id: 1, projectId: 3 }), task({ id: 2, projectId: 1, blockedOn: "me", blockedAt: minutesAgo(5) })];
-  const view = taskBoardView({ tasks, relations: new Map(), projects, events: new Map(), sessions: [], sessionInfo: new Map(), prs: new Map(), board: null, dismissed: new Set(), now }, "/home");
+  const view = taskBoardView({ tasks, relations: new Map(), projects, events: new Map(), sessions: [], sessionInfo: new Map(), prs: new Map(), board: null, dismissed: new Set(), summaries: new Map(), briefs: new Map(), now }, "/home");
   const byName = new Map(view.projects.map((project) => [project.name, project]));
   expect(byName.get("Relay")).toMatchObject({ path: "Relay", ids: [1, 2, 3], open: 2, needsYou: 1 });
   expect(byName.get("Board")).toMatchObject({ path: "Relay/Board", parentId: 1, ids: [2, 3], open: 1, needsYou: 0 });
   expect(byName.get("Docs")).toMatchObject({ ids: [4], open: 0 });
   const card = view.columns.flatMap((column) => column.cards).find((card) => card.id === 1)!;
   expect(card.project).toEqual({ id: 3, name: "Sidebar", path: "Relay/Board/Sidebar" });
+});
+
+describe("the overview", () => {
+  function boardWith(tasks: Task[], extra: Partial<TaskInputs> = {}) {
+    return taskBoardView(
+      { tasks, relations: new Map(), projects: [], events: new Map(), sessions: [], sessionInfo: new Map(), prs: new Map(), board: null, dismissed: new Set(), summaries: new Map(), briefs: new Map(), now, ...extra },
+      "/home",
+    );
+  }
+
+  test("ranks what needs you by what it frees up: what other tasks wait on, then what takes a click, then what's waited longest", () => {
+    const oldest = task({ id: 1, blockedOn: "me", blockedReason: "Which region first?", blockedAt: minutesAgo(60) });
+    const plan = task({ id: 2, plan: "1. Do it", planAt: minutesAgo(10) });
+    const unblocker = task({ id: 3, blockedOn: "me", blockedReason: "Send the draft", blockedAt: minutesAgo(5) });
+    const waiting = task({ id: 4, blockedOn: "others", blockedReason: "Waiting on T-3" });
+    const relations = new Map([[3, { dependsOn: [], neededBy: [{ id: 4, ref: "T-4", title: "Next step", shipped: false }] }]]);
+
+    const overview = boardWith([oldest, plan, unblocker, waiting], { relations }).overview;
+    expect(overview.upNext).toEqual([
+      { id: 3, why: "Unblocks T-4 · Waiting 5m" },
+      { id: 2, why: "Takes a minute · Waiting 10m" },
+      { id: 1, why: "Waiting 1h" },
+    ]);
+    expect(overview.counts).toEqual({ moving: 0, waiting: 1, parked: 0 });
+  });
+
+  test("groups open tasks by top-level project, the one needing you first and tasks in no project last, with each row's short line", () => {
+    const at = minutesAgo(600);
+    const projects = [
+      { id: 1, name: "Search", parentId: null, createdAt: at },
+      { id: 2, name: "Indexing", parentId: 1, createdAt: at },
+      { id: 3, name: "Billing", parentId: null, createdAt: at },
+    ];
+    const long = "PR #41 has the retry fix and full manual test results; awaiting Sam's approval";
+    const tasks = [
+      task({ id: 1, projectId: 2, blockedOn: "others", blockedReason: long }),
+      task({ id: 2, projectId: 3, blockedOn: "me", blockedReason: "Pick a plan tier" }),
+      task({ id: 3, projectId: null, stage: "idea" }),
+      task({ id: 4, projectId: 1, stage: "done", doneAt: minutesAgo(90) }),
+    ];
+    const view = boardWith(tasks, {
+      projects,
+      summaries: new Map([[1, { text: "Index fix waits on Sam", at, basis: "x" }]]),
+      briefs: new Map([[long, "Waiting on Sam's approval"]]),
+    });
+    expect(view.overview.workstreams).toEqual([
+      { id: 3, name: "Billing", summary: null, taskIds: [2], needsYou: 1, shipped: 0 },
+      { id: 1, name: "Search", summary: "Index fix waits on Sam", taskIds: [1], needsYou: 0, shipped: 1 },
+      { id: null, name: "Not in a project", summary: null, taskIds: [3], needsYou: 0, shipped: 0 },
+    ]);
+    const brief = new Map(view.columns.flatMap((column) => column.cards).map((card) => [card.id, card.brief]));
+    expect(brief.get(1)).toBe("Waiting on Sam's approval");
+    expect(brief.get(2)).toBe("Pick a plan tier");
+    expect(brief.get(3)).toBe("Not started");
+  });
 });

@@ -1,6 +1,6 @@
 import type { PullRequest } from "./github.ts";
 import type { Board, CiState, Lane } from "./lanes.ts";
-import { followsSession, projectPaths, taskRef, type Project, type RelatedTask, type Task, type TaskEvent, type TaskPr, type TaskRelations, type TaskSession, type TaskStage } from "./taskStore.ts";
+import { followsSession, projectPaths, taskRef, type Project, type ProjectSummary, type RelatedTask, type Task, type TaskEvent, type TaskPr, type TaskRelations, type TaskSession, type TaskStage } from "./taskStore.ts";
 import { timeAgo, type Confirm, type Tone } from "./view.ts";
 
 /**
@@ -95,6 +95,10 @@ export interface TaskInputs {
   board: Board | null;
   /** Open sessions you said aren't a task. */
   dismissed: Set<string>;
+  /** Each project's one-line summary, by project id, as relay's model wrote it. */
+  summaries: Map<number, ProjectSummary>;
+  /** Short versions of long status lines and reasons, keyed by the text each shortens. */
+  briefs: Map<string, string>;
   now: Date;
 }
 
@@ -198,6 +202,8 @@ export interface TaskCardView {
   updatedAt: string;
   /** For sorting a column: how long it's been waiting (oldest first while it waits on someone), else most recent first. */
   sortKey: string;
+  /** Where it stands in a few words, for a one-line row: what it waits on, else its latest status. */
+  brief: string;
 }
 
 export interface UntrackedSessionView {
@@ -243,6 +249,38 @@ export interface TaskBoardView {
   untracked: UntrackedSessionView[];
   projects: ProjectView[];
   needsYou: number;
+  overview: OverviewView;
+}
+
+/**
+ * The board at a glance, for when you come back to it: what needs you, best first, then each
+ * workstream (a top-level project) with its open tasks, so you see what you're doing without
+ * reading every card. It names cards by id; their full shape is in `columns`.
+ */
+export interface OverviewView {
+  upNext: UpNextView[];
+  workstreams: WorkstreamView[];
+  /** Open tasks not waiting on you: moving along (an agent working, or on their own), waiting on others, or parked (set aside, idle, not started). */
+  counts: { moving: number; waiting: number; parked: number };
+}
+
+/** A task that needs you, and why it's ranked where it is ("Unblocks T-4 · waiting 2h"). */
+export interface UpNextView {
+  id: number;
+  why: string;
+}
+
+export interface WorkstreamView {
+  /** Its top-level project's id; null for the tasks in no project. */
+  id: number | null;
+  name: string;
+  /** Where it stands, in a line; null until relay's model writes one, and for the tasks in no project. */
+  summary: string | null;
+  /** Its open tasks, as cards' ids, your move first. */
+  taskIds: number[];
+  needsYou: number;
+  /** Its tasks shipped in the last week. */
+  shipped: number;
 }
 
 /** How a PR card on the PR board names the task it's part of. */
@@ -319,6 +357,8 @@ interface Placement {
   since: string | null;
   /** Its agent delivered, and it waits for you to ship it or send it back. */
   delivered: boolean;
+  /** Your move takes a click or a quick look: shipping a delivery, approving a plan, merging a PR. */
+  quick: boolean;
   /** Since when it's been so, for sorting. */
   at: string;
 }
@@ -335,7 +375,7 @@ interface Placement {
  */
 export function placeTask(task: Task, sessions: TaskSessionLink[], prs: TaskPrPlace[], now: Date): Placement {
   const ago = (iso: string | null) => since(iso, now);
-  const place = (turn: Turn, reason: string | null, at: string, sinceAt: string | null = null): Placement => ({ turn, reason, since: ago(sinceAt), delivered: false, at });
+  const place = (turn: Turn, reason: string | null, at: string, sinceAt: string | null = null): Placement => ({ turn, reason, since: ago(sinceAt), delivered: false, quick: false, at });
   if (task.stage === "done") return place("done", timeAgo(task.doneAt ?? task.updatedAt, now), task.doneAt ?? task.updatedAt);
   if (task.pausedAt) return place("blocked", `Was in ${STAGE_LABELS[task.stage]}`, task.pausedAt, task.pausedAt);
 
@@ -344,13 +384,13 @@ export function placeTask(task: Task, sessions: TaskSessionLink[], prs: TaskPrPl
   const working = onTask.find((session) => session.live?.status === "working");
   if (working) return place("agent", null, working.activeAt ?? task.updatedAt);
   // Its agent delivered: nothing else matters until you ship it or send it back.
-  if (task.finishedAt) return { ...place("you", "Look it over, then ship it", task.finishedAt, task.finishedAt), delivered: true };
+  if (task.finishedAt) return { ...place("you", "Look it over, then ship it", task.finishedAt, task.finishedAt), delivered: true, quick: true };
 
-  if (task.approvePlan && task.plan && !task.planApprovedAt) return place("you", "Plan ready for your approval", task.planAt ?? task.updatedAt, task.planAt);
+  if (task.approvePlan && task.plan && !task.planApprovedAt) return { ...place("you", "Plan ready for your approval", task.planAt ?? task.updatedAt, task.planAt), quick: true };
   if (task.blockedOn === "me") return place("you", task.blockedReason, task.blockedAt ?? task.updatedAt, task.blockedAt);
   const open = prs.filter((pr) => pr.lane !== null && pr.lane !== "merged");
   const ready = open.find((pr) => pr.lane === "ready");
-  if (ready) return place("you", `${short(ready.ref)} is ready to merge`, task.updatedAt);
+  if (ready) return { ...place("you", `${short(ready.ref)} is ready to merge`, task.updatedAt), quick: true };
   const approved = open.filter((pr) => pr.lane === "approved-blocked").map(approvedButBlocked);
   const fixNeeded = approved.find((blocker) => blocker.turn === "you");
   if (fixNeeded) return place("you", fixNeeded.reason, task.updatedAt);
@@ -446,7 +486,7 @@ const EVENT_TEXT: Record<TaskEvent["kind"], (event: TaskEvent) => string> = {
 /** How many history lines a card's details show. */
 const HISTORY_SHOWN = 30;
 
-function taskCard(task: Task, inputs: TaskInputs, places: Map<string, PrPlace>, sessions: TaskSessionLink[], projects: Map<number, ProjectRefView>): { card: TaskCardView; column: TaskColumn } {
+function taskCard(task: Task, inputs: TaskInputs, places: Map<string, PrPlace>, sessions: TaskSessionLink[], projects: Map<number, ProjectRefView>): { card: TaskCardView; column: TaskColumn; quick: boolean } {
   const { now } = inputs;
   const linked = [...inputs.prs.values()].filter((pr) => pr.taskId === task.id).map((pr) => `${pr.repo}#${pr.number}`);
   const prs = linked.map((ref) => ({ ref, place: places.get(ref) ?? null }));
@@ -555,11 +595,108 @@ function taskCard(task: Task, inputs: TaskInputs, places: Map<string, PrPlace>, 
       .map((event) => ({ at: event.at, text: EVENT_TEXT[event.kind](event), stage: STAGE_LABELS[event.stage], auto: event.auto })),
     updatedAt: task.updatedAt,
     sortKey: placement.at,
+    brief: briefOf(task, placement, inputs.briefs),
   };
   // Stopped until someone acts, you or others, is Blocked; the stage columns hold what's moving.
   const stopped = task.pausedAt || placement.turn === "you" || placement.turn === "others";
   const column: TaskColumn = placement.delivered ? "ship" : stopped ? "blocked" : task.stage;
-  return { card, column };
+  return { card, column, quick: placement.quick };
+}
+
+/** A card's one-line row: what it waits on, else its latest status, in relay's short words for long ones. */
+function briefOf(task: Task, placement: Placement, briefs: Map<string, string>): string {
+  const shorten = (text: string | null) => (text ? (briefs.get(text) ?? text) : null);
+  switch (placement.turn) {
+    case "agent":
+      return shorten(task.status) ?? "Working";
+    case "done":
+      return `Shipped ${placement.reason}`;
+    case "idea":
+      return "Not started";
+    case "blocked":
+      return "Set aside";
+    default:
+      return shorten(placement.reason) ?? shorten(task.status) ?? TURN_LABELS[placement.turn];
+  }
+}
+
+/** Your move on top, then the agent's, then others', then what's parked. Within each, the one waiting longest first where it waits on someone; else the most recent first. */
+function byTurn(a: TaskCardView, b: TaskCardView): number {
+  const turns = TURN_ORDER.indexOf(a.turn.id) - TURN_ORDER.indexOf(b.turn.id);
+  if (turns !== 0) return turns;
+  return a.turn.id === "you" || a.turn.id === "others" ? a.sortKey.localeCompare(b.sortKey) : b.sortKey.localeCompare(a.sortKey);
+}
+
+const WEEK_MS = 7 * 24 * 60 * 60 * 1000;
+const MOVING: Turn[] = ["agent", "progress"];
+
+/**
+ * The board at a glance. Up next ranks what needs you by what it frees up: first what other tasks wait
+ * on, then what takes a click (ship, approve, merge), then what's waited longest. Workstreams are
+ * top-level projects, each with its subprojects' tasks: the ones that need you first, then the ones moving.
+ */
+function overviewOf(open: TaskCardView[], shipped: TaskCardView[], quick: Set<number>, inputs: TaskInputs): OverviewView {
+  const unblocks = (card: TaskCardView) => card.neededBy.filter((task) => !task.shipped);
+  const upNext = open
+    .filter((card) => card.turn.id === "you")
+    .toSorted((a, b) => unblocks(b).length - unblocks(a).length || Number(quick.has(b.id)) - Number(quick.has(a.id)) || a.sortKey.localeCompare(b.sortKey))
+    .map((card): UpNextView => {
+      const freed = unblocks(card);
+      const why = [
+        freed.length === 1 ? `Unblocks ${freed[0].ref}` : freed.length > 1 ? `Unblocks ${freed.length} tasks` : null,
+        quick.has(card.id) ? "Takes a minute" : null,
+        // A wait under a minute ("just now") says nothing worth ranking by.
+        card.turn.since && card.turn.since !== "just now" ? `Waiting ${card.turn.since}` : null,
+      ];
+      return { id: card.id, why: why.filter(Boolean).join(" · ") };
+    });
+
+  const byId = new Map(inputs.projects.map((project) => [project.id, project]));
+  const rootOf = (id: number): Project => {
+    let project = byId.get(id)!;
+    while (project.parentId !== null && byId.has(project.parentId)) project = byId.get(project.parentId)!;
+    return project;
+  };
+  const groups = new Map<number | null, { open: TaskCardView[]; shipped: number }>();
+  const group = (card: TaskCardView) => {
+    const key = card.project && byId.has(card.project.id) ? rootOf(card.project.id).id : null;
+    const found = groups.get(key) ?? { open: [], shipped: 0 };
+    groups.set(key, found);
+    return found;
+  };
+  for (const card of open) group(card).open.push(card);
+  const weekAgo = new Date(inputs.now.getTime() - WEEK_MS).toISOString();
+  for (const card of shipped) if (card.sortKey >= weekAgo) group(card).shipped++;
+
+  // A workstream ranks by its most pressing task (one that needs you, then one moving), then by its latest news; the tasks in no project go last.
+  const latest = (cards: TaskCardView[]) => cards.map((card) => card.updatedAt).toSorted().at(-1)!;
+  const workstreams = [...groups]
+    .filter(([, { open: cards }]) => cards.length > 0)
+    .map(([id, entry]) => ({ id, cards: entry.open.toSorted(byTurn), shipped: entry.shipped }))
+    .toSorted(
+      (a, b) =>
+        Number(a.id === null) - Number(b.id === null) ||
+        TURN_ORDER.indexOf(a.cards[0].turn.id) - TURN_ORDER.indexOf(b.cards[0].turn.id) ||
+        latest(b.cards).localeCompare(latest(a.cards)),
+    )
+    .map(({ id, cards, shipped: count }): WorkstreamView => ({
+      id,
+      name: id === null ? "Not in a project" : byId.get(id)!.name,
+      summary: id === null ? null : (inputs.summaries.get(id)?.text ?? null),
+      taskIds: cards.map((card) => card.id),
+      needsYou: cards.filter((card) => card.turn.id === "you").length,
+      shipped: count,
+    }));
+
+  return {
+    upNext,
+    workstreams,
+    counts: {
+      moving: open.filter((card) => MOVING.includes(card.turn.id)).length,
+      waiting: open.filter((card) => card.turn.id === "others").length,
+      parked: open.filter((card) => card.turn.id === "blocked" || card.turn.id === "idle" || card.turn.id === "idea").length,
+    },
+  };
 }
 
 export function taskBoardView(inputs: TaskInputs, home: string): TaskBoardView {
@@ -570,20 +707,14 @@ export function taskBoardView(inputs: TaskInputs, home: string): TaskBoardView {
   const sessionsOf = sessionsByTask(inputs.sessions, inputs.sessionInfo);
 
   const byColumn = new Map<TaskColumn, TaskCardView[]>(COLUMNS.map((column) => [column.id, []]));
+  const quick = new Set<number>();
   for (const task of inputs.tasks) {
     if (task.stage === "done" && now.getTime() - new Date(task.doneAt ?? task.updatedAt).getTime() > DONE_SHOWN_MS) continue;
-    const { card, column } = taskCard(task, inputs, places, sessionsOf.get(task.id) ?? [], projects);
-    byColumn.get(column)!.push(card);
+    const placed = taskCard(task, inputs, places, sessionsOf.get(task.id) ?? [], projects);
+    byColumn.get(placed.column)!.push(placed.card);
+    if (placed.quick) quick.add(task.id);
   }
-  // Your move on top, then the agent's, then others', then what's parked. Within each, the one
-  // waiting longest first where it waits on someone; else the most recent first.
-  for (const cards of byColumn.values()) {
-    cards.sort((a, b) => {
-      const byTurn = TURN_ORDER.indexOf(a.turn.id) - TURN_ORDER.indexOf(b.turn.id);
-      if (byTurn !== 0) return byTurn;
-      return a.turn.id === "you" || a.turn.id === "others" ? a.sortKey.localeCompare(b.sortKey) : b.sortKey.localeCompare(a.sortKey);
-    });
-  }
+  for (const cards of byColumn.values()) cards.sort(byTurn);
 
   const tracked = new Set(inputs.sessions.map((link) => link.sessionFile));
   const untracked = [...inputs.sessionInfo.values()]
@@ -630,6 +761,7 @@ export function taskBoardView(inputs: TaskInputs, home: string): TaskBoardView {
       };
     }),
     needsYou: needsYou.length,
+    overview: overviewOf(open, byColumn.get("done")!, quick, inputs),
   };
 }
 
