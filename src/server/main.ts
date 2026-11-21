@@ -6,6 +6,7 @@ import { WebSocketServer } from "ws";
 import { fetchBoardView, isLocalRequest, readActionBody, runBoardAction } from "../board/serve.ts";
 import { createTaskFromBoard, parseNewTask, readJsonBody, runProjectAction, runTaskAction, type NewTaskRequest } from "../board/taskServe.ts";
 import { startWatcher } from "../board/watcher.ts";
+import { startWorkstreams } from "../board/workstreams.ts";
 import { endLiveCall, recoverInterruptedCall, startLiveCall } from "./live.ts";
 import { askAnswerSteps, findPendingAsk, validateAskAnswers, type AskAnswer } from "./ask.ts";
 import { startSessionEvents } from "./events.ts";
@@ -591,6 +592,8 @@ export function runServer(): void {
 
   // Fixes task cards whose agents forget to report, as long as the server runs.
   startWatcher();
+  // Files tasks into projects and keeps each project's summary current.
+  startWorkstreams();
 
   for (const signal of ["SIGINT", "SIGTERM"] as const) {
     process.on(signal, () => {
