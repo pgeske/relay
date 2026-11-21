@@ -1,7 +1,7 @@
 import { expect, test } from "bun:test";
 import { openBoardStore } from "./store.ts";
-import { createTask, ensureProject, getTask, listProjects, projectPaths, projectSummaries, reportTask, setTaskProject, textBriefs, type NewTask } from "./taskStore.ts";
-import { briefTexts, fileTasks, summarizeProjects, type Ask } from "./workstreams.ts";
+import { createTask, placeTasks, reportTask, taskWorkstreams, textBriefs, workstreamSummaries, type NewTask } from "./taskStore.ts";
+import { briefTexts, groupTasks, summarizeWorkstreams, type Ask } from "./workstreams.ts";
 
 const at = "2026-11-04T10:00:00Z";
 const now = new Date("2026-11-04T12:00:00Z");
@@ -13,51 +13,45 @@ function fakeModel(reply: string): Ask & { prompts: string[] } {
   return Object.assign(async (prompt: string) => (prompts.push(prompt), reply), { prompts });
 }
 
-test("unfiled tasks go where the model puts them, new workstreams included, and a task it skipped isn't asked about again", async () => {
+test("new tasks go in the workstream and part the model picks, under the names already in use, and nothing is asked again until a task is new", async () => {
   const db = openBoardStore(":memory:");
-  const search = ensureProject(db, "Search", at);
-  createTask(db, { ...base, title: "Turn on the search cache", projectId: search.id });
-  const rollout = createTask(db, { ...base, title: "Roll the cache out to prod" }).id;
+  const cache = createTask(db, { ...base, title: "Turn on the search cache" }).id;
+  placeTasks(db, new Map([[cache, ["Search"]]]), at);
+  const index = createTask(db, { ...base, title: "Rebuild the index" }).id;
   const review = createTask(db, { ...base, title: "Review Sam's PR" }).id;
-  const skipped = createTask(db, { ...base, title: "Something odd" }).id;
+  const odd = createTask(db, { ...base, title: "Something odd" }).id;
+  const longShipped = createTask(db, { ...base, title: "Old launch", stage: "done", at: "2026-10-01T10:00:00Z" }).id;
 
-  const model = fakeModel(`{"T-${rollout}": "Search", "T-${review}": "Reviews and requests"}`);
-  await fileTasks(db, model, now);
+  const model = fakeModel(`{"T-${cache}": ["Search"], "T-${index}": ["search", "Indexing"], "T-${review}": ["Reviews and requests"]}`);
+  await groupTasks(db, model, now);
 
-  // The model saw what's in each workstream, to know what fits.
-  expect(model.prompts[0]).toContain(`- Search: "Turn on the search cache"`);
-  const paths = projectPaths(listProjects(db));
-  expect(paths.get(getTask(db, rollout)!.projectId!)).toBe("Search");
-  expect(paths.get(getTask(db, review)!.projectId!)).toBe("Reviews and requests");
-  expect(getTask(db, skipped)!.projectId).toBeNull();
+  // The model saw the grouping so far, and what's new.
+  expect(model.prompts[0]).toContain(`Search\n  - T-${cache}: Turn on the search cache`);
+  expect(model.prompts[0]).toContain(`New tasks:\n- T-${index}: Rebuild the index`);
+  expect(model.prompts[0]).not.toContain("Old launch");
+  const placed = taskWorkstreams(db);
+  expect(placed.get(index)).toEqual(["Search", "Indexing"]);
+  expect(placed.get(review)).toEqual(["Reviews and requests"]);
+  expect(placed.get(odd)).toBeNull();
+  expect(placed.has(longShipped)).toBe(false);
 
-  await fileTasks(db, model, now);
+  await groupTasks(db, model, now);
   expect(model.prompts).toHaveLength(1);
 });
 
-test("relay never files a task you placed by hand, even one you took out of every project", async () => {
+test("placing a new task can reshape the grouping, like two workstreams turning out to be parts of one", async () => {
   const db = openBoardStore(":memory:");
-  const search = ensureProject(db, "Search", at);
-  const id = createTask(db, base).id;
-  setTaskProject(db, id, search.id, at);
-  setTaskProject(db, id, null, at);
+  const cache = createTask(db, { ...base, title: "Turn on the search cache" }).id;
+  const index = createTask(db, { ...base, title: "Rebuild the index" }).id;
+  placeTasks(db, new Map([[cache, ["Search cache"]], [index, ["Indexing"]]]), at);
+  const launch = createTask(db, { ...base, title: "Launch the new search" }).id;
 
-  const model = fakeModel(`{"T-${id}": "Search"}`);
-  await fileTasks(db, model, now);
-  expect(model.prompts).toHaveLength(0);
-  expect(getTask(db, id)!.projectId).toBeNull();
-});
-
-test("a project an agent picked while the model was thinking stands", async () => {
-  const db = openBoardStore(":memory:");
-  const id = createTask(db, base).id;
-  const billing = ensureProject(db, "Billing", at);
-  const model: Ask = async () => {
-    reportTask(db, id, { blocked: null, projectId: billing.id, at });
-    return `{"T-${id}": "Search"}`;
-  };
-  await fileTasks(db, model, now);
-  expect(getTask(db, id)!.projectId).toBe(billing.id);
+  await groupTasks(db, fakeModel(`{"T-${cache}": ["Search", "Cache"], "T-${index}": ["Search", "Indexing"], "T-${launch}": ["Search"]}`), now);
+  expect([...taskWorkstreams(db)].toSorted()).toEqual([
+    [cache, ["Search", "Cache"]],
+    [index, ["Search", "Indexing"]],
+    [launch, ["Search"]],
+  ]);
 });
 
 test("only long status lines and reasons get a brief, once", async () => {
@@ -77,25 +71,27 @@ test("only long status lines and reasons get a brief, once", async () => {
   expect(model.prompts).toHaveLength(1);
 });
 
-test("a workstream's summary covers its subprojects, and is only rewritten once its tasks change and a few minutes have passed", async () => {
+test("a workstream's summary covers its parts, is only rewritten once its tasks change and a few minutes have passed, and goes with its open tasks", async () => {
   const db = openBoardStore(":memory:");
-  const search = ensureProject(db, "Search", at);
-  const indexing = ensureProject(db, "Search/Indexing", at);
-  const id = createTask(db, { ...base, title: "Rebuild the index", projectId: indexing.id, status: "Backfill running" }).id;
+  const id = createTask(db, { ...base, title: "Rebuild the index", status: "Backfill running" }).id;
+  placeTasks(db, new Map([[id, ["Search", "Indexing"]]]), at);
 
-  const model = fakeModel(`{"p${search.id}": "Index backfill running"}`);
-  await summarizeProjects(db, model, now);
-  expect(model.prompts[0]).toContain("Rebuild the index (doing; Backfill running)");
-  expect(projectSummaries(db).get(search.id)?.text).toBe("Index backfill running");
-  // Only top-level projects get a summary.
-  expect(projectSummaries(db).has(indexing.id)).toBe(false);
+  const model = fakeModel(`{"w1": "Index backfill running"}`);
+  await summarizeWorkstreams(db, model, now);
+  expect(model.prompts[0]).toContain("w1: Search\n- [Indexing] Rebuild the index (doing; Backfill running)");
+  expect(workstreamSummaries(db).get("Search")?.text).toBe("Index backfill running");
 
-  await summarizeProjects(db, model, new Date(now.getTime() + 60 * 60_000));
+  await summarizeWorkstreams(db, model, new Date(now.getTime() + 60 * 60_000));
   expect(model.prompts).toHaveLength(1);
 
   reportTask(db, id, { status: "Backfill done", blocked: null, at });
-  await summarizeProjects(db, model, new Date(now.getTime() + 60_000));
+  await summarizeWorkstreams(db, model, new Date(now.getTime() + 60_000));
   expect(model.prompts).toHaveLength(1);
-  await summarizeProjects(db, model, new Date(now.getTime() + 5 * 60_000));
+  await summarizeWorkstreams(db, model, new Date(now.getTime() + 5 * 60_000));
   expect(model.prompts).toHaveLength(2);
+
+  placeTasks(db, new Map([[id, null]]), at);
+  await summarizeWorkstreams(db, model, new Date(now.getTime() + 10 * 60_000));
+  expect(model.prompts).toHaveLength(2);
+  expect(workstreamSummaries(db).has("Search")).toBe(false);
 });

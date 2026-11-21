@@ -209,8 +209,8 @@ export function createTaskTables(db: Database): void {
   }
   // Only agents reported on tasks before relay's watcher filled in for them.
   if (!taskColumns.some((column) => column.name === "auto_reported_at")) db.run("ALTER TABLE tasks ADD COLUMN auto_reported_at TEXT");
-  // Tasks were only ever in a project you or an agent put them in.
-  if (!taskColumns.some((column) => column.name === "filed_at")) db.run("ALTER TABLE tasks ADD COLUMN filed_at TEXT");
+  // Relay 0.2.40 filed tasks into projects on its own; it now groups them into workstreams of its own instead.
+  if (taskColumns.some((column) => column.name === "filed_at")) db.run("ALTER TABLE tasks DROP COLUMN filed_at");
   // Tasks could once only wait on you or others; SQLite can't change a CHECK in place, so rebuild the table.
   const tasksSql = db.query<{ sql: string }, []>("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'tasks'").get()?.sql ?? "";
   const oldCheck = /CHECK \(blocked_on IN \([^)]*\)\)/.exec(tasksSql);
@@ -260,13 +260,24 @@ export function createTaskTables(db: Database): void {
     session_file TEXT PRIMARY KEY,
     dismissed_at TEXT NOT NULL
   )`);
-  // Projects had no summary of where they stand.
-  const summaryColumns = db.query<{ name: string }, []>("SELECT name FROM pragma_table_info('projects')").all();
-  if (!summaryColumns.some((column) => column.name === "summary")) {
-    db.run("ALTER TABLE projects ADD COLUMN summary TEXT");
-    db.run("ALTER TABLE projects ADD COLUMN summary_at TEXT");
-    db.run("ALTER TABLE projects ADD COLUMN summary_basis TEXT");
+  // Relay 0.2.40 summarized projects; it now summarizes the workstreams it finds.
+  if (projectColumns.some((column) => column.name === "summary")) {
+    for (const column of ["summary", "summary_at", "summary_basis"]) db.run(`ALTER TABLE projects DROP COLUMN ${column}`);
   }
+  // The workstream relay's model put each task in: a JSON list of names from the broadest effort
+  // down, or null when it looked and found none.
+  db.run(`CREATE TABLE IF NOT EXISTS task_workstreams (
+    task_id INTEGER PRIMARY KEY,
+    path TEXT,
+    at TEXT NOT NULL
+  )`);
+  // Each top-level workstream's line on where it stands, keyed by its name.
+  db.run(`CREATE TABLE IF NOT EXISTS workstream_summaries (
+    name TEXT PRIMARY KEY,
+    summary TEXT NOT NULL,
+    at TEXT NOT NULL,
+    basis TEXT NOT NULL
+  )`);
   // Short versions of long status lines and reasons, keyed by the text they shorten.
   db.run(`CREATE TABLE IF NOT EXISTS text_briefs (
     text TEXT PRIMARY KEY,
@@ -514,7 +525,7 @@ export function retitleTask(db: Database, id: number, from: string, to: string):
 
 export function deleteTask(db: Database, id: number): void {
   db.transaction(() => {
-    for (const table of ["task_events", "task_sessions", "task_prs"]) db.query(`DELETE FROM ${table} WHERE task_id = ?`).run(id);
+    for (const table of ["task_events", "task_sessions", "task_prs", "task_workstreams"]) db.query(`DELETE FROM ${table} WHERE task_id = ?`).run(id);
     db.query("DELETE FROM task_dependencies WHERE task_id = ? OR prerequisite_id = ?").run(id, id);
     db.query("DELETE FROM tasks WHERE id = ?").run(id);
   })();
@@ -572,52 +583,51 @@ export function changeDependency(db: Database, task: number, prerequisite: numbe
   }).immediate();
 }
 
-/**
- * Puts a task in a project, or in none when `projectId` is null; throws when either isn't there.
- * Relay never files a task you placed by hand, even one you took out of every project.
- */
-export function setTaskProject(db: Database, id: number, projectId: number | null, at: string): Task {
+/** Puts a task in a project, or in none when `projectId` is null; throws when either isn't there. */
+export function setTaskProject(db: Database, id: number, projectId: number | null): Task {
   if (projectId !== null && !getProject(db, projectId)) throw new Error(`no project ${projectId}`);
-  if (db.query("UPDATE tasks SET project_id = ?, filed_at = ? WHERE id = ?").run(projectId, at, id).changes === 0) throw new Error(`no task ${taskRef(id)}`);
+  if (db.query("UPDATE tasks SET project_id = ? WHERE id = ?").run(projectId, id).changes === 0) throw new Error(`no task ${taskRef(id)}`);
   return getTask(db, id)!;
 }
 
 /**
- * Tasks relay may still file into a project: in none, never placed or filed before, and not long shipped
- * (`doneSince`), oldest first.
+ * The workstream relay's model put each task in, by task id: its names from the broadest effort down,
+ * like ["Search", "Indexing"], or null when it found none. A task it hasn't looked at yet has no entry.
  */
-export function unfiledTasks(db: Database, doneSince: string, limit: number): Task[] {
-  return db
-    .query<TaskRow, [string, number]>("SELECT * FROM tasks WHERE project_id IS NULL AND filed_at IS NULL AND (stage != 'done' OR done_at >= ?) ORDER BY id LIMIT ?")
-    .all(doneSince, limit)
-    .map(toTask);
+export function taskWorkstreams(db: Database): Map<number, string[] | null> {
+  const rows = db.query<{ task_id: number; path: string | null }, []>("SELECT task_id, path FROM task_workstreams").all();
+  return new Map(rows.map((row) => [row.task_id, row.path === null ? null : (JSON.parse(row.path) as string[])]));
 }
 
-/**
- * Files a task where relay's model put it (`projectId`), or marks it as looked at and left out
- * (null). Says false when someone placed it meanwhile, which then stands.
- */
-export function fileTask(db: Database, id: number, projectId: number | null, at: string): boolean {
-  return db.query("UPDATE tasks SET project_id = ?, filed_at = ? WHERE id = ? AND project_id IS NULL AND filed_at IS NULL").run(projectId, at, id).changes > 0;
+/** Records where relay's model put each task, replacing where it had them before. */
+export function placeTasks(db: Database, placements: Map<number, string[] | null>, at: string): void {
+  db.transaction(() => {
+    const place = db.query("INSERT OR REPLACE INTO task_workstreams (task_id, path, at) VALUES (?, ?, ?)");
+    for (const [id, path] of placements) place.run(id, path === null ? null : JSON.stringify(path), at);
+  })();
 }
 
-/** A project's one-line summary of where it stands, and the inputs it was written from. */
-export interface ProjectSummary {
+/** A workstream's one-line summary of where it stands, and the inputs it was written from. */
+export interface WorkstreamSummary {
   text: string;
   at: string;
   /** A fingerprint of what the summary read, so relay only writes a new one once that changes. */
   basis: string;
 }
 
-export function projectSummaries(db: Database): Map<number, ProjectSummary> {
-  const rows = db
-    .query<{ id: number; summary: string; summary_at: string; summary_basis: string }, []>("SELECT id, summary, summary_at, summary_basis FROM projects WHERE summary IS NOT NULL")
-    .all();
-  return new Map(rows.map((row) => [row.id, { text: row.summary, at: row.summary_at, basis: row.summary_basis }]));
+/** Each top-level workstream's summary, by its name. */
+export function workstreamSummaries(db: Database): Map<string, WorkstreamSummary> {
+  const rows = db.query<{ name: string; summary: string; at: string; basis: string }, []>("SELECT * FROM workstream_summaries").all();
+  return new Map(rows.map((row) => [row.name, { text: row.summary, at: row.at, basis: row.basis }]));
 }
 
-export function setProjectSummary(db: Database, id: number, summary: ProjectSummary): void {
-  db.query("UPDATE projects SET summary = ?, summary_at = ?, summary_basis = ? WHERE id = ?").run(summary.text, summary.at, summary.basis, id);
+/** Saves new summaries, and forgets those of workstreams no longer around (any name not in `current`). */
+export function saveWorkstreamSummaries(db: Database, written: Map<string, WorkstreamSummary>, current: Set<string>): void {
+  db.transaction(() => {
+    for (const name of workstreamSummaries(db).keys()) if (!current.has(name)) db.query("DELETE FROM workstream_summaries WHERE name = ?").run(name);
+    const save = db.query("INSERT OR REPLACE INTO workstream_summaries (name, summary, at, basis) VALUES (?, ?, ?, ?)");
+    for (const [name, summary] of written) save.run(name, summary.text, summary.at, summary.basis);
+  })();
 }
 
 /** Short versions of long status lines and reasons, keyed by the text each shortens. */

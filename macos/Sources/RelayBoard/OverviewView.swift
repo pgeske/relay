@@ -1,8 +1,8 @@
 import SwiftUI
 
 /// Your tasks at a glance, for coming back to the board without rereading every card: what needs
-/// you, best first, with the top one ready to act on; then each workstream (a top-level project) in a
-/// line, with its open tasks a row each. Every row opens the task's details, like a card.
+/// you, best first, with the top one ready to act on; then each workstream relay found in a line,
+/// with its open tasks a row each, grouped by its parts. Every row opens the task's details, like a card.
 struct OverviewView: View {
     let overview: Overview
 
@@ -23,9 +23,7 @@ struct OverviewView: View {
                 if !overview.workstreams.isEmpty {
                     VStack(alignment: .leading, spacing: 12) {
                         OverviewHeader(title: "Workstreams", symbol: "square.stack.3d.up", tint: .secondary)
-                        ForEach(overview.workstreams, id: \.id) { workstream in
-                            WorkstreamBlock(workstream: workstream, cards: workstream.taskIds.compactMap { cards[$0] })
-                        }
+                        ForEach(overview.workstreams) { WorkstreamBlock(workstream: $0, cards: cards) }
                     }
                 }
             }
@@ -110,7 +108,7 @@ private struct UpNextSection: View {
         VStack(alignment: .leading, spacing: 10) {
             OverviewHeader(title: "Up next", symbol: "hand.raised.fill", tint: .boardOrange)
             if let (first, card) = items.first {
-                UpNextLead(card: card, why: first.why)
+                UpNextLead(card: card, item: first)
                 if items.count > 1 {
                     RowList {
                         ForEach(items.dropFirst(), id: \.0.id) { item, card in OverviewRow(card: card, detail: item.why) }
@@ -138,10 +136,11 @@ private struct UpNextSection: View {
     }
 }
 
-/// The best next move: what to do, why it's first, and the button that does it.
+/// The best next move: what to do, why it's first, and the buttons that do it; for a delivery, what
+/// the agent did, to look over first.
 private struct UpNextLead: View {
     let card: TaskCard
-    let why: String
+    let item: UpNext
 
     @State private var showingDetails = false
 
@@ -149,8 +148,8 @@ private struct UpNextLead: View {
         VStack(alignment: .leading, spacing: 8) {
             HStack(alignment: .firstTextBaseline, spacing: 6) {
                 Text(card.ref).monospacedDigit()
-                if let project = card.project { Text("·"); Text(project.path) }
-                if !why.isEmpty { Text("·"); Text(why) }
+                if let workstream = item.workstream { Text("·"); Text(workstream) }
+                if !item.why.isEmpty { Text("·"); Text(item.why) }
                 Spacer(minLength: 4)
                 CardMenu { TaskMenuItems(card: card) }
             }
@@ -165,11 +164,18 @@ private struct UpNextLead: View {
                 .font(.zoomed(.subheadline))
                 .foregroundStyle(.secondary)
                 .lineLimit(1)
-            if let step = leadStep {
-                StepButton(step: step, target: .task(card.id)).padding(.top, 2)
-            } else if let running = card.running {
-                RunningLabel(text: running)
+            if let finish = card.finish, finish.awaiting {
+                DeliveryNote(card: card, finish: finish)
             }
+            Group {
+                // Nothing to click through: it asked you something, which you answer in its session.
+                if card.running == nil, card.steps.isEmpty, let open = card.session?.open {
+                    StepButton(step: open, target: .task(card.id))
+                } else {
+                    TaskStepSlot(card: card)
+                }
+            }
+            .padding(.top, 2)
         }
         .padding(14)
         .background(Color(nsColor: .controlBackgroundColor), in: .rect(cornerRadius: 12, style: .continuous))
@@ -182,29 +188,26 @@ private struct UpNextLead: View {
         .contextMenu { TaskMenuItems(card: card) }
         .help("Show \(card.ref)'s details and history")
     }
-
-    /// Its step forward (Approve Plan, Ship It), else its session, where you answer what it asked.
-    private var leadStep: BoardAction? {
-        guard card.running == nil else { return nil }
-        return card.steps.first ?? card.session?.open
-    }
 }
 
 /// A workstream on a line: its name, a dot per open task in its turn's color, and what relay says of
-/// it; then its tasks a row each, unless you folded it.
+/// it; then its own tasks a row each, then each of its parts, unless you folded it.
 private struct WorkstreamBlock: View {
     let workstream: Workstream
-    let cards: [TaskCard]
+    /// Every task card, by id.
+    let cards: [Int: TaskCard]
 
     @AppStorage private var folded: Bool
 
-    init(workstream: Workstream, cards: [TaskCard]) {
+    init(workstream: Workstream, cards: [Int: TaskCard]) {
         self.workstream = workstream
         self.cards = cards
-        _folded = AppStorage(wrappedValue: false, "overview.\(workstream.id.map(String.init) ?? "none").folded")
+        _folded = AppStorage(wrappedValue: false, "overview.workstream.\(workstream.id).folded")
     }
 
     var body: some View {
+        let own = workstream.taskIds.compactMap { cards[$0] }
+        let parts = workstream.parts.map { part in (part, part.taskIds.compactMap { cards[$0] }) }
         VStack(alignment: .leading, spacing: 6) {
             Button {
                 withAnimation(.snappy(duration: 0.25)) { folded.toggle() }
@@ -216,11 +219,7 @@ private struct WorkstreamBlock: View {
                             .foregroundStyle(.tertiary)
                             .rotationEffect(.degrees(folded ? 0 : 90))
                         Text(workstream.name).font(.zoomed(.body).weight(.semibold))
-                        HStack(spacing: 3) {
-                            ForEach(cards) { card in
-                                Circle().fill(card.turn.tint).frame(width: 7 * Zoom.shared.scale).help("\(card.ref): \(card.turn.label)")
-                            }
-                        }
+                        TurnDots(cards: own + parts.flatMap(\.1))
                         Spacer(minLength: 8)
                         if workstream.needsYou > 0 {
                             Text("\(workstream.needsYou) need\(workstream.needsYou == 1 ? "s" : "") you")
@@ -247,7 +246,48 @@ private struct WorkstreamBlock: View {
             .buttonStyle(.plain)
             .help(folded ? "Show its tasks" : "Fold its tasks away")
             if !folded {
-                RowList { ForEach(cards) { OverviewRow(card: $0, detail: nil) } }
+                if !own.isEmpty {
+                    RowList { ForEach(own) { OverviewRow(card: $0, detail: nil) } }
+                }
+                ForEach(parts, id: \.0.id) { part, partCards in
+                    WorkstreamPartBlock(part: part, cards: partCards)
+                }
+            }
+        }
+    }
+}
+
+/// A part of a workstream, set in under it: its name and a dot per open task, then its tasks a row each.
+private struct WorkstreamPartBlock: View {
+    let part: WorkstreamPart
+    let cards: [TaskCard]
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 5) {
+            HStack(alignment: .center, spacing: 6) {
+                Image(systemName: "arrow.turn.down.right")
+                    .font(.zoomed(size: 10, weight: .semibold))
+                    .foregroundStyle(.tertiary)
+                Text(part.name)
+                    .font(.zoomed(.subheadline).weight(.semibold))
+                    .foregroundStyle(.secondary)
+                TurnDots(cards: cards)
+            }
+            RowList { ForEach(cards) { OverviewRow(card: $0, detail: nil) } }
+        }
+        .padding(.leading, 18 * Zoom.shared.scale)
+        .padding(.top, 2)
+    }
+}
+
+/// A dot per task in its turn's color.
+private struct TurnDots: View {
+    let cards: [TaskCard]
+
+    var body: some View {
+        HStack(spacing: 3) {
+            ForEach(cards) { card in
+                Circle().fill(card.turn.tint).frame(width: 7 * Zoom.shared.scale).help("\(card.ref): \(card.turn.label)")
             }
         }
     }

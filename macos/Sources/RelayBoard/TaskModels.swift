@@ -25,19 +25,30 @@ struct UpNext: Decodable, Sendable, Identifiable {
     var id: Int
     /// Why it's ranked there: "Unblocks T-4 · Waiting 2h".
     var why: String
+    /// The workstream it's part of: "Search › Indexing".
+    var workstream: String?
 }
 
-/// A top-level project and its subprojects' open tasks, or (`id` nil) the tasks in no project.
-struct Workstream: Decodable, Sendable {
-    var id: Int?
+/// A broad effort relay found among your tasks, with its parts; or (`id` "") the open tasks in none.
+struct Workstream: Decodable, Sendable, Identifiable {
+    var id: String
     var name: String
     /// Where it stands, in a line relay's model wrote.
     var summary: String?
-    /// Your move first.
+    /// Its open tasks in none of its parts, your move first.
     var taskIds: [Int]
+    var parts: [WorkstreamPart]
+    /// Its open tasks that need you, its parts' included.
     var needsYou: Int
     /// Shipped in the last week.
     var shipped: Int
+}
+
+/// A distinct piece of a workstream, like Workspaces rollout in Vaultless auth.
+struct WorkstreamPart: Decodable, Sendable, Identifiable {
+    var id: String
+    var name: String
+    var taskIds: [Int]
 }
 
 /// Open tasks not waiting on you.

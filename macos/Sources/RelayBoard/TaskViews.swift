@@ -477,7 +477,7 @@ private struct NoteLine: View {
 /// What the agent delivered, unwrapped right on its card: when, and the start of its note on what
 /// it did and how it checked, to look over before you ship it. Clicking it shows the whole note,
 /// with Ship It and Not Yet.
-private struct DeliveryNote: View {
+struct DeliveryNote: View {
     let card: TaskCard
     let finish: Finish
 
@@ -675,7 +675,7 @@ private struct TaskSessionLine: View {
 
 /// The task's next steps, or in their place what the agent is doing. The first is the way forward,
 /// a full-width button; any other (Not Yet beside Ship It) sits at its side, quieter.
-private struct TaskStepSlot: View {
+struct TaskStepSlot: View {
     let card: TaskCard
 
     var body: some View {

@@ -5,28 +5,30 @@ import { jsonObject } from "./autoStatus.ts";
 import { loadBoardConfig } from "./config.ts";
 import { openBoardStore } from "./store.ts";
 import {
-  ensureProject,
-  fileTask,
   listProjects,
   listTasks,
+  placeTasks,
   projectPaths,
-  projectSummaries,
   saveTextBriefs,
-  setProjectSummary,
+  saveWorkstreamSummaries,
   taskRef,
+  taskRelations,
+  taskWorkstreams,
   textBriefs,
-  unfiledTasks,
-  type Project,
+  workstreamSummaries,
   type Task,
+  type TaskRelations,
 } from "./taskStore.ts";
 
 /**
- * Workstreams: the few broad things you're working on, so the board can say what you're doing without
- * you rereading every card. Relay's small model (the watcher's) keeps three things current in the
- * background:
- * - it files each task into a project: one you have, or a new one when none fits;
- * - it writes each top-level project a one-line summary of where it stands;
+ * Workstreams: the broad efforts you're working on, found for you, so the board can say what you're
+ * doing without you filing anything. Relay keeps three things current in the background, asking omp's
+ * models (see `GROUPING_MODEL` for which):
+ * - it groups your tasks into workstreams, and a workstream with distinct parts into those parts
+ *   ("Vaultless auth" › "Workspaces rollout"), keeping its grouping steady as new tasks come in;
+ * - it writes each workstream a one-line summary of where it stands;
  * - it shortens long status lines and reasons, so a one-line row can show them.
+ * Projects stay yours: the model reads them as a hint, and never makes or fills one.
  * This file decides what to ask and what an answer changes; `startWorkstreams` decides when.
  */
 
@@ -36,13 +38,13 @@ export type Ask = (prompt: string) => Promise<string>;
 const SYSTEM_PROMPT = "You help keep a person's task board easy to read. Answer only from what you're given, never use tools, and reply with only the JSON asked for.";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
-/** Shipped tasks this recent still get filed, so a workstream counts what it shipped lately. */
-const FILE_SHIPPED_WITHIN_MS = 14 * DAY_MS;
-/** Tasks filed in one go: enough for the first pass over an existing board to keep related tasks together. */
-const FILE_BATCH = 40;
-const PROJECT_NAME_CHARS = 40;
-/** How many of a project's tasks the filing prompt names, to say what the project is about. */
-const PROJECT_EXAMPLES = 4;
+/** Tasks shipped this recently are grouped too: a workstream counts what it shipped, and the model sees what each one is about. */
+const GROUP_SHIPPED_WITHIN_MS = 14 * DAY_MS;
+/** At most this many shipped tasks, the latest, so the prompt stays small. */
+const GROUP_SHIPPED_MAX = 40;
+/** A workstream and a part of it: enough to see how tasks connect, few enough to read at a glance. */
+const GROUP_DEPTH = 2;
+const NAME_CHARS = 40;
 
 /** Status lines and reasons longer than this get a brief. */
 export const BRIEF_OVER_CHARS = 50;
@@ -51,7 +53,7 @@ const BRIEF_BATCH = 20;
 const BRIEF_KEPT_MS = 14 * DAY_MS;
 
 const SUMMARY_CHARS = 110;
-/** A project's summary is rewritten at most this often, however often its tasks report. */
+/** A workstream's summary is rewritten at most this often, however often its tasks report. */
 const SUMMARY_MIN_MS = 3 * 60 * 1000;
 /** Tasks shipped this recently count toward where a workstream stands. */
 const SUMMARY_SHIPPED_WITHIN_MS = 7 * DAY_MS;
@@ -65,93 +67,129 @@ function oneLine(text: string, max: number): string {
   return line.length <= max ? line : `${line.slice(0, max - 1).trimEnd()}…`;
 }
 
-/** Each project's top-level project, keyed by id. */
-function topLevels(projects: Project[]): Map<number, Project> {
-  const byId = new Map(projects.map((project) => [project.id, project]));
-  const top = new Map<number, Project>();
-  for (const project of projects) {
-    let root = project;
-    while (root.parentId !== null && byId.has(root.parentId)) root = byId.get(root.parentId)!;
-    top.set(project.id, root);
-  }
-  return top;
+// Grouping
+
+/** The tasks workstreams are made of: every open one, and the latest shipped, by id. */
+export function groupedTasks(tasks: Task[], now: Date): Task[] {
+  const since = new Date(now.getTime() - GROUP_SHIPPED_WITHIN_MS).toISOString();
+  const shippedAt = (task: Task) => task.doneAt ?? task.updatedAt;
+  const shipped = tasks
+    .filter((task) => task.stage === "done" && shippedAt(task) >= since)
+    .toSorted((a, b) => shippedAt(b).localeCompare(shippedAt(a)))
+    .slice(0, GROUP_SHIPPED_MAX);
+  return [...tasks.filter((task) => task.stage !== "done"), ...shipped].toSorted((a, b) => a.id - b.id);
 }
 
-// Filing
-
-export function filingPrompt(tasks: Task[], projects: { path: string; examples: string[] }[]): string {
-  const existing = projects.length
-    ? projects.map((project) => `- ${project.path}${project.examples.length ? `: ${project.examples.map((title) => `"${title}"`).join(", ")}` : ""}`).join("\n")
-    : "(none yet)";
-  const toFile = tasks
-    .map((task) => {
-      const details = task.details && task.details.trim() !== task.title ? `\n  Asked for: ${oneLine(task.details, 400)}` : "";
-      return `${taskRef(task.id)}: ${task.title}${details}`;
-    })
-    .join("\n");
-  return `Someone runs many tasks at once, each with an AI agent. Group their tasks into workstreams: the few broad things they're working on, like "Search rollout", "Billing migration", or "Task board app".
-
-Their workstreams now, each with some of its tasks:
-${existing}
-
-Tasks to file:
-${toFile}
-
-For each task, name the workstream it belongs in.
-- Use an existing one whenever the task is part of it, by its exact name as listed (a "Parent/Child" name files it in that subproject).
-- Otherwise name a new one: 1 to 3 plain words for the broader effort, not the task itself, so later tasks can join it. Tasks in this list that belong together share one new name.
-- One-off reviews, approvals, and helping someone with a question go together in one workstream for reviews and requests, not one each.
-
-Reply with only a JSON object mapping each task id to its workstream, like {"T-12": "Search rollout"}.`;
+export interface GroupingInput {
+  /** Every task to place: those placed before, and new ones. */
+  tasks: Task[];
+  placements: Map<number, string[] | null>;
+  relations: Map<number, TaskRelations>;
+  /** Each project's path, by id: the user's own filing, which the model takes as a hint. */
+  projects: Map<number, string>;
 }
 
-/** Reads the model's filing: each task in `tasks` it named a workstream for. */
-export function parseFiling(reply: string, tasks: Task[]): Map<number, string> {
-  const answer = jsonObject(reply);
-  const filing = new Map<number, string>();
-  if (!answer) return filing;
+export function groupingPrompt({ tasks, placements, relations, projects }: GroupingInput): string {
+  const named = (task: Task) => `${taskRef(task.id)}: ${task.title}${task.stage === "done" ? " (shipped)" : ""}`;
+  const outline = new Map<string, { tasks: Task[]; parts: Map<string, Task[]> }>();
+  const loose: Task[] = [];
+  const fresh: Task[] = [];
   for (const task of tasks) {
-    const name = answer[taskRef(task.id)];
-    if (typeof name !== "string") continue;
-    const path = name
-      .split("/")
-      .map((part) => oneLine(part, PROJECT_NAME_CHARS))
+    const path = placements.get(task.id);
+    if (path === undefined) fresh.push(task);
+    else if (path === null) loose.push(task);
+    else {
+      const workstream = outline.get(path[0]) ?? { tasks: [], parts: new Map<string, Task[]>() };
+      outline.set(path[0], workstream);
+      if (path.length === 1) workstream.tasks.push(task);
+      else workstream.parts.set(path[1], [...(workstream.parts.get(path[1]) ?? []), task]);
+    }
+  }
+  const current: string[] = [];
+  for (const [name, workstream] of outline) {
+    current.push(name, ...workstream.tasks.map((task) => `  - ${named(task)}`));
+    for (const [part, partTasks] of workstream.parts) current.push(`  ${part}`, ...partTasks.map((task) => `    - ${named(task)}`));
+  }
+  if (loose.length) current.push("(in no workstream)", ...loose.map((task) => `  - ${named(task)}`));
+
+  const toPlace = fresh.map((task) => {
+    const lines = [`- ${named(task)}`];
+    if (task.details && task.details.trim() !== task.title) lines.push(`  Asked for: ${oneLine(task.details, 300)}`);
+    const project = task.projectId !== null ? projects.get(task.projectId) : undefined;
+    if (project) lines.push(`  In their project: ${project}`);
+    const links = relations.get(task.id);
+    const linked = [...(links?.dependsOn ?? []), ...(links?.neededBy ?? [])].map((other) => other.ref);
+    if (linked.length) lines.push(`  Depends on or blocks: ${linked.join(", ")}`);
+    return lines.join("\n");
+  });
+
+  return `Someone runs many tasks at once, each with an AI agent. Group their tasks into workstreams, the broad efforts they're working on, so one look tells them what they're doing and how their tasks connect.
+
+Their workstreams now:
+${current.length ? current.join("\n") : "(none yet)"}
+
+New tasks:
+${toPlace.join("\n")}
+
+Place every task above, old and new: give each its workstream as a list of names, from the broadest effort down.
+- ["Search rollout"] puts a task in a workstream; ["Search rollout", "Indexing"] puts it in a part of one. Two levels at most.
+- Keep the workstreams above, their exact names, and the tasks in them. Change them only when the new tasks make a better shape clear, like two workstreams that turn out to be parts of one broader effort.
+- A workstream is a broad effort later tasks can join, named in 1 to 4 plain words like "Search rollout" or "Task board app", never a single task. Tasks toward the same goal share one, even when nothing links them.
+- Split a workstream into parts only when its tasks fall into distinct pieces of work, each with a few tasks. Name a part for what it's for, like "Workspaces support", not for a kind of work, like "Investigations".
+- Reviewing or approving someone else's work, and helping someone with a question, go together in one workstream for reviews and requests. Never put the person's own projects there.
+
+Reply with only a JSON object mapping each task id to its list, like {"T-12": ["Search rollout"], "T-14": ["Search rollout", "Indexing"]}.`;
+}
+
+/** A name as the model may echo it back: any case, any spacing. */
+const nameKey = (name: string) => name.replace(/\s+/g, " ").trim().toLowerCase();
+
+/**
+ * Reads the model's grouping: the workstream it gave each of `tasks`. A name that matches one in use
+ * but for case or spacing keeps the name in use, so a workstream doesn't split in two.
+ */
+export function parseGrouping(reply: string, tasks: Task[], placements: Map<number, string[] | null>): Map<number, string[]> {
+  const answer = jsonObject(reply);
+  const grouping = new Map<number, string[]>();
+  if (!answer) return grouping;
+  // Names in use by their key; a part's key includes its workstream's.
+  const known = new Map<string, string>();
+  const partKey = (top: string, part: string) => `${nameKey(top)} › ${nameKey(part)}`;
+  for (const path of placements.values()) {
+    if (!path) continue;
+    known.set(nameKey(path[0]), path[0]);
+    if (path[1]) known.set(partKey(path[0], path[1]), path[1]);
+  }
+  for (const task of tasks) {
+    const value = answer[taskRef(task.id)];
+    const names = (Array.isArray(value) ? value : [value])
+      .filter((name): name is string => typeof name === "string")
+      .map((name) => oneLine(name, NAME_CHARS))
       .filter(Boolean)
-      .join("/");
-    if (path) filing.set(task.id, path);
+      .slice(0, GROUP_DEPTH);
+    if (names.length === 0) continue;
+    const top = known.get(nameKey(names[0])) ?? names[0];
+    grouping.set(task.id, names.length === 1 ? [top] : [top, known.get(partKey(top, names[1])) ?? names[1]]);
   }
-  return filing;
+  return grouping;
 }
 
-/** Files the tasks the model named a workstream for, making new projects as needed; says what it filed. */
-export function applyFiling(db: Database, filing: Map<number, string>, at: string): string[] {
-  const filed: string[] = [];
-  for (const [id, path] of filing) {
-    const project = ensureProject(db, path, at);
-    if (fileTask(db, id, project.id, at)) filed.push(`${taskRef(id)} → ${path}`);
-  }
-  return filed;
-}
-
-export async function fileTasks(db: Database, ask: Ask, now: Date): Promise<void> {
-  const tasks = unfiledTasks(db, new Date(now.getTime() - FILE_SHIPPED_WITHIN_MS).toISOString(), FILE_BATCH);
-  if (tasks.length === 0) return;
-  const projects = listProjects(db);
-  const paths = projectPaths(projects);
-  const titles = new Map<number, string[]>();
-  for (const task of listTasks(db).toReversed()) {
-    if (task.projectId === null) continue;
-    const list = titles.get(task.projectId) ?? [];
-    if (list.length < PROJECT_EXAMPLES) list.push(task.title);
-    titles.set(task.projectId, list);
-  }
-  const listed = projects.map((project) => ({ path: paths.get(project.id)!, examples: titles.get(project.id) ?? [] }));
-  const filing = parseFiling(await ask(filingPrompt(tasks, listed)), tasks);
-  const at = now.toISOString();
-  const filed = applyFiling(db, filing, at);
-  // A task the model skipped would come up every cycle; leave it out of every project instead. You can still move it.
-  for (const task of tasks) if (!filing.has(task.id)) fileTask(db, task.id, null, at);
-  if (filed.length) console.log(`workstreams: filed ${filed.join(", ")}`);
+/**
+ * Places new tasks in workstreams. The model sees the grouping so far and may reshape it as it places
+ * them, so this only runs when a task is new: the grouping holds still while you work.
+ */
+export async function groupTasks(db: Database, ask: Ask, now: Date): Promise<void> {
+  const all = listTasks(db);
+  const tasks = groupedTasks(all, now);
+  const placements = taskWorkstreams(db);
+  if (tasks.every((task) => placements.has(task.id))) return;
+  const input = { tasks, placements, relations: taskRelations(db, all), projects: projectPaths(listProjects(db)) };
+  const grouping: Map<number, string[] | null> = parseGrouping(await ask(groupingPrompt(input)), tasks, placements);
+  // A new task the model skipped would come up every cycle; it waits in no workstream for the next new task instead.
+  for (const task of tasks) if (!placements.has(task.id) && !grouping.has(task.id)) grouping.set(task.id, null);
+  const changed = new Map([...grouping].filter(([id, path]) => JSON.stringify(placements.get(id)) !== JSON.stringify(path)));
+  placeTasks(db, changed, now.toISOString());
+  console.log(`workstreams: placed ${[...changed].map(([id, path]) => `${taskRef(id)} → ${path ? path.join(" › ") : "none"}`).join(", ")}`);
 }
 
 // Briefs
@@ -200,8 +238,8 @@ export async function briefTexts(db: Database, ask: Ask, now: Date): Promise<voi
 
 // Summaries
 
-/** A task as a summary reads it: its title and where it stands, in plain words. */
-function describeTask(task: Task): string {
+/** A task as a summary reads it: its title, the part it's in, and where it stands, in plain words. */
+function describeTask(task: Task, part: string | undefined): string {
   const parts: string[] = [task.stage];
   if (task.status) parts.push(task.status);
   if (task.finishedAt) parts.push("finished, waiting for the user to check and ship it");
@@ -210,42 +248,38 @@ function describeTask(task: Task): string {
   else if (task.blockedOn === "me") parts.push(`waiting on the user: ${task.blockedReason ?? "no reason given"}`);
   else if (task.blockedOn === "others") parts.push(`waiting on others: ${task.blockedReason ?? "no reason given"}`);
   else if (task.blockedOn === "progress") parts.push(`moving on its own: ${task.blockedReason ?? "no reason given"}`);
-  return `- ${task.title} (${parts.join("; ")})`;
+  return `- ${part ? `[${part}] ` : ""}${task.title} (${parts.join("; ")})`;
 }
 
 export interface SummaryInput {
-  project: Project;
-  /** What the summary reads: the project's open tasks, then what it shipped lately. */
+  name: string;
+  /** What the summary reads: the workstream's open tasks, its parts' included, then what it shipped lately. */
   lines: string[];
   basis: string;
 }
 
-/** Each top-level project with open work, and what its summary would read. */
-export function summaryInputs(tasks: Task[], projects: Project[], now: Date): SummaryInput[] {
-  const top = topLevels(projects);
+/** Each workstream with open work, and what its summary would read. */
+export function summaryInputs(tasks: Task[], placements: Map<number, string[] | null>, now: Date): SummaryInput[] {
   const shippedSince = new Date(now.getTime() - SUMMARY_SHIPPED_WITHIN_MS).toISOString();
-  const byRoot = new Map<number, { open: Task[]; shipped: Task[] }>();
+  const byName = new Map<string, { open: string[]; shipped: string[] }>();
   for (const task of tasks) {
-    const root = task.projectId !== null ? top.get(task.projectId) : undefined;
-    if (!root) continue;
-    const group = byRoot.get(root.id) ?? { open: [], shipped: [] };
-    if (task.stage !== "done") group.open.push(task);
-    else if ((task.doneAt ?? task.updatedAt) >= shippedSince) group.shipped.push(task);
-    byRoot.set(root.id, group);
+    const path = placements.get(task.id);
+    if (!path) continue;
+    const group = byName.get(path[0]) ?? { open: [], shipped: [] };
+    byName.set(path[0], group);
+    if (task.stage !== "done") group.open.push(describeTask(task, path[1]));
+    else if ((task.doneAt ?? task.updatedAt) >= shippedSince) group.shipped.push(task.title);
   }
-  const inputs: SummaryInput[] = [];
-  for (const project of projects) {
-    const group = byRoot.get(project.id);
-    if (!group || group.open.length === 0) continue;
-    const lines = group.open.map(describeTask);
-    if (group.shipped.length) lines.push(`Shipped lately: ${group.shipped.map((task) => task.title).join("; ")}`);
-    inputs.push({ project, lines, basis: createHash("sha256").update(lines.join("\n")).digest("hex").slice(0, 16) });
-  }
-  return inputs;
+  return [...byName]
+    .filter(([, group]) => group.open.length > 0)
+    .map(([name, group]) => {
+      const lines = group.shipped.length ? [...group.open, `Shipped lately: ${group.shipped.join("; ")}`] : group.open;
+      return { name, lines, basis: createHash("sha256").update(lines.join("\n")).digest("hex").slice(0, 16) };
+    });
 }
 
 export function summaryPrompt(inputs: SummaryInput[]): string {
-  const blocks = inputs.map((input) => `p${input.project.id}: ${input.project.name}\n${input.lines.join("\n")}`).join("\n\n");
+  const blocks = inputs.map((input, index) => `w${index + 1}: ${input.name}\n${input.lines.join("\n")}`).join("\n\n");
   return `Someone runs many tasks at once, each with an AI agent, grouped into workstreams. For each workstream below, write one line saying where it stands overall, so they can tell at a glance without reading its tasks.
 
 ${blocks}
@@ -254,44 +288,52 @@ ${blocks}
 - Say what's moving and what it's waiting on. Name who or what it waits on when that matters. Lead with anything waiting on the user.
 - No task ids, no stage names, no trailing period.
 
-Reply with only a JSON object mapping each workstream's id to its line, like {"p3": "..."}.`;
+Reply with only a JSON object mapping each workstream's id to its line, like {"w1": "..."}.`;
 }
 
-export function parseSummaries(reply: string, inputs: SummaryInput[]): Map<number, string> {
+/** Reads the model's summaries, by workstream name. */
+export function parseSummaries(reply: string, inputs: SummaryInput[]): Map<string, string> {
   const answer = jsonObject(reply);
-  const summaries = new Map<number, string>();
+  const summaries = new Map<string, string>();
   if (!answer) return summaries;
-  for (const input of inputs) {
-    const line = answer[`p${input.project.id}`];
-    if (typeof line === "string" && line.trim()) summaries.set(input.project.id, oneLine(line, SUMMARY_CHARS).replace(/\.$/, ""));
-  }
+  inputs.forEach((input, index) => {
+    const line = answer[`w${index + 1}`];
+    if (typeof line === "string" && line.trim()) summaries.set(input.name, oneLine(line, SUMMARY_CHARS).replace(/\.$/, ""));
+  });
   return summaries;
 }
 
-/** The projects whose summary is out of date: what it read changed, and it wasn't written moments ago. */
-export function summariesDue(inputs: SummaryInput[], written: Map<number, { basis: string; at: string }>, now: Date): SummaryInput[] {
+/** The workstreams whose summary is out of date: what it read changed, and it wasn't written moments ago. */
+export function summariesDue(inputs: SummaryInput[], written: Map<string, { basis: string; at: string }>, now: Date): SummaryInput[] {
   return inputs.filter((input) => {
-    const summary = written.get(input.project.id);
+    const summary = written.get(input.name);
     if (!summary) return true;
     return summary.basis !== input.basis && now.getTime() - new Date(summary.at).getTime() >= SUMMARY_MIN_MS;
   });
 }
 
-export async function summarizeProjects(db: Database, ask: Ask, now: Date): Promise<void> {
-  const due = summariesDue(summaryInputs(listTasks(db), listProjects(db), now), projectSummaries(db), now);
-  if (due.length === 0) return;
-  const summaries = parseSummaries(await ask(summaryPrompt(due)), due);
+export async function summarizeWorkstreams(db: Database, ask: Ask, now: Date): Promise<void> {
+  const inputs = summaryInputs(listTasks(db), taskWorkstreams(db), now);
+  const written = workstreamSummaries(db);
+  const current = new Set(inputs.map((input) => input.name));
+  const due = summariesDue(inputs, written, now);
+  if (due.length === 0 && [...written.keys()].every((name) => current.has(name))) return;
+  const summaries = due.length ? parseSummaries(await ask(summaryPrompt(due)), due) : new Map<string, string>();
   const at = now.toISOString();
-  for (const input of due) {
-    const text = summaries.get(input.project.id);
-    if (text) setProjectSummary(db, input.project.id, { text, at, basis: input.basis });
-  }
+  const basis = new Map(due.map((input) => [input.name, input.basis]));
+  saveWorkstreamSummaries(db, new Map([...summaries].map(([name, text]) => [name, { text, at, basis: basis.get(name)! }])), current);
 }
 
+/**
+ * Grouping shapes the whole Overview but only runs when a task is new, so it asks omp's main model,
+ * whose groupings are steadier, for a few calls a day. The other steps run often, on relay's fast model.
+ */
+const GROUPING_MODEL = "@default";
+
 const STEPS = [
-  { name: "filing tasks", run: fileTasks },
-  { name: "shortening status lines", run: briefTexts },
-  { name: "summarizing projects", run: summarizeProjects },
+  { name: "grouping tasks", run: groupTasks, model: "main" },
+  { name: "shortening status lines", run: briefTexts, model: "fast" },
+  { name: "summarizing workstreams", run: summarizeWorkstreams, model: "fast" },
 ] as const;
 
 /** Keeps workstreams current while relay's server runs, one step at a time, when relay's model is on. */
@@ -301,13 +343,16 @@ export function startWorkstreams(): void {
   const cycle = async () => {
     const { autoStatus } = loadBoardConfig();
     if (!autoStatus.enabled) return;
-    const ask: Ask = (prompt) => askModel(prompt, autoStatus.model, SYSTEM_PROMPT);
+    const asks: Record<"main" | "fast", Ask> = {
+      main: (prompt) => askModel(prompt, GROUPING_MODEL, SYSTEM_PROMPT),
+      fast: (prompt) => askModel(prompt, autoStatus.model, SYSTEM_PROMPT),
+    };
     const db = openBoardStore();
     try {
       for (const step of STEPS) {
         if (Date.now() < (retryAt.get(step.name) ?? 0)) continue;
         try {
-          await step.run(db, ask, new Date());
+          await step.run(db, asks[step.model], new Date());
         } catch (error) {
           console.error(`workstreams: ${step.name} failed; trying again in ${RETRY_MS / 60_000}m`, error);
           retryAt.set(step.name, Date.now() + RETRY_MS);

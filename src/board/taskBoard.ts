@@ -1,6 +1,6 @@
 import type { PullRequest } from "./github.ts";
 import type { Board, CiState, Lane } from "./lanes.ts";
-import { followsSession, projectPaths, taskRef, type Project, type ProjectSummary, type RelatedTask, type Task, type TaskEvent, type TaskPr, type TaskRelations, type TaskSession, type TaskStage } from "./taskStore.ts";
+import { followsSession, projectPaths, taskRef, type Project, type RelatedTask, type Task, type TaskEvent, type TaskPr, type TaskRelations, type TaskSession, type TaskStage, type WorkstreamSummary } from "./taskStore.ts";
 import { timeAgo, type Confirm, type Tone } from "./view.ts";
 
 /**
@@ -95,8 +95,10 @@ export interface TaskInputs {
   board: Board | null;
   /** Open sessions you said aren't a task. */
   dismissed: Set<string>;
-  /** Each project's one-line summary, by project id, as relay's model wrote it. */
-  summaries: Map<number, ProjectSummary>;
+  /** The workstream relay's model put each task in, by task id: names from the broadest down, or null for none. */
+  workstreams: Map<number, string[] | null>;
+  /** Each top-level workstream's one-line summary, by its name, as relay's model wrote it. */
+  summaries: Map<string, WorkstreamSummary>;
   /** Short versions of long status lines and reasons, keyed by the text each shortens. */
   briefs: Map<string, string>;
   now: Date;
@@ -254,8 +256,8 @@ export interface TaskBoardView {
 
 /**
  * The board at a glance, for when you come back to it: what needs you, best first, then each
- * workstream (a top-level project) with its open tasks, so you see what you're doing without
- * reading every card. It names cards by id; their full shape is in `columns`.
+ * workstream relay found with its open tasks, so you see what you're doing without reading every
+ * card. It names cards by id; their full shape is in `columns`.
  */
 export interface OverviewView {
   upNext: UpNextView[];
@@ -268,19 +270,35 @@ export interface OverviewView {
 export interface UpNextView {
   id: number;
   why: string;
+  /** The workstream it's part of, like "Search › Indexing"; null when it's in none yet. */
+  workstream: string | null;
 }
 
+/**
+ * A broad effort relay's model found among your tasks, with its open tasks and its parts', the
+ * most pressing first; or (`id` "") the open tasks it put in none.
+ */
 export interface WorkstreamView {
-  /** Its top-level project's id; null for the tasks in no project. */
-  id: number | null;
+  /** Its name, which stays put while relay keeps the workstream, so the app can remember it folded. */
+  id: string;
   name: string;
-  /** Where it stands, in a line; null until relay's model writes one, and for the tasks in no project. */
+  /** Where it stands, in a line; null until relay's model writes one, and for the tasks in none. */
   summary: string | null;
-  /** Its open tasks, as cards' ids, your move first. */
+  /** Its open tasks in none of its parts, as cards' ids, your move first. */
   taskIds: number[];
+  parts: WorkstreamPartView[];
+  /** Its open tasks that need you, its parts' included. */
   needsYou: number;
-  /** Its tasks shipped in the last week. */
+  /** Its tasks shipped in the last week, its parts' included. */
   shipped: number;
+}
+
+/** A distinct piece of a workstream, like Workspaces rollout in Vaultless auth, with its open tasks. */
+export interface WorkstreamPartView {
+  /** "Workstream › Part". */
+  id: string;
+  name: string;
+  taskIds: number[];
 }
 
 /** How a PR card on the PR board names the task it's part of. */
@@ -632,10 +650,11 @@ const MOVING: Turn[] = ["agent", "progress"];
 
 /**
  * The board at a glance. Up next ranks what needs you by what it frees up: first what other tasks wait
- * on, then what takes a click (ship, approve, merge), then what's waited longest. Workstreams are
- * top-level projects, each with its subprojects' tasks: the ones that need you first, then the ones moving.
+ * on, then what takes a click (ship, approve, merge), then what's waited longest. Workstreams are as
+ * relay's model grouped your tasks, each with its parts: the most pressing first, the tasks in none last.
  */
 function overviewOf(open: TaskCardView[], shipped: TaskCardView[], quick: Set<number>, inputs: TaskInputs): OverviewView {
+  const pathOf = (card: TaskCardView) => inputs.workstreams.get(card.id) ?? null;
   const unblocks = (card: TaskCardView) => card.neededBy.filter((task) => !task.shipped);
   const upNext = open
     .filter((card) => card.turn.id === "you")
@@ -648,45 +667,50 @@ function overviewOf(open: TaskCardView[], shipped: TaskCardView[], quick: Set<nu
         // A wait under a minute ("just now") says nothing worth ranking by.
         card.turn.since && card.turn.since !== "just now" ? `Waiting ${card.turn.since}` : null,
       ];
-      return { id: card.id, why: why.filter(Boolean).join(" · ") };
+      return { id: card.id, why: why.filter(Boolean).join(" · "), workstream: pathOf(card)?.join(" › ") ?? null };
     });
 
-  const byId = new Map(inputs.projects.map((project) => [project.id, project]));
-  const rootOf = (id: number): Project => {
-    let project = byId.get(id)!;
-    while (project.parentId !== null && byId.has(project.parentId)) project = byId.get(project.parentId)!;
-    return project;
-  };
-  const groups = new Map<number | null, { open: TaskCardView[]; shipped: number }>();
-  const group = (card: TaskCardView) => {
-    const key = card.project && byId.has(card.project.id) ? rootOf(card.project.id).id : null;
-    const found = groups.get(key) ?? { open: [], shipped: 0 };
-    groups.set(key, found);
+  // Each workstream's open tasks, in it directly and by part, and what it shipped this week; "" holds the tasks in none.
+  const groups = new Map<string, { direct: TaskCardView[]; parts: Map<string, TaskCardView[]>; shipped: number }>();
+  const groupOf = (name: string) => {
+    const found = groups.get(name) ?? { direct: [], parts: new Map<string, TaskCardView[]>(), shipped: 0 };
+    groups.set(name, found);
     return found;
   };
-  for (const card of open) group(card).open.push(card);
+  for (const card of open) {
+    const path = pathOf(card);
+    const group = groupOf(path?.[0] ?? "");
+    if (path?.[1]) group.parts.set(path[1], [...(group.parts.get(path[1]) ?? []), card]);
+    else group.direct.push(card);
+  }
   const weekAgo = new Date(inputs.now.getTime() - WEEK_MS).toISOString();
-  for (const card of shipped) if (card.sortKey >= weekAgo) group(card).shipped++;
+  for (const card of shipped) {
+    const path = pathOf(card);
+    if (path && card.sortKey >= weekAgo) groupOf(path[0]).shipped++;
+  }
 
-  // A workstream ranks by its most pressing task (one that needs you, then one moving), then by its latest news; the tasks in no project go last.
+  // Most pressing first: the one whose top task needs you, then one moving; then the one with the latest news.
   const latest = (cards: TaskCardView[]) => cards.map((card) => card.updatedAt).toSorted().at(-1)!;
-  const workstreams = [...groups]
-    .filter(([, { open: cards }]) => cards.length > 0)
-    .map(([id, entry]) => ({ id, cards: entry.open.toSorted(byTurn), shipped: entry.shipped }))
-    .toSorted(
-      (a, b) =>
-        Number(a.id === null) - Number(b.id === null) ||
-        TURN_ORDER.indexOf(a.cards[0].turn.id) - TURN_ORDER.indexOf(b.cards[0].turn.id) ||
-        latest(b.cards).localeCompare(latest(a.cards)),
-    )
-    .map(({ id, cards, shipped: count }): WorkstreamView => ({
-      id,
-      name: id === null ? "Not in a project" : byId.get(id)!.name,
-      summary: id === null ? null : (inputs.summaries.get(id)?.text ?? null),
-      taskIds: cards.map((card) => card.id),
-      needsYou: cards.filter((card) => card.turn.id === "you").length,
-      shipped: count,
-    }));
+  const pressing = (a: TaskCardView[], b: TaskCardView[]) => TURN_ORDER.indexOf(a[0].turn.id) - TURN_ORDER.indexOf(b[0].turn.id) || latest(b).localeCompare(latest(a));
+  const found = [...groups]
+    .map(([name, group]) => {
+      const parts = [...group.parts].map(([part, cards]) => ({ part, cards: cards.toSorted(byTurn) })).toSorted((a, b) => pressing(a.cards, b.cards));
+      const all = [...group.direct, ...parts.flatMap((part) => part.cards)].toSorted(byTurn);
+      return { name, direct: group.direct.toSorted(byTurn), parts, all, shipped: group.shipped };
+    })
+    .filter((workstream) => workstream.all.length > 0)
+    .toSorted((a, b) => Number(a.name === "") - Number(b.name === "") || pressing(a.all, b.all));
+  const workstreams = found.map(
+    (workstream): WorkstreamView => ({
+      id: workstream.name,
+      name: workstream.name || (found.length > 1 ? "Other" : "Open tasks"),
+      summary: workstream.name ? (inputs.summaries.get(workstream.name)?.text ?? null) : null,
+      taskIds: workstream.direct.map((card) => card.id),
+      parts: workstream.parts.map(({ part, cards }) => ({ id: `${workstream.name} › ${part}`, name: part, taskIds: cards.map((card) => card.id) })),
+      needsYou: workstream.all.filter((card) => card.turn.id === "you").length,
+      shipped: workstream.shipped,
+    }),
+  );
 
   return {
     upNext,
