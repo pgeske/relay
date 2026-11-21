@@ -16,13 +16,13 @@ You report at four moments: when you start, when you have a plan, before you sto
 **1. Register the task when you start one** in a relay session, unless this session is already on a task (the user started it from the board, or you registered it earlier). Skip it for quick questions and one-off answers.
 
 ```sh
-relay task new "Roll out the new cache to staging" --project "Faster search" --status "Reading the rollout runbook"
+relay task new "Roll out the new cache to staging" --status "Reading the rollout runbook"
 # prints T-12; this session is on it now
 ```
 
 - The title says the outcome in a few plain words. `--details -` takes a longer description on stdin.
 - By default the user approves your plan before you carry it out (below). Add `--skip-plan` when there's nothing to plan, or the user already told you exactly what to do.
-- `--project` names a project, creating it if needed; `Parent/Child` names a subproject inside another (`--project "Relay/Sidebar"`). Reuse an existing one (`relay task --json` lists projects, each with its `path`) rather than inventing a near-duplicate. Leave it off when you're unsure: relay files a task without one into a project on its own.
+- Relay groups every task into workstreams on its own, so leave out `--project` unless the user names one. It puts the task in the user's project of that name, creating it if needed; `Parent/Child` names a subproject inside another (`--project "Relay/Sidebar"`).
 
 **2. Plans.** Unless the task skips plan approval, record your plan and then stop until the user approves it on the board (they press **Approve Plan**, which tells you to go ahead):
 
