@@ -10,6 +10,41 @@ struct TaskBoard: Decodable, Sendable {
     var untracked: [UntrackedSession]
     var projects: [Project]
     var needsYou: Int
+    /// Absent on servers that predate the overview.
+    var overview: Overview?
+}
+
+/// The board at a glance: what needs you, best first, then each workstream and its open tasks, by card id.
+struct Overview: Decodable, Sendable {
+    var upNext: [UpNext]
+    var workstreams: [Workstream]
+    var counts: OverviewCounts
+}
+
+struct UpNext: Decodable, Sendable, Identifiable {
+    var id: Int
+    /// Why it's ranked there: "Unblocks T-4 · Waiting 2h".
+    var why: String
+}
+
+/// A top-level project and its subprojects' open tasks, or (`id` nil) the tasks in no project.
+struct Workstream: Decodable, Sendable {
+    var id: Int?
+    var name: String
+    /// Where it stands, in a line relay's model wrote.
+    var summary: String?
+    /// Your move first.
+    var taskIds: [Int]
+    var needsYou: Int
+    /// Shipped in the last week.
+    var shipped: Int
+}
+
+/// Open tasks not waiting on you.
+struct OverviewCounts: Decodable, Sendable {
+    var moving: Int
+    var waiting: Int
+    var parked: Int
 }
 
 struct TaskColumn: Decodable, Sendable, Identifiable {
@@ -64,6 +99,8 @@ struct TaskCard: Decodable, Sendable, Identifiable {
     var menu: [BoardAction]
     var history: [HistoryItem]
     var updatedAt: Date
+    /// Where it stands in a few words, for a one-line row; absent on servers that predate the overview.
+    var brief: String?
 }
 
 extension TaskCard {

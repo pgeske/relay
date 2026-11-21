@@ -2,6 +2,7 @@ import AppKit
 import SwiftUI
 
 enum SidebarItem: Hashable {
+    case overview
     case tasks
     case project(Int)
     case all
@@ -17,7 +18,7 @@ struct BoardWindow: View {
             Sidebar(selection: $model.section)
                 .navigationSplitViewColumnWidth(min: 190 * zoom, ideal: 215 * zoom, max: 280 * zoom)
         } detail: {
-            BoardContent(selection: model.section ?? .tasks)
+            BoardContent(selection: model.section ?? .overview)
                 // Centered under the board you're looking at, not the whole window with its sidebar.
                 .overlay(alignment: .bottom) { ToastView() }
         }
@@ -93,8 +94,10 @@ private struct Sidebar: View {
     var body: some View {
         List(selection: $selection) {
             Section("Tasks") {
-                Label("All Tasks", systemImage: "checklist")
+                Label("Overview", systemImage: "scope")
                     .badge(model.tasksWaitingOnYou)
+                    .tag(SidebarItem.overview)
+                Label("All Tasks", systemImage: "checklist")
                     .tag(SidebarItem.tasks)
             }
             Section {
@@ -386,7 +389,7 @@ private struct BoardContent: View {
 
     var body: some View {
         switch selection {
-        case .tasks, .project:
+        case .overview, .tasks, .project:
             tasksContent
         case .all, .lane:
             pullRequestsContent
@@ -400,7 +403,11 @@ private struct BoardContent: View {
                 if let failure = model.failure {
                     Banner(text: "\(failure.headline). Showing your tasks as they were.").padding([.horizontal, .top], 16)
                 }
-                TasksView(project: project)
+                if selection == .overview, let overview = model.board?.tasks?.overview {
+                    OverviewView(overview: overview)
+                } else {
+                    TasksView(project: project)
+                }
             }
         } else if let failure = model.failure {
             FailureView(failure: failure)

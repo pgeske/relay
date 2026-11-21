@@ -50,7 +50,7 @@ final class BoardModel {
 
     let client = BoardClient(server: .fromEnvironment())
     /// The sidebar's pick: which view the window shows.
-    var section: SidebarItem? = .tasks
+    var section: SidebarItem? = .overview
     private var loop: Task<Void, Never>?
     private var refreshes = 0
 
@@ -92,6 +92,11 @@ final class BoardModel {
 
     /// Tasks waiting on you.
     var tasksWaitingOnYou: Int { taskColumns.reduce(0) { $0 + $1.cards.count { $0.turn.needsYou } } }
+
+    /// Every task card the window shows, by id, for the overview's rows.
+    var taskCards: [Int: TaskCard] {
+        Dictionary(taskColumns.lazy.flatMap(\.cards).map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+    }
 
     func start() {
         if loop == nil { schedule(after: .zero) }
