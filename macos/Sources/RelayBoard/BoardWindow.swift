@@ -56,7 +56,15 @@ struct BoardWindow: View {
         } message: { pending in
             Text(pending.confirm.message)
         }
-        .task { model.start() }
+        .task {
+            model.start()
+            // The app may have come to the front before the window listened for it.
+            if NSApp.isActive { model.startedLooking() }
+        }
+        // The Overview says what moved since you last looked away.
+        .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in model.startedLooking() }
+        .onReceive(NotificationCenter.default.publisher(for: NSApplication.didResignActiveNotification)) { _ in model.stoppedLooking() }
+        .onReceive(NotificationCenter.default.publisher(for: NSApplication.willTerminateNotification)) { _ in model.stoppedLooking() }
     }
 
     private var zoom: CGFloat { Zoom.shared.scale }

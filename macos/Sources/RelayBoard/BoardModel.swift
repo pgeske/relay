@@ -98,6 +98,34 @@ final class BoardModel {
         Dictionary(taskColumns.lazy.flatMap(\.cards).map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
     }
 
+    /// Where tasks stood when you last looked away from the board; nil until you first do.
+    private(set) var lastLook: LastLook? = LastLook.saved
+    private var lookingSince: Date?
+
+    /// The tasks that moved since you last looked, what needs you first.
+    var changesSinceLastLook: [TaskChange] { lastLook?.changes(in: taskColumns) ?? [] }
+
+    /// The window came to the front.
+    func startedLooking() {
+        lookingSince = .now
+    }
+
+    /// The window went to the back. Only a look of a few seconds counts, so a glance at the board
+    /// doesn't clear what's new before you read it.
+    func stoppedLooking() {
+        defer { lookingSince = nil }
+        guard let lookingSince, Date.now.timeIntervalSince(lookingSince) >= 3 else { return }
+        markSeen()
+    }
+
+    /// Takes the board as it is now as seen.
+    func markSeen() {
+        guard board?.tasks != nil else { return }
+        let look = LastLook(at: .now, columns: taskColumns)
+        lastLook = look
+        look.save()
+    }
+
     func start() {
         if loop == nil { schedule(after: .zero) }
     }

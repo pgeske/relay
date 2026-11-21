@@ -10,12 +10,16 @@ struct OverviewView: View {
 
     var body: some View {
         let cards = model.taskCards
+        let changes = model.changesSinceLastLook
         ScrollView {
             VStack(alignment: .leading, spacing: 26) {
                 if !model.untrackedSessions.isEmpty {
                     UntrackedStrip(sessions: model.untrackedSessions)
                 }
                 UpNextSection(items: overview.upNext.compactMap { item in cards[item.id].map { (item, $0) } }, counts: overview.counts)
+                if let since = model.lastLook?.at, !changes.isEmpty {
+                    SinceLastLookSection(since: since, changes: changes.compactMap { change in cards[change.id].map { (change, $0) } })
+                }
                 if !overview.workstreams.isEmpty {
                     VStack(alignment: .leading, spacing: 12) {
                         OverviewHeader(title: "Workstreams", symbol: "square.stack.3d.up", tint: .secondary)
@@ -29,6 +33,54 @@ struct OverviewView: View {
             .padding(.vertical, 18)
             .frame(maxWidth: 920 * Zoom.shared.scale, alignment: .leading)
             .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .environment(\.changedTaskIds, Set(changes.map(\.id)))
+    }
+}
+
+private struct ChangedTaskIdsKey: EnvironmentKey {
+    static let defaultValue: Set<Int> = []
+}
+
+extension EnvironmentValues {
+    /// The tasks that moved since you last looked, which the Overview's rows mark.
+    var changedTaskIds: Set<Int> {
+        get { self[ChangedTaskIdsKey.self] }
+        set { self[ChangedTaskIdsKey.self] = newValue }
+    }
+}
+
+/// What moved while you were away, a row each, what needs you first; Mark Seen clears it.
+private struct SinceLastLookSection: View {
+    let since: Date
+    let changes: [(TaskChange, TaskCard)]
+
+    @Environment(BoardModel.self) private var model
+
+    /// More than this and the rest go behind a count: it's news, not a second board.
+    private let shown = 6
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(alignment: .firstTextBaseline, spacing: 8) {
+                OverviewHeader(title: "Since you last looked", symbol: "clock.arrow.circlepath", tint: .boardBlue)
+                Text(since, format: .relative(presentation: .named))
+                    .font(.zoomed(.callout))
+                    .foregroundStyle(.secondary)
+                Spacer(minLength: 8)
+                Button("Mark Seen") { withAnimation(.snappy(duration: 0.25)) { model.markSeen() } }
+                    .controlSize(.small)
+                    .help("Clear this list; it fills again with what moves from here on")
+            }
+            RowList {
+                // A shipped task's own line already says so ("Shipped 3h ago").
+                ForEach(changes.prefix(shown), id: \.0.id) { change, card in OverviewRow(card: card, detail: card.stage == "done" ? nil : change.label) }
+            }
+            if changes.count > shown {
+                Text("and \(changes.count - shown) more")
+                    .font(.zoomed(.callout))
+                    .foregroundStyle(.secondary)
+            }
         }
     }
 }
@@ -209,6 +261,7 @@ private struct OverviewRow: View {
     let detail: String?
 
     @Environment(BoardModel.self) private var model
+    @Environment(\.changedTaskIds) private var changedTaskIds
     @State private var hovering = false
     @State private var showingDetails = false
 
@@ -218,7 +271,13 @@ private struct OverviewRow: View {
                 .font(.zoomed(.caption))
                 .foregroundStyle(card.turn.tint)
                 .frame(width: 16 * Zoom.shared.scale)
-                .help(card.turn.label)
+                // A dot for what moved since you last looked.
+                .overlay(alignment: .leading) {
+                    if changedTaskIds.contains(card.id) {
+                        Circle().fill(Color.boardBlue).frame(width: 5 * Zoom.shared.scale).offset(x: -7 * Zoom.shared.scale)
+                    }
+                }
+                .help(changedTaskIds.contains(card.id) ? "\(card.turn.label) · moved since you last looked" : card.turn.label)
             Text(card.title)
                 .font(.zoomed(.subheadline).weight(.medium))
                 .truncationMode(.tail)
