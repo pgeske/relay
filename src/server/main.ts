@@ -3,7 +3,8 @@ import type { Duplex } from "node:stream";
 import { homedir } from "node:os";
 import { setTimeout as sleep } from "node:timers/promises";
 import { WebSocketServer } from "ws";
-import { fetchBoardView, isLocalRequest, readActionBody, runBoardAction } from "../board/serve.ts";
+import { fetchBoardView, startBoardEvents } from "../board/liveBoard.ts";
+import { isLocalRequest, readActionBody, runBoardAction } from "../board/serve.ts";
 import { createTaskFromBoard, parseNewTask, readJsonBody, runProjectAction, runTaskAction, type NewTaskRequest } from "../board/taskServe.ts";
 import { startWatcher } from "../board/watcher.ts";
 import { startWorkstreams } from "../board/workstreams.ts";
@@ -327,10 +328,16 @@ function sendImage(res: ServerResponse, image: { bytes: Buffer; contentType: str
  * manages the sidebar's projects, and `POST /api/board/projects/move-task` with `{ "task": 12, "project": 3 }`
  * puts a task in a project (or in none, without `project`).
  */
-async function routeBoard(req: IncomingMessage, res: ServerResponse, rest: string[]): Promise<void> {
+async function routeBoard(req: IncomingMessage, res: ServerResponse, url: URL, rest: string[]): Promise<void> {
   if (rest.length === 0) {
     if (req.method !== "GET") throw new HttpError(405, "method not allowed");
-    sendJson(res, 200, await fetchBoardView());
+    const localOnly = url.searchParams.get("local") === "1";
+    sendJson(res, 200, await fetchBoardView({ localOnly }));
+    return;
+  }
+  if (rest.length === 1 && rest[0] === "events") {
+    if (req.method !== "GET") throw new HttpError(405, "method not allowed");
+    startBoardEvents(res);
     return;
   }
   if (rest[0] === "tasks") {
@@ -403,7 +410,7 @@ async function route(
 ): Promise<void> {
   const [, resource, rawId, action, ...rest] = segments;
   if (resource === "board") {
-    await routeBoard(req, res, segments.slice(2));
+    await routeBoard(req, res, url, segments.slice(2));
     return;
   }
   if (resource === "models" && !rawId) {

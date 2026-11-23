@@ -71,7 +71,7 @@ test("only long status lines and reasons get a brief, once", async () => {
   expect(model.prompts).toHaveLength(1);
 });
 
-test("a workstream's summary covers its parts, is only rewritten once its tasks change and a few minutes have passed, and goes with its open tasks", async () => {
+test("a workstream's summary covers its parts, is only rewritten once its tasks change and the cooldown has passed, and goes with its open tasks", async () => {
   const db = openBoardStore(":memory:");
   const id = createTask(db, { ...base, title: "Rebuild the index", status: "Backfill running" }).id;
   placeTasks(db, new Map([[id, ["Search", "Indexing"]]]), at);
@@ -85,9 +85,9 @@ test("a workstream's summary covers its parts, is only rewritten once its tasks 
   expect(model.prompts).toHaveLength(1);
 
   reportTask(db, id, { status: "Backfill done", blocked: null, at });
-  await summarizeWorkstreams(db, model, new Date(now.getTime() + 60_000));
+  await summarizeWorkstreams(db, model, new Date(now.getTime() + 20_000));
   expect(model.prompts).toHaveLength(1);
-  await summarizeWorkstreams(db, model, new Date(now.getTime() + 5 * 60_000));
+  await summarizeWorkstreams(db, model, new Date(now.getTime() + 60_000));
   expect(model.prompts).toHaveLength(2);
 
   placeTasks(db, new Map([[id, null]]), at);

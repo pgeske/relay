@@ -79,8 +79,13 @@ struct BoardWindow: View {
         Binding(get: { model.confirming != nil }, set: { if !$0 { model.confirming = nil } })
     }
 
-    /// When the board is from, and how soon it refreshes.
+    /// When the board is from, and how it updates.
     private var status: String {
+        if model.isLive {
+            guard let updatedAt = model.board?.updatedAt else { return "Live · loading PRs…" }
+            let time = updatedAt.formatted(date: .omitted, time: .shortened)
+            return "Live · PRs updated \(time)"
+        }
         guard let updatedAt = model.board?.updatedAt else { return model.isRefreshing ? "Loading…" : "" }
         let time = updatedAt.formatted(date: .omitted, time: .shortened)
         let cadence = model.board?.agentWorking == true ? "every \(model.board?.refreshSeconds ?? 10)s while an agent works" : "every minute"

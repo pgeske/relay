@@ -1,5 +1,6 @@
 import { askModel } from "./askModel.ts";
 import { jsonObject } from "./autoStatus.ts";
+import { notifyBoardChanged } from "./boardEvents.ts";
 import { loadBoardConfig } from "./config.ts";
 import type { PrComment, PullRequest } from "./github.ts";
 import { commentVerdicts, openBoardStore, recordCommentVerdict } from "./store.ts";
@@ -128,6 +129,7 @@ export function judgeComments(prs: PullRequest[]): void {
         } finally {
           store.close();
         }
+        notifyBoardChanged();
       } catch (error) {
         console.error(`feedback: judging ${comment.url} failed`, error);
       } finally {

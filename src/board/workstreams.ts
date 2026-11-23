@@ -2,6 +2,7 @@ import type { Database } from "bun:sqlite";
 import { createHash } from "node:crypto";
 import { askModel } from "./askModel.ts";
 import { jsonObject } from "./autoStatus.ts";
+import { notifyBoardChanged, onWorkstreamsWake } from "./boardEvents.ts";
 import { loadBoardConfig } from "./config.ts";
 import { openBoardStore } from "./store.ts";
 import {
@@ -54,14 +55,15 @@ const BRIEF_KEPT_MS = 14 * DAY_MS;
 
 const SUMMARY_CHARS = 110;
 /** A workstream's summary is rewritten at most this often, however often its tasks report. */
-const SUMMARY_MIN_MS = 3 * 60 * 1000;
+const SUMMARY_MIN_MS = 45 * 1000;
 /** Tasks shipped this recently count toward where a workstream stands. */
 const SUMMARY_SHIPPED_WITHIN_MS = 7 * DAY_MS;
 
 const CYCLE_MS = 20_000;
+/** Small pause after a task changes so back-to-back writes coalesce into one workstream pass. */
+const WAKE_DEBOUNCE_MS = 1500;
 /** After a step fails (the model timed out, say), it waits this long before trying again. */
 const RETRY_MS = 5 * 60 * 1000;
-
 function oneLine(text: string, max: number): string {
   const line = text.replace(/\s+/g, " ").trim();
   return line.length <= max ? line : `${line.slice(0, max - 1).trimEnd()}…`;
@@ -189,6 +191,7 @@ export async function groupTasks(db: Database, ask: Ask, now: Date): Promise<voi
   for (const task of tasks) if (!placements.has(task.id) && !grouping.has(task.id)) grouping.set(task.id, null);
   const changed = new Map([...grouping].filter(([id, path]) => JSON.stringify(placements.get(id)) !== JSON.stringify(path)));
   placeTasks(db, changed, now.toISOString());
+  if (changed.size > 0) notifyBoardChanged();
   console.log(`workstreams: placed ${[...changed].map(([id, path]) => `${taskRef(id)} → ${path ? path.join(" › ") : "none"}`).join(", ")}`);
 }
 
@@ -234,6 +237,7 @@ export async function briefTexts(db: Database, ask: Ask, now: Date): Promise<voi
   if (texts.length === 0) return;
   const briefs = parseBriefs(await ask(briefPrompt(texts)), texts);
   saveTextBriefs(db, briefs, now.toISOString(), new Date(now.getTime() - BRIEF_KEPT_MS).toISOString());
+  if (briefs.size > 0) notifyBoardChanged();
 }
 
 // Summaries
@@ -322,6 +326,7 @@ export async function summarizeWorkstreams(db: Database, ask: Ask, now: Date): P
   const at = now.toISOString();
   const basis = new Map(due.map((input) => [input.name, input.basis]));
   saveWorkstreamSummaries(db, new Map([...summaries].map(([name, text]) => [name, { text, at, basis: basis.get(name)! }])), current);
+  notifyBoardChanged();
 }
 
 /**
@@ -340,6 +345,9 @@ const STEPS = [
 export function startWorkstreams(): void {
   const retryAt = new Map<string, number>();
   let busy = false;
+  let rerun = false;
+  let wakeTimer: NodeJS.Timeout | null = null;
+
   const cycle = async () => {
     const { autoStatus } = loadBoardConfig();
     if (!autoStatus.enabled) return;
@@ -362,11 +370,32 @@ export function startWorkstreams(): void {
       db.close();
     }
   };
-  setInterval(() => {
-    if (busy) return;
+
+  const runCycle = () => {
+    if (busy) {
+      rerun = true;
+      return;
+    }
     busy = true;
     void cycle()
       .catch((error: unknown) => console.error("workstreams: cycle failed", error))
-      .finally(() => (busy = false));
-  }, CYCLE_MS).unref();
+      .finally(() => {
+        busy = false;
+        if (rerun) {
+          rerun = false;
+          runCycle();
+        }
+      });
+  };
+
+  onWorkstreamsWake(() => {
+    if (wakeTimer !== null) return;
+    wakeTimer = setTimeout(() => {
+      wakeTimer = null;
+      runCycle();
+    }, WAKE_DEBOUNCE_MS);
+    wakeTimer.unref();
+  });
+
+  setInterval(runCycle, CYCLE_MS).unref();
 }
