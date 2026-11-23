@@ -35,6 +35,7 @@ const review = (headers: Record<string, string>) => call("POST", "/api/board/act
 
 test("the board's endpoints need relay's token", async () => {
   expect((await call("GET", "/api/board")).status).toBe(401);
+  expect((await call("GET", "/api/board/events")).status).toBe(401);
   expect(await review({})).toEqual({ status: 401, body: { error: "unauthorized" } });
   expect((await review({ authorization: "Bearer not-the-token" })).status).toBe(401);
 });
@@ -43,6 +44,7 @@ test("and answer only requests that name this computer, whatever the token", asy
   const rebound = { host: `evil.example:${port}`, authorization: `Bearer ${loadToken()}` };
   expect(await review(rebound)).toEqual({ status: 403, body: { error: "the board only answers this computer" } });
   expect((await call("GET", "/api/board", rebound)).status).toBe(403);
+  expect((await call("GET", "/api/board/events", rebound)).status).toBe(403);
 });
 
 test("with the token, an action reaches the board", async () => {

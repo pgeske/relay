@@ -647,8 +647,10 @@ export function boardView(board: Board | null, options: ViewOptions): BoardView 
         { id: "merged", title: "Merged", hint: "Deploys aren't tracked yet", hot: false, cards: board.merged.map((pr) => mergedCard(pr, board.owners, chips, now)) },
       ]
     : [];
-  // While a session runs one of the board's requests, refresh often, so a finished merge or review shows soon.
-  const agentWorking = board !== null && Object.values(board.lanes).some((cards) => cards.some((card) => AGENT_ACTIONS.some((action) => card.requests[action] === "running")));
+  // While a session runs one of the board's PR requests or works on a task, refresh often so its end shows soon.
+  const prRequestRunning = board !== null && Object.values(board.lanes).some((cards) => cards.some((card) => AGENT_ACTIONS.some((action) => card.requests[action] === "running")));
+  const taskWorking = options.tasks?.columns.some((column) => column.cards.some((card) => card.turn.id === "agent")) ?? false;
+  const agentWorking = prRequestRunning || taskWorking;
   return {
     lanes,
     updatedAt: options.updatedAt?.toISOString() ?? null,

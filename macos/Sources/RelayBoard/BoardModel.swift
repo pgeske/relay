@@ -22,22 +22,28 @@ struct PendingAction: Identifiable {
     var confirm: Confirm
 }
 
-/// The board and everything the window does with it: refreshing on a timer (sooner while an agent
-/// works), running a card's controls, and what the window shows until the server's board catches up.
+/// The board and everything the window does with it: streaming live updates from relay's server
+/// (falling back to a timer on older servers), running a card's controls, and what the window shows
+/// until the server's board catches up.
 @MainActor @Observable
 final class BoardModel {
     private(set) var board: Board?
     /// Why the latest refresh failed; `board` may still hold an older one.
     private(set) var failure: BoardError?
     private(set) var isRefreshing = false
+    /// True while connected to the server's live SSE stream.
+    private(set) var isLive = false
     var toast: Toast?
     /// The task just shipped, while its confetti falls.
     var shipment: Shipment?
-    var confirming: PendingAction?
+    var confirming: PendingAction? {
+        didSet {
+            if confirming == nil { flushPendingBoard() }
+        }
+    }
     /// The New Task sheet is up.
     var composing = false
     var editingDependencies: TaskCard?
-    /// What the New Task sheet's model picker offers; nil until it first opens, or while omp can't list them.
     private(set) var modelChoices: ModelChoices?
     /// Controls on their way to the server, as "<target> <action>".
     private var sending: Set<String> = []
@@ -51,9 +57,11 @@ final class BoardModel {
     let client = BoardClient(server: .fromEnvironment())
     /// The sidebar's pick: which view the window shows.
     var section: SidebarItem? = .overview
-    private var loop: Task<Void, Never>?
+    private var streamLoop: Task<Void, Never>?
+    private var pollLoop: Task<Void, Never>?
+    private var pendingBoard: Board?
+    private var streamRetrySeconds = 1
     private var refreshes = 0
-
     func showTasks() {
         section = .tasks
     }
@@ -105,9 +113,16 @@ final class BoardModel {
     /// The tasks that moved since you last looked, what needs you first.
     var changesSinceLastLook: [TaskChange] { lastLook?.changes(in: taskColumns) ?? [] }
 
-    /// The window came to the front.
+    /// The window came to the front: fetch fresh local state right away and make sure live streaming is up.
     func startedLooking() {
         lookingSince = .now
+        if isLive {
+            Task { await refreshLocal() }
+        } else if pollLoop != nil {
+            schedulePoll(after: .zero)
+        } else {
+            startStream()
+        }
     }
 
     /// The window went to the back. Only a look of a few seconds counts, so a glance at the board
@@ -127,13 +142,14 @@ final class BoardModel {
     }
 
     func start() {
-        if loop == nil { schedule(after: .zero) }
+        if streamLoop == nil && pollLoop == nil { startStream() }
     }
 
+    /// Forces a full refresh, including GitHub PR data.
     func refreshNow() {
-        schedule(after: .zero)
+        Task { await refresh(localOnly: false) }
+        if !isLive && pollLoop == nil && streamLoop == nil { startStream() }
     }
-
     func isSending(_ action: BoardAction, on target: ActionTarget) -> Bool {
         sending.contains("\(target.key) \(action.action)")
     }
@@ -169,7 +185,7 @@ final class BoardModel {
         do {
             let result = try await client.create(task)
             toast = Toast(message: result.message, failed: !result.ok)
-            if result.ok { schedule(after: .milliseconds(300)) }
+            if result.ok && !isLive { schedulePoll(after: .milliseconds(300)) }
             return result.ok
         } catch {
             report(error)
@@ -184,7 +200,7 @@ final class BoardModel {
         do {
             let result = try await client.project(action, project: project, name: name, parent: parent, task: task)
             toast = Toast(message: result.message, failed: !result.ok)
-            if result.ok { schedule(after: .zero) }
+            if result.ok && !isLive { schedulePoll(after: .zero) }
             return result.ok
         } catch {
             report(error)
@@ -197,7 +213,7 @@ final class BoardModel {
             let action = adding ? "add-dependency" : "remove-dependency"
             let result = try await client.perform(action, on: .task(task), prerequisite: prerequisite)
             toast = Toast(message: result.message, failed: !result.ok)
-            if result.ok { refreshNow() }
+            if result.ok && !isLive { refreshNow() }
             return result.ok
         } catch {
             report(error)
@@ -211,11 +227,55 @@ final class BoardModel {
         modelChoices = try? await client.models()
     }
 
-    /// Refreshes every `refreshSeconds` the server asks for, holding off while a control is being
-    /// confirmed or sent, so the card it's on stays put.
-    private func schedule(after delay: Duration) {
-        loop?.cancel()
-        loop = Task { [weak self] in
+    /// Connects to the server's live SSE stream, reconnecting automatically on drops and falling back
+    /// to polling if talking to an older relay without `/api/board/events`.
+    private func startStream() {
+        pollLoop?.cancel()
+        pollLoop = nil
+        streamLoop?.cancel()
+        streamRetrySeconds = 1
+        streamLoop = Task { [weak self] in
+            while !Task.isCancelled {
+                guard let self else { return }
+                do {
+                    try await client.streamBoards { [weak self] incoming in
+                        await MainActor.run {
+                            guard let self else { return }
+                            self.isLive = true
+                            self.streamRetrySeconds = 1
+                            self.failure = nil
+                            self.receive(incoming)
+                        }
+                    }
+                    // Clean EOF or timeout: reconnect quickly.
+                    if Task.isCancelled { return }
+                    isLive = false
+                    streamRetrySeconds = 1
+                } catch BoardError.serverTooOld {
+                    // Older server with no SSE endpoint: fall back to polling.
+                    isLive = false
+                    streamLoop = nil
+                    schedulePoll(after: .zero)
+                    return
+                } catch let error as BoardError {
+                    isLive = false
+                    failure = error
+                    streamRetrySeconds = error == .serverNotRunning ? min(streamRetrySeconds * 2, 5) : 15
+                } catch {
+                    if Task.isCancelled || (error as? URLError)?.code == .cancelled { return }
+                    isLive = false
+                    failure = .server(status: 0, message: error.localizedDescription)
+                    streamRetrySeconds = min(streamRetrySeconds * 2, 5)
+                }
+                do { try await Task.sleep(for: .seconds(streamRetrySeconds)) } catch { return }
+            }
+        }
+    }
+
+    /// Fallback timer for older servers without live streaming, holding off while a control is being confirmed or sent.
+    private func schedulePoll(after delay: Duration) {
+        pollLoop?.cancel()
+        pollLoop = Task { [weak self] in
             var wait = delay
             while true {
                 do { try await Task.sleep(for: wait) } catch { return }
@@ -224,7 +284,7 @@ final class BoardModel {
                     wait = .milliseconds(500)
                     continue
                 }
-                await refresh()
+                await refresh(localOnly: false)
                 if Task.isCancelled { return }
                 wait = nextRefresh
             }
@@ -239,17 +299,46 @@ final class BoardModel {
         }
     }
 
-    private func refresh() async {
+    private func receive(_ incoming: Board) {
+        if confirming != nil {
+            pendingBoard = incoming
+            return
+        }
+        apply(incoming)
+    }
+
+    private func flushPendingBoard() {
+        guard confirming == nil, let pending = pendingBoard else { return }
+        pendingBoard = nil
+        apply(pending)
+    }
+
+    private func apply(_ incoming: Board) {
+        board = incoming
+        failure = nil
+        started = [:]
+        startedTasks = [:]
+        removed = []
+        let waiting = prsWaitingOnYou + tasksWaitingOnYou
+        NSApp.dockTile.badgeLabel = waiting > 0 ? "\(waiting)" : nil
+    }
+
+    /// Quick local-only refresh on window focus so state is current even right after sleep/wake.
+    private func refreshLocal() async {
+        guard confirming == nil else { return }
+        if let fresh = try? await client.board(localOnly: true) {
+            receive(fresh)
+        }
+    }
+
+    private func refresh(localOnly: Bool) async {
         refreshes += 1
         let current = refreshes
         isRefreshing = true
         defer { if current == refreshes { isRefreshing = false } }
         do {
-            board = try await client.board()
-            failure = nil
-            started = [:]
-            startedTasks = [:]
-            removed = []
+            let fresh = try await client.board(localOnly: localOnly)
+            receive(fresh)
         } catch let error as BoardError {
             failure = error
         } catch {
@@ -289,9 +378,11 @@ final class BoardModel {
             // refreshed it, or the card was out of date (the PR merged, or its session is already on a
             // request): show what's true now. Task controls change whose move it is, or the task's column,
             // so they show soon too.
-            let isTask = if case .pr = target { false } else { true }
-            let movedCard = result.ok && ["skip-review", "require-review", "refresh"].contains(action.action)
-            if (result.ok && (action.running != nil || isTask)) || movedCard || result.status == 409 { schedule(after: .milliseconds(1200)) }
+            if !isLive {
+                let isTask = if case .pr = target { false } else { true }
+                let movedCard = result.ok && ["skip-review", "require-review", "refresh"].contains(action.action)
+                if (result.ok && (action.running != nil || isTask)) || movedCard || result.status == 409 { schedulePoll(after: .milliseconds(400)) }
+            }
         } catch {
             report(error)
         }

@@ -5,13 +5,14 @@ import { setTimeout as sleep } from "node:timers/promises";
 import { resolveSessionFile } from "../server/sessionFile.ts";
 import { parsePaneTitle } from "../server/sessions.ts";
 import { listOmpPanes, mainSessionName, newWindow, pasteText, selectWindow } from "../tmux.ts";
-import { assembleBoard, describeOwner, liveSessions, parsePrRef, sourceFor } from "./command.ts";
+import { notifyBoardChanged } from "./boardEvents.ts";
+import { describeOwner, liveSessions, parsePrRef, sourceFor } from "./command.ts";
 import { loadBoardConfig } from "./config.ts";
-import { openFeedback, judgeComments, type FeedbackItem } from "./feedback.ts";
-import { closePullRequest, fetchBoardData, fetchPullRequest, type BoardData } from "./github.ts";
-import { REQUEST_MAX_AGE_MS, approvalState, requestProgress, waitingAsks, type ApprovalState, type CardOwner } from "./lanes.ts";
+import { openFeedback, type FeedbackItem } from "./feedback.ts";
+import { closePullRequest, fetchPullRequest } from "./github.ts";
+import { approvalState, requestProgress, waitingAsks, type ApprovalState, type CardOwner } from "./lanes.ts";
 import { prOwner, readSessionHeader } from "./owners.ts";
-import { BOARD_ACTIONS, boardView, type BoardAction, type BoardView } from "./view.ts";
+import { BOARD_ACTIONS, type BoardAction } from "./view.ts";
 import {
   AGENT_ACTIONS,
   agentRequests,
@@ -26,7 +27,6 @@ import {
   skipAgentReview,
   type AgentAction,
 } from "./store.ts";
-import { assembleTasks } from "./taskCommand.ts";
 import { bringRelayTerminalToFront } from "./terminalApp.ts";
 import { refreshWorkingSession } from "./watcher.ts";
 
@@ -34,46 +34,6 @@ const MAX_ACTION_BODY_BYTES = 4096;
 /** How long a reopened session may take to load before a button gives up on it. */
 const REOPEN_TIMEOUT_MS = 30_000;
 const READY_SETTLE_MS = 800;
-
-/** The last GitHub fetch that worked, shown only when a fresh one fails, and labeled as such. */
-let lastGood: { data: BoardData; at: Date } | null = null;
-
-/**
- * The board, as the Relay Board app shows it. Every view fetches from GitHub, so a refresh always
- * shows what GitHub has right now. Sessions, agent results, the requests the board sent, and your
- * tasks are read fresh too; tasks show even when GitHub can't be read. The app shows only your own
- * PRs, so it skips the searches for PRs waiting on your review.
- */
-export async function fetchBoardView(): Promise<BoardView> {
-  const config = loadBoardConfig();
-  let error: string | undefined;
-  try {
-    lastGood = { data: await fetchBoardData(config, { reviewRequests: false, recheck: recentMergeRequests() }), at: new Date() };
-    // Comments that may ask for a change get read in the background; later refreshes show what they asked.
-    judgeComments(lastGood.data.mine.filter((pr) => pr.state === "OPEN" && !pr.isDraft));
-  } catch (failure) {
-    error = failure instanceof Error ? failure.message : String(failure);
-  }
-  const live = await liveSessions();
-  const board = lastGood ? await assembleBoard(lastGood.data, config, live) : null;
-  const now = new Date();
-  const tasks = assembleTasks(board, live, now);
-  return boardView(board, { now, updatedAt: lastGood?.at ?? null, error, tasks: tasks.view, taskChips: tasks.chips });
-}
-
-/**
- * PRs the board recently asked to merge. Search can keep listing a just-merged PR as open, so the
- * board re-reads these directly, and the card leaves the moment the merge lands.
- */
-function recentMergeRequests(): Set<string> {
-  const db = openBoardStore();
-  try {
-    const since = Date.now() - REQUEST_MAX_AGE_MS;
-    return new Set([...agentRequests(db)].filter(([, requests]) => requests.merge && new Date(requests.merge).getTime() > since).map(([key]) => key));
-  } finally {
-    db.close();
-  }
-}
 
 /**
  * The board's endpoints type into your sessions, so on top of the phone token they only answer this
@@ -336,6 +296,7 @@ export async function runBoardAction(action: string, prRef: string): Promise<Boa
     } catch (error) {
       return { status: 502, message: `Couldn't close ${repo}#${number}: ${error instanceof Error ? error.message : String(error)}` };
     }
+    notifyBoardChanged({ github: true });
     return { status: 200, message: `Closed ${repo}#${number}` };
   }
   if (action === "skip-review" || action === "require-review") {
@@ -346,6 +307,7 @@ export async function runBoardAction(action: string, prRef: string): Promise<Boa
     } finally {
       db.close();
     }
+    notifyBoardChanged();
     return { status: 200, message: action === "skip-review" ? `Skipped the agent review of ${repo}#${number}` : `${repo}#${number} needs an agent review again` };
   }
   const db = openBoardStore();
@@ -367,11 +329,15 @@ export async function runBoardAction(action: string, prRef: string): Promise<Boa
   try {
     if (action === "open") return { status: 200, message: await showSession(owner.sessionFile, card.live, name) };
     if (action === "refresh") {
-      if (card.live?.status === "working") return { status: 200, message: `"${name}" is working, so relay read its session: ${await refreshWorkingSession(owner.sessionFile)}` };
+      if (card.live?.status === "working") {
+        const message = `"${name}" is working, so relay read its session: ${await refreshWorkingSession(owner.sessionFile)}`;
+        notifyBoardChanged({ github: true });
+        return { status: 200, message };
+      }
       const reopened = await promptSession(owner.sessionFile, card.live, name, refreshPrompt(`https://github.com/${repo}/pull/${number}`));
+      notifyBoardChanged({ github: true });
       return { status: 200, message: `Asked "${name}" to check where ${repo}#${number} stands${reopened ? " (reopened it in a new relay tab)" : ""}` };
     }
-
     // The card may be older than the PR: a step on one that already merged or closed would only confuse its session.
     // If GitHub doesn't answer, the session checks the PR itself before acting, and works out who to ask for approval.
     const pr = await fetchPullRequest(sourceFor(loadBoardConfig(), repo), repo, number).catch(() => null);
@@ -393,6 +359,7 @@ export async function runBoardAction(action: string, prRef: string): Promise<Boa
     } finally {
       store.close();
     }
+    notifyBoardChanged({ github: action === "merge" });
     return { status: 200, message: `Asked "${name}" to ${REQUESTS[action].asked} ${repo}#${number}${reopened ? " (reopened it in a new relay tab)" : ""}` };
   } catch (error) {
     if (error instanceof ActionError) return { status: error.status, message: error.message };

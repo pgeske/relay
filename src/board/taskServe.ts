@@ -6,6 +6,7 @@ import { parsePaneTitle } from "../server/sessions.ts";
 import { parseUploadedImages, saveUploadedImages, type UploadedImage } from "../server/uploads.ts";
 import { killWindow, pasteText, type Pane } from "../tmux.ts";
 import { nameTask, provisionalTitle } from "./autoTitle.ts";
+import { notifyBoardChanged } from "./boardEvents.ts";
 import { liveSessions } from "./command.ts";
 import { readSessionHeader } from "./owners.ts";
 import { ActionError, modelArgs, openAgentTab, promptSession, showSession, type BoardActionResult } from "./serve.ts";
@@ -208,6 +209,14 @@ export interface TaskActionTarget {
  * `track` asks an untracked session to register its task, `close-session` closes its relay tab.
  */
 export async function runTaskAction(action: string, target: TaskActionTarget): Promise<BoardActionResult> {
+  const result = await executeTaskAction(action, target);
+  if (result.status < 300 && action !== "open" && action !== "open-session") {
+    notifyBoardChanged({ wakeWorkstreams: !isSessionAction(action) });
+  }
+  return result;
+}
+
+async function executeTaskAction(action: string, target: TaskActionTarget): Promise<BoardActionResult> {
   try {
     if (isSessionAction(action)) return await runSessionAction(action, target.session);
     if (!isTaskAction(action)) return { status: 404, message: `no such action: ${action}` };
@@ -382,10 +391,13 @@ export async function createTaskFromBoard(request: NewTaskRequest): Promise<Boar
   } finally {
     db.close();
   }
+  notifyBoardChanged({ wakeWorkstreams: true });
   void nameTask(task.id, written, title);
   if (!request.start) return { status: 200, message: `Saved ${taskRef(task.id)} in Ideas`, task: task.id };
   try {
-    return { status: 200, message: await startTask(task), task: task.id };
+    const message = await startTask(task);
+    notifyBoardChanged();
+    return { status: 200, message, task: task.id };
   } catch (error) {
     // The task stays as an idea, so Start can try again.
     const why = error instanceof Error ? error.message : String(error);
@@ -409,6 +421,12 @@ export interface ProjectActionRequest {
 
 /** Makes, renames, or deletes a project from the board's sidebar, or moves a task into one from its card. */
 export function runProjectAction(action: string, request: ProjectActionRequest): BoardActionResult {
+  const result = executeProjectAction(action, request);
+  if (result.status < 300) notifyBoardChanged({ wakeWorkstreams: action === "move-task" || action === "rename" });
+  return result;
+}
+
+function executeProjectAction(action: string, request: ProjectActionRequest): BoardActionResult {
   if (!(PROJECT_ACTIONS as readonly string[]).includes(action)) return { status: 404, message: `no project action ${action}` };
   const db = openBoardStore();
   try {

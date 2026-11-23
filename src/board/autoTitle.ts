@@ -1,4 +1,5 @@
 import { askModel } from "./askModel.ts";
+import { notifyBoardChanged } from "./boardEvents.ts";
 import { loadBoardConfig } from "./config.ts";
 import { openBoardStore } from "./store.ts";
 import { retitleTask, taskRef } from "./taskStore.ts";
@@ -61,7 +62,10 @@ export async function nameTask(taskId: number, request: string, provisional: str
     }
     const db = openBoardStore();
     try {
-      if (retitleTask(db, taskId, provisional, title)) console.log(`titles: named ${taskRef(taskId)} "${title}"`);
+      if (retitleTask(db, taskId, provisional, title)) {
+        console.log(`titles: named ${taskRef(taskId)} "${title}"`);
+        notifyBoardChanged({ wakeWorkstreams: true });
+      }
     } finally {
       db.close();
     }

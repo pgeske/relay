@@ -45,9 +45,16 @@ struct BoardClient: Sendable {
     var server: RelayServer
 
     static let session = URLSession(configuration: .ephemeral)
+    /// Long-lived session for the server's SSE stream: pings arrive every 15s, so 60s of silence means the stream stalled.
+    static let streamSession: URLSession = {
+        let config = URLSessionConfiguration.ephemeral
+        config.timeoutIntervalForRequest = 60
+        config.timeoutIntervalForResource = .infinity
+        return URLSession(configuration: config)
+    }()
 
-    func board() async throws -> Board {
-        let (data, response) = try await send("api/board")
+    func board(localOnly: Bool = false) async throws -> Board {
+        let (data, response) = try await send(localOnly ? "api/board?local=1" : "api/board")
         switch response.statusCode {
         case 200:
             do {
@@ -58,6 +65,55 @@ struct BoardClient: Sendable {
         case 401: throw BoardError.unauthorized
         case 404: throw BoardError.serverTooOld
         default: throw BoardError.server(status: response.statusCode, message: Self.message(in: data) ?? "HTTP \(response.statusCode)")
+        }
+    }
+
+    /// Streams live board updates (`GET /api/board/events`) until cancelled, the stream ends, or an error occurs.
+    func streamBoards(onBoard: @escaping @Sendable (Board) async -> Void) async throws {
+        var req = try request("api/board/events")
+        req.timeoutInterval = 60
+        req.setValue("text/event-stream", forHTTPHeaderField: "Accept")
+        let bytes: URLSession.AsyncBytes
+        let response: URLResponse
+        do {
+            (bytes, response) = try await Self.streamSession.bytes(for: req)
+        } catch let error as URLError where [.cannotConnectToHost, .cannotFindHost, .networkConnectionLost].contains(error.code) {
+            throw BoardError.serverNotRunning
+        }
+        guard let http = response as? HTTPURLResponse else {
+            throw BoardError.server(status: 0, message: "relay's server sent no HTTP response")
+        }
+        switch http.statusCode {
+        case 200: break
+        case 401: throw BoardError.unauthorized
+        case 404: throw BoardError.serverTooOld
+        default: throw BoardError.server(status: http.statusCode, message: "HTTP \(http.statusCode)")
+        }
+
+        let decoder = Self.decoder()
+        var eventName = ""
+        do {
+            for try await line in bytes.lines {
+                if line.hasPrefix(":") { continue }
+                if line.hasPrefix("event:") {
+                    eventName = line.dropFirst(6).trimmingCharacters(in: .whitespaces)
+                } else if line.hasPrefix("data:"), eventName == "board" {
+                    eventName = ""
+                    let raw = line.dropFirst(5).trimmingCharacters(in: .whitespaces)
+                    guard let data = raw.data(using: .utf8) else { continue }
+                    do {
+                        let board = try decoder.decode(Board.self, from: data)
+                        await onBoard(board)
+                    } catch {
+                        throw BoardError.server(status: 200, message: "relay's server sent a board this app can't read")
+                    }
+                }
+            }
+        } catch let error as URLError where [.cannotConnectToHost, .cannotFindHost, .networkConnectionLost].contains(error.code) {
+            throw BoardError.serverNotRunning
+        } catch let error as URLError where error.code == .timedOut {
+            // Stalled stream (e.g. after sleep): return cleanly so the caller reconnects right away.
+            return
         }
     }
 

@@ -17,6 +17,7 @@ import {
   type Moment,
   type RecordableStep,
 } from "./autoStatus.ts";
+import { notifyBoardChanged } from "./boardEvents.ts";
 import { liveSessions, sourceFor } from "./command.ts";
 import { loadBoardConfig } from "./config.ts";
 import { fetchPullRequest, type PullRequest } from "./github.ts";
@@ -37,7 +38,7 @@ import {
   seenReviewerRuns,
   type AgentReview,
 } from "./store.ts";
-import { currentTask, followsSession, getTask, taskRef, type Task } from "./taskStore.ts";
+import { currentTask, followsSession, getTask, reportTask, taskRef, type Task } from "./taskStore.ts";
 
 /**
  * When relay's watcher looks at a session (see autoStatus.ts for what it does then). Spotting an
@@ -45,11 +46,11 @@ import { currentTask, followsSession, getTask, taskRef, type Task } from "./task
  * agent has worked for a while without reporting.
  */
 
-const POLL_MS = 3000;
+const POLL_MS = 1000;
 /** omp flips its tab to idle as the turn ends; give the session log a moment to catch up. */
-const SETTLE_MS = 3000;
+const SETTLE_MS = 1500;
 /** A working agent that hasn't reported in this long gets its card refreshed, at most this often. */
-const QUIET_MS = 3 * 60_000;
+const QUIET_MS = 2 * 60_000;
 /** How much of a session's end the watcher reads. */
 const MESSAGES_READ = 80;
 /** The board pastes its prompt into a session (reopening it first, if need be) before noting the request. */
@@ -78,6 +79,7 @@ async function checkTask(sessionFile: string, moment: Moment, messages: Message[
   if (moment === "working" && Date.now() - Date.parse(task.updatedAt) < QUIET_MS) return;
   if (moment === "stopped" && agentSaidWhatItWaitsOn(messages, task.id)) return;
   const change = await correctCard(task, moment, messages, model, stillCurrent);
+  if (change) notifyBoardChanged({ wakeWorkstreams: true });
   if (change !== undefined) console.log(`watcher: ${taskRef(task.id)} ${change ? `→ ${change}` : "card already right"} (${moment})`);
 }
 
@@ -122,6 +124,7 @@ export async function refreshWorkingSession(sessionFile: string): Promise<string
   const { messages } = await readMessagePage(sessionFile, () => "", { limit: MESSAGES_READ });
   if (messages.length === 0) return "its session has nothing to read yet";
   const change = await correctCard(task, "working", messages, loadBoardConfig().autoStatus.model, async () => true);
+  if (change) notifyBoardChanged({ wakeWorkstreams: true });
   console.log(`watcher: refresh of ${taskRef(task.id)} ${change ? `→ ${change}` : "left the card as it was"}`);
   if (change === undefined) return `couldn't tell from its session where ${taskRef(task.id)} stands; the card stays as it was`;
   return change ? `updated ${taskRef(task.id)}: ${change}` : `${taskRef(task.id)}'s card is already right`;
@@ -200,6 +203,7 @@ async function recordForgottenSteps(sessionFile: string, messages: Message[], mo
           return null;
         })
         .immediate();
+      if (!skipped) notifyBoardChanged();
       console.log(`watcher: ${skipped ? `left the forgotten ${step} result of ${repo}#${number} alone: ${skipped}` : `recorded the forgotten ${step} result of ${repo}#${number}`}`);
     } finally {
       store.close();
@@ -252,6 +256,7 @@ async function recordUnrecordedReviews(sessionFile: string, model: string): Prom
           markReviewerRunSeen(store, sessionFile, run, new Date().toISOString());
         })
         .immediate();
+      if (match) notifyBoardChanged();
     } finally {
       store.close();
     }
@@ -331,6 +336,20 @@ export function dueMoment(track: Track, now: number): Moment | null {
   return null;
 }
 
+/**
+ * Clears a stale "waiting on you" block as soon as the task's session starts working again: you
+ * answered or typed in the terminal, so even if the turn finishes before the watcher's model runs,
+ * the card won't flash the old answered question.
+ */
+export function clearUserBlockerOnWork(db: Database, sessionFile: string, at: string): number | null {
+  const id = currentTask(db, sessionFile);
+  if (id === null) return null;
+  const task = getTask(db, id);
+  if (!task || !followsSession(task) || task.blockedOn !== "me") return null;
+  reportTask(db, task.id, { blocked: null, auto: true, at });
+  return task.id;
+}
+
 /** Starts watching relay's tabs for as long as the server runs. */
 export function startWatcher(): void {
   const tracks = new Map<string, Track>();
@@ -341,8 +360,23 @@ export function startWatcher(): void {
     const now = Date.now();
     for (const file of tracks.keys()) if (!live.has(file)) tracks.delete(file);
     for (const [file, pane] of live) {
-      const track = observe(tracks.get(file), parsePaneTitle(pane.title, pane.cwd).status, await fileSize(file), now);
+      const prev = tracks.get(file);
+      const status = parsePaneTitle(pane.title, pane.cwd).status;
+      const track = observe(prev, status, await fileSize(file), now);
       tracks.set(file, track);
+      if (prev?.status !== "working" && status === "working") {
+        const db = openBoardStore();
+        let cleared: number | null = null;
+        try {
+          cleared = clearUserBlockerOnWork(db, file, new Date(now).toISOString());
+        } finally {
+          db.close();
+        }
+        if (cleared !== null) {
+          console.log(`watcher: ${taskRef(cleared)} → unblocked (session started working)`);
+          notifyBoardChanged({ wakeWorkstreams: true });
+        }
+      }
       // A look still under way leaves what's due for the next tick.
       if (busy.has(file)) continue;
       const moment = dueMoment(track, now);

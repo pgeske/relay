@@ -440,6 +440,17 @@ describe("refresh", () => {
   test(`every ${ACTIVE_REFRESH_SECONDS}s while a session runs a request`, () => {
     expect(board({ merge: minutesAgo(0.5) })).toMatchObject({ agentWorking: true, refreshSeconds: ACTIVE_REFRESH_SECONDS });
   });
+
+  test(`every ${ACTIVE_REFRESH_SECONDS}s while a task has a working agent`, () => {
+    const tasks = {
+      columns: [{ id: "doing", title: "Doing", hint: "", cards: [{ turn: { id: "agent", label: "Agent working", reason: null, since: null } }] }],
+      untracked: [],
+      projects: [],
+      needsYou: 0,
+      overview: { upNext: [], workstreams: [], counts: { moving: 1, waiting: 0, parked: 0 } },
+    } as unknown as Parameters<typeof boardView>[1]["tasks"];
+    expect(boardView(null, { now, updatedAt: null, tasks })).toMatchObject({ agentWorking: true, refreshSeconds: ACTIVE_REFRESH_SECONDS });
+  });
 });
 
 describe("Ask for Approval, then Bump", () => {
