@@ -18,10 +18,10 @@ export type Moment = "stopped" | "working";
 const WORK_STAGES = ["research", "plan", "doing"] as const;
 type WorkStage = (typeof WORK_STAGES)[number];
 
-/** What a stopped agent waits on: the user, anyone else, something already moving on its own, or nothing because it says it's finished. */
+/** What a stopped agent waits on: the user, someone/something else, or nothing because it says it's finished. */
 type WaitingOn = BlockedOn | "finished";
 
-const WAITING_TEXT: Record<BlockedOn, string> = { me: "waiting on you", others: "waiting on others", progress: "in progress" };
+const WAITING_TEXT: Record<BlockedOn, string> = { me: "waiting on you", others: "waiting on others", progress: "waiting on others" };
 
 export type StatusDecision =
   | { accurate: true }
@@ -128,17 +128,16 @@ export function statusPrompt(task: Task, moment: Moment, transcript: string, now
   const asked = task.details ? `\nWhat the user asked for:\n${clip(task.details, 1500)}\n` : "";
   const fields =
     moment === "stopped"
-      ? `{"accurate": false, "stage": "...", "status": "...", "waiting_on": "me" | "others" | "progress" | "finished", "reason": "..."}`
+      ? `{"accurate": false, "stage": "...", "status": "...", "waiting_on": "me" | "others" | "finished", "reason": "..."}`
       : `{"accurate": false, "stage": "...", "status": "..."}`;
   const waitingRules =
     moment === "stopped"
       ? `
 - waiting_on: what has to happen before the task moves again:
   - "finished": the agent says the whole task is done and checked.
-  - "progress": nothing is stuck. Something is already moving it along on its own and the agent picks it back up when that ends: CI running, a deploy, rollout, or upgrade underway, a background job or subagent the agent started, a fix it just pushed. "Upgrading", "rolling out", or "CI running" is progress, not waiting.
-  - "others": stopped until someone besides the user acts: a reviewer's approval, another team's answer or change, an access grant, a stuck or failed system nobody here can fix.
-  - "me": stopped until the user acts, and they can: answer a question, make a decision, approve, send a message the agent drafted, log in, look at something before the agent goes on. Only when the agent truly can't go on without the user (then it's "me" even if something else is running). A problem the agent is already fixing, like red CI it pushed a fix for, is "progress", not "me".
-- reason: what exactly, in one short line ("Which datacenter goes first?", "Cluster upgrade in staging underway", "Waiting on storage team's approval"). Leave it empty for "finished".`
+  - "others": stopped waiting on someone or something besides the user: a reviewer's approval, another team's answer or change, CI running, a deploy/rollout baking, a background pipeline, an access grant, or a stuck/failed system nobody here can fix.
+  - "me": stopped until the user acts, and they can: answer a question, make a decision, approve, send a message the agent drafted, log in, look at something before the agent goes on. Only when the agent truly can't go on without the user.
+- reason: what exactly, in one short line ("Which datacenter goes first?", "CI running on PR #12", "Waiting on storage team's approval"). Leave it empty for "finished".`
       : "";
   return `An AI agent works on a task for the user in a terminal session. It is supposed to keep the user's task board current, but it often forgets or reports late. Read the end of its session and say what the board should show now.
 
@@ -185,7 +184,8 @@ export function parseStatusDecision(reply: string, moment: Moment): StatusDecisi
   if (moment === "stopped") {
     const answered = [...BLOCKERS, "finished"].find((candidate) => candidate === answer.waiting_on) as WaitingOn | undefined;
     if (!answered) return null;
-    waitingOn = answered;
+    // Legacy "progress" maps to "others": nothing is running in the session while it waits.
+    waitingOn = answered === "progress" ? "others" : answered;
   }
   const reason = waitingOn !== "finished" && typeof answer.reason === "string" ? oneLine(answer.reason, STATUS_CHARS) : "";
   return { accurate: false, stage, status, waitingOn, reason: waitingOn && reason ? reason : null };
@@ -215,9 +215,9 @@ function applyToCurrent(db: Database, seen: Task, decision: StatusDecision & { a
 
   const blocked = decision.waitingOn
     ? { on: decision.waitingOn, reason: decision.reason }
-    : // The agent is working, so it isn't waiting on you; what it said it waits on elsewhere stands.
-      task.blockedOn && task.blockedOn !== "me"
-      ? { on: task.blockedOn, reason: task.blockedReason }
+    : // The agent is working, so it isn't waiting on you (or a stale progress note); what it waits on elsewhere stands.
+      task.blockedOn === "others"
+      ? { on: "others" as const, reason: task.blockedReason }
       : null;
   const sameBlock = (blocked?.on ?? null) === task.blockedOn && (blocked?.reason ?? null) === task.blockedReason;
   if (decision.stage === task.stage && decision.status === task.status && sameBlock) return null;

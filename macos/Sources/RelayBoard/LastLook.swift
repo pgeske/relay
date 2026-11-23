@@ -4,7 +4,7 @@ import Foundation
 /// moved since instead of leaving you to compare the board with your memory. Kept across launches.
 struct LastLook: Codable, Equatable {
     var at: Date
-    /// Each task's place, by id: "you", "moving" (its agent works, or something moves it along),
+    /// Each task's place, by id: "you", "moving" (its agent is actively working),
     /// "others", "blocked", "idle", or "idea"; "ship" once it's delivered and "done" once shipped.
     var places: [Int: String]
 
@@ -27,10 +27,12 @@ struct LastLook: Codable, Equatable {
         }
     }
 
-    /// An agent working and a rollout moving it along are both "moving": going from one to the other isn't news.
+    /// Only an actively working agent is "moving"; legacy "progress" counts as waiting on others.
     private static func place(of card: TaskCard, in column: TaskColumn) -> String {
         if column.id == "ship" || column.id == "done" { return column.id }
-        return card.turn.id == "agent" || card.turn.id == "progress" ? "moving" : card.turn.id
+        if card.turn.id == "agent" { return "moving" }
+        if card.turn.id == "progress" { return "others" }
+        return card.turn.id
     }
 
     /// The tasks that moved since, what needs you first. One that only went quiet (idle) isn't news.

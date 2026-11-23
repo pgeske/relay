@@ -337,15 +337,15 @@ export function dueMoment(track: Track, now: number): Moment | null {
 }
 
 /**
- * Clears a stale "waiting on you" block as soon as the task's session starts working again: you
- * answered or typed in the terminal, so even if the turn finishes before the watcher's model runs,
- * the card won't flash the old answered question.
+ * Clears a stale "waiting on you" (or legacy "in progress") block as soon as the task's session
+ * starts working again: you answered or typed in the terminal, so even if the turn finishes before
+ * the watcher's model runs, the card won't flash the old answered question or linger in progress.
  */
 export function clearUserBlockerOnWork(db: Database, sessionFile: string, at: string): number | null {
   const id = currentTask(db, sessionFile);
   if (id === null) return null;
   const task = getTask(db, id);
-  if (!task || !followsSession(task) || task.blockedOn !== "me") return null;
+  if (!task || !followsSession(task) || (task.blockedOn !== "me" && task.blockedOn !== "progress")) return null;
   reportTask(db, task.id, { blocked: null, auto: true, at });
   return task.id;
 }

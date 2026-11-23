@@ -35,7 +35,7 @@ function task(overrides: Partial<Task> = {}): Task {
   };
 }
 
-function session(status: "working" | "idle" | null, activeMinutesAgo = 5, onTask = true): TaskSessionLink {
+function session(status: "working" | "idle" | "asking" | null, activeMinutesAgo = 5, onTask = true): TaskSessionLink {
   return {
     sessionFile: "/sessions/a.jsonl",
     title: "Cache rollout",
@@ -56,6 +56,12 @@ function boardOf(tasks: Task[], sessions: { taskId: number; info: TaskSessionInf
 describe("whose move a task waits on", () => {
   test("a working agent needs nothing from you, even with a block it hasn't cleared yet", () => {
     expect(placeTask(task({ blockedOn: "me", blockedAt: minutesAgo(30) }), [session("working")], [], now).turn).toBe("agent");
+  });
+
+  test("an agent asking a question in the terminal needs you, not Agent working", () => {
+    expect(placeTask(task(), [session("asking")], [], now)).toMatchObject({ turn: "you", reason: "Agent is asking you something" });
+    // Even a delivered task or a task with a working sibling still needs your answer first.
+    expect(placeTask(task({ blockedOn: "others" }), [session("asking")], [], now)).toMatchObject({ turn: "you", reason: "Agent is asking you something" });
   });
 
   test("a plan waiting for approval needs you, and says for how long", () => {
@@ -87,15 +93,15 @@ describe("whose move a task waits on", () => {
 
   test("an approved PR that can't merge yet needs you only when someone has to fix something", () => {
     const approved = (ci: "failed" | "running" | "passed", mergeBlocker: string | null = null) => [{ ref: "acme/api#1", lane: "approved-blocked" as const, ci, mergeBlocker }];
-    expect(placeTask(task(), [session("idle")], approved("running"), now)).toMatchObject({ turn: "progress", reason: "api#1: CI running" });
+    expect(placeTask(task(), [session("idle")], approved("running"), now)).toMatchObject({ turn: "others", reason: "api#1: CI running" });
     expect(placeTask(task(), [session("idle")], approved("failed"), now)).toMatchObject({ turn: "you", reason: "api#1: CI failed" });
     expect(placeTask(task(), [session("idle")], approved("passed", "Merge conflicts"), now)).toMatchObject({ turn: "you", reason: "api#1: merge conflicts" });
     expect(placeTask(task(), [session("idle")], approved("passed", "Blocked by branch rules"), now)).toMatchObject({ turn: "others", reason: "api#1: blocked by branch rules" });
   });
 
-  test("something moving along on its own is in progress, not your move", () => {
+  test("an idle session waiting on external progress (legacy progress block) shows as Waiting on others, not purple", () => {
     const upgrading = task({ blockedOn: "progress", blockedReason: "Cluster upgrade in staging underway", blockedAt: minutesAgo(15) });
-    expect(placeTask(upgrading, [session("idle")], [], now)).toMatchObject({ turn: "progress", reason: "Cluster upgrade in staging underway", since: "15m" });
+    expect(placeTask(upgrading, [session("idle")], [], now)).toMatchObject({ turn: "others", reason: "Cluster upgrade in staging underway", since: "15m" });
     // A PR you can merge still comes first.
     expect(placeTask(upgrading, [session("idle")], [{ ref: "acme/api#1", lane: "ready" }], now).turn).toBe("you");
   });
@@ -203,7 +209,7 @@ describe("the columns", () => {
     ];
     const view = boardOf(tasks, [{ taskId: 6, info: { ...session("working"), sessionFile: "/sessions/6.jsonl" } }]);
     const where = new Map(view.columns.flatMap((column) => column.cards.map((card) => [card.id, column.id])));
-    expect(Object.fromEntries(where)).toEqual({ 1: "idea", 2: "blocked", 3: "blocked", 4: "blocked", 5: "done", 6: "doing", 7: "doing" });
+    expect(Object.fromEntries(where)).toEqual({ 1: "idea", 2: "blocked", 3: "blocked", 4: "blocked", 5: "done", 6: "doing", 7: "blocked" });
   });
 
   test("put your move on top, then what's moving, then others', then what's parked", () => {
@@ -219,19 +225,19 @@ describe("the columns", () => {
     const cardsOf = (id: string) => view.columns.find((column) => column.id === id)!.cards.map((card) => [card.id, card.turn.id]);
     expect(cardsOf("doing")).toEqual([
       [4, "agent"],
-      [6, "progress"],
       [1, "idle"],
     ]);
     expect(cardsOf("blocked")).toEqual([
       [3, "you"],
       [2, "others"],
+      [6, "others"],
       [5, "blocked"],
     ]);
   });
 });
 
 describe("an untracked session", () => {
-  function untracked(status: "working" | "idle") {
+  function untracked(status: "working" | "idle" | "asking") {
     const info: TaskSessionInfo = { ...session(status), sessionFile: "/sessions/loose.jsonl", title: "Quick question" };
     const view = taskBoardView(
       { tasks: [], relations: new Map(), projects: [], events: new Map(), sessions: [], sessionInfo: new Map([[info.sessionFile, info]]), prs: new Map(), board: null, dismissed: new Set(), workstreams: new Map(), summaries: new Map(), briefs: new Map(), now },
@@ -240,9 +246,10 @@ describe("an untracked session", () => {
     return view.untracked[0];
   }
 
-  test("closes right away while idle, but asks first while it's working", () => {
+  test("closes right away while idle, but asks first while working or asking you", () => {
     expect(untracked("idle").close).toMatchObject({ action: "close-session", label: "Close Session", confirm: null });
     expect(untracked("working").close.confirm).toMatchObject({ title: 'Close "Quick question"?', button: "Close Session", destructive: true });
+    expect(untracked("asking").close.confirm).toMatchObject({ title: 'Close "Quick question"?', button: "Close Session", destructive: true });
   });
 });
 

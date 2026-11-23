@@ -40,13 +40,12 @@ A plan recorded again (revised) needs approving again. On a task that skips appr
 ```sh
 relay task update --blocked-on me --reason "Which datacenter should go first?"
 relay task update --blocked-on others --reason "Waiting on the storage team to approve the config change"
-relay task update --in-progress --reason "Cluster upgrade in staging underway; checking back when it finishes"
+relay task update --blocked-on others --reason "Cluster upgrade in staging underway; checking back when it finishes"
 ```
 
 - `--blocked-on me` means **nothing moves until the user acts**, and they can: answer a question, make a decision, send a message you drafted, log in. It puts the task in Blocked as **Needs you**, so use it only when you truly can't go on without them.
-- `--blocked-on others` means nothing moves until someone else acts: a reviewer's approval, another team's answer or change, an access grant. It puts the task in Blocked as **Waiting on others**.
-- `--in-progress` means nothing is stuck: something is already moving the task along and you pick it back up when it ends (CI running, a rollout or upgrade underway, a background job or subagent you started, a fix you just pushed). The task stays in its stage as **In progress**. Red CI you're fixing, or merging blocked only because CI is running, is this, not `me`.
-- When that update is your last step before you stop, relay takes your word for it. Any update with none of these clears them, so repeat it while it holds.
+- `--blocked-on others` means nothing is running in this session while the task waits on someone or something else: a reviewer's approval, another team's answer or change, CI running, a rollout or bake, a background pipeline, an access grant. It puts the task in Blocked as **Waiting on others**.
+- When that update is your last step before you stop, relay takes your word for it. Any update with neither clears the block, so repeat it while it holds.
 - Stopping because the work is finished? Run `relay task done` instead (below). Stopping after `relay task plan` needs nothing more.
 
 **4. Finishing.** When the work is finished by the task's own bar (merged, rolled out, verified, answered), say so with a note on what you did and how you checked it. The board shows that note on the task's card, so write it for the user to verify at a glance: the outcome first, then the evidence. The task waits in the board's **Ready to ship** column until the user looks: **Ship It** moves it to Shipped and closes its idle sessions' tabs; **Not Yet** sends it back and shows them this session, to tell you what's missing. Any `relay task update` after that takes it out of Ready to ship again; pick the work back up, and run `relay task done` again once it's finished.

@@ -1,3 +1,4 @@
+import type { SessionStatus } from "../server/sessions.ts";
 import { openFeedback, type FeedbackItem } from "./feedback.ts";
 import type { BoardData, Check, PullRequest } from "./github.ts";
 import {
@@ -102,7 +103,7 @@ export interface CardOwner {
   title: string;
   how: "opened" | "claimed";
   /** Where the session runs in relay right now; null when no relay tab has it open. */
-  live: { paneId: string; windowId: string; status: "working" | "idle" } | null;
+  live: { paneId: string; windowId: string; status: SessionStatus } | null;
 }
 
 /** A just-sent request counts as running even before the session's spinner shows (it may still be reopening). */
@@ -169,7 +170,9 @@ export function requestProgress(
   const newest = open.toSorted((a, b) => b.requestedAt.localeCompare(a.requestedAt))[0];
   const progress = Object.fromEntries(AGENT_ACTIONS.map((action) => [action, "none"])) as Record<AgentAction, RequestProgress>;
   for (const request of open) {
-    const running = request === newest && (live?.status === "working" || request.age < REQUEST_START_GRACE_MS);
+    // A session asking you something mid-request hasn't stopped: it carries on once you answer.
+    const active = live?.status === "working" || live?.status === "asking";
+    const running = request === newest && (active || request.age < REQUEST_START_GRACE_MS);
     progress[request.action] = running ? "running" : "stalled";
   }
   return progress;

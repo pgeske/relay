@@ -258,10 +258,12 @@ export class ActionError extends Error {
 
 /**
  * Pastes `prompt` into a session, reopening a closed one in a background tab first so the prompt
- * lands where its history is. Refuses a session that's mid-task. Returns whether it reopened.
+ * lands where its history is. Refuses a session that's mid-task or waiting on your answer, where
+ * the paste would land in its question. Returns whether it reopened.
  */
 export async function promptSession(sessionFile: string, live: { paneId: string; status: string } | null, name: string, prompt: string): Promise<boolean> {
   if (live?.status === "working") throw new ActionError(409, `"${name}" is busy. Try again once it's idle.`);
+  if (live?.status === "asking") throw new ActionError(409, `"${name}" is waiting on your answer to its question. Answer it first.`);
   let paneId = live?.paneId;
   if (!paneId) {
     paneId = await reopen(sessionFile, false);
