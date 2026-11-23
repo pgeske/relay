@@ -445,7 +445,6 @@ describe("refresh", () => {
     const tasks = {
       columns: [{ id: "doing", title: "Doing", hint: "", cards: [{ turn: { id: "agent", label: "Agent working", reason: null, since: null } }] }],
       untracked: [],
-      projects: [],
       needsYou: 0,
       overview: { upNext: [], workstreams: [], counts: { moving: 1, waiting: 0, parked: 0 } },
     } as unknown as Parameters<typeof boardView>[1]["tasks"];

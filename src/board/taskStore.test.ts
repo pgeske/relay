@@ -4,32 +4,25 @@ import { openBoardStore } from "./store.ts";
 import {
   approvePlan,
   changeDependency,
-  createProject,
   createTask,
   createTaskTables,
-  deleteProject,
   deleteTask,
-  ensureProject,
   finishTask,
   getTask,
   linkSession,
   linkSessionPrs,
-  listProjects,
   listTasks,
   pauseTask,
-  projectPaths,
   recordPlan,
-  renameProject,
   reportTask,
   resumeTask,
   sendBack,
-  setTaskProject,
   taskPrs,
   taskRelations,
   type NewTask,
 } from "./taskStore.ts";
 
-const base: NewTask = { title: "Roll out the cache", details: null, projectId: null, stage: "research", status: null, approvePlan: true, cwd: null, at: "2026-11-04T10:00:00Z" };
+const base: NewTask = { title: "Roll out the cache", details: null, stage: "research", status: null, approvePlan: true, cwd: null, at: "2026-11-04T10:00:00Z" };
 
 test("a report without a blocker clears the block, and a block that goes on keeps when it started", () => {
   const db = openBoardStore(":memory:");
@@ -138,60 +131,21 @@ test("a board from before tasks could be in progress lets them be, keeping its t
   expect(getTask(db, 1)?.blockedOn).toBe("progress");
 });
 
-test("projects nest by path, and a name only has to be unique among its siblings", () => {
-  const db = openBoardStore(":memory:");
-  const at = "2026-11-07T10:00:00Z";
-  const sidebar = ensureProject(db, "Relay / Sidebar", at);
-  const relay = ensureProject(db, "relay", at);
-  expect(sidebar.parentId).toBe(relay.id);
-  // The same name inside another project is a different project.
-  const otherSidebar = ensureProject(db, "Docs/Sidebar", at);
-  expect(otherSidebar.id).not.toBe(sidebar.id);
-  expect(ensureProject(db, "Relay/sidebar", at).id).toBe(sidebar.id);
-  expect(projectPaths(listProjects(db)).get(sidebar.id)).toBe("Relay/Sidebar");
-
-  expect(() => createProject(db, "SIDEBAR", relay.id, at)).toThrow("already");
-  expect(() => createProject(db, "A/B", null, at)).toThrow("can't have a /");
-  expect(() => renameProject(db, otherSidebar.id, "  ")).toThrow("needs a name");
-});
-
-test("deleting a project moves its tasks and subprojects up, unless a subproject would clash", () => {
-  const db = openBoardStore(":memory:");
-  const at = "2026-11-07T10:00:00Z";
-  const relay = ensureProject(db, "Relay", at);
-  const board = ensureProject(db, "Relay/Board", at);
-  const sidebar = ensureProject(db, "Relay/Board/Sidebar", at);
-  const { id } = createTask(db, { ...base, projectId: board.id });
-
-  deleteProject(db, board.id);
-  expect(getTask(db, id)!.projectId).toBe(relay.id);
-  expect(listProjects(db).find((project) => project.id === sidebar.id)!.parentId).toBe(relay.id);
-
-  // Relay's Sidebar would land next to a top-level Sidebar.
-  ensureProject(db, "Sidebar", at);
-  expect(() => deleteProject(db, relay.id)).toThrow("rename one of them first");
-  expect(listProjects(db).map((project) => project.name)).toContain("Relay");
-});
-
-test("a task made without a project can go into one later, and back out", () => {
-  const db = openBoardStore(":memory:");
-  const sidebar = ensureProject(db, "Relay/Sidebar", "2026-11-07T10:00:00Z");
-  const { id } = createTask(db, base);
-
-  expect(setTaskProject(db, id, sidebar.id).projectId).toBe(sidebar.id);
-  expect(setTaskProject(db, id, null).projectId).toBeNull();
-  expect(() => setTaskProject(db, id, 999)).toThrow("no project 999");
-  expect(getTask(db, id)!.projectId).toBeNull();
-});
-
-test("a board from before projects nested keeps its projects, and their tasks", () => {
+test("a board from before projects were removed drops the projects table and project_id column, keeping its tasks", () => {
   const db = new Database(":memory:");
-  db.run("CREATE TABLE projects (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL UNIQUE COLLATE NOCASE, created_at TEXT NOT NULL)");
+  db.run("CREATE TABLE projects (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL, parent_id INTEGER, created_at TEXT NOT NULL)");
   db.run("INSERT INTO projects (name, created_at) VALUES ('Relay', '2026-11-01T00:00:00Z')");
+  db.run(`CREATE TABLE tasks (
+    id INTEGER PRIMARY KEY AUTOINCREMENT, title TEXT NOT NULL, details TEXT, project_id INTEGER, stage TEXT NOT NULL, status TEXT, status_at TEXT,
+    blocked_on TEXT, blocked_reason TEXT, blocked_at TEXT, approve_plan INTEGER NOT NULL, plan TEXT, plan_at TEXT, plan_approved_at TEXT, cwd TEXT,
+    created_at TEXT NOT NULL, updated_at TEXT NOT NULL, done_at TEXT
+  )`);
+  db.run("INSERT INTO tasks (title, project_id, stage, approve_plan, created_at, updated_at) VALUES ('Old task', 1, 'doing', 1, '2026-11-01T00:00:00Z', '2026-11-01T00:00:00Z')");
   createTaskTables(db);
-  expect(listProjects(db)).toEqual([{ id: 1, name: "Relay", parentId: null, createdAt: "2026-11-01T00:00:00Z" }]);
-  // The old table's name-wide uniqueness is gone: a Relay inside another project is fine now.
-  expect(ensureProject(db, "Apps/Relay", "2026-11-07T10:00:00Z").id).not.toBe(1);
+  expect(db.query("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'projects'").get()).toBeNull();
+  const columns = db.query<{ name: string }, []>("SELECT name FROM pragma_table_info('tasks')").all().map((column) => column.name);
+  expect(columns).not.toContain("project_id");
+  expect(getTask(db, 1)).toMatchObject({ title: "Old task", stage: "doing" });
 });
 
 test("dependencies reject loops through other tasks without disturbing the existing links", () => {

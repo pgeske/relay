@@ -5,7 +5,7 @@ import { setTimeout as sleep } from "node:timers/promises";
 import { WebSocketServer } from "ws";
 import { fetchBoardView, startBoardEvents } from "../board/liveBoard.ts";
 import { isLocalRequest, readActionBody, runBoardAction } from "../board/serve.ts";
-import { createTaskFromBoard, parseNewTask, readJsonBody, runProjectAction, runTaskAction, type NewTaskRequest } from "../board/taskServe.ts";
+import { createTaskFromBoard, parseNewTask, readJsonBody, runTaskAction, type NewTaskRequest } from "../board/taskServe.ts";
 import { startWatcher } from "../board/watcher.ts";
 import { startWorkstreams } from "../board/workstreams.ts";
 import { endLiveCall, recoverInterruptedCall, startLiveCall } from "./live.ts";
@@ -324,9 +324,6 @@ function sendImage(res: ServerResponse, image: { bytes: Buffer; contentType: str
  * `POST /api/board/actions/<action>` with `{ "pr": "owner/repo#12" }` runs one of a card's controls.
  * `POST /api/board/tasks` creates a task, and `POST /api/board/tasks/actions/<action>` with
  * `{ "task": 12 }` (or `{ "session": "<file>" }`) runs one of a task card's controls.
- * `POST /api/board/projects/<create|rename|delete>` with `{ "project": 3, "name": "…", "parent": 1 }`
- * manages the sidebar's projects, and `POST /api/board/projects/move-task` with `{ "task": 12, "project": 3 }`
- * puts a task in a project (or in none, without `project`).
  */
 async function routeBoard(req: IncomingMessage, res: ServerResponse, url: URL, rest: string[]): Promise<void> {
   if (rest.length === 0) {
@@ -342,23 +339,6 @@ async function routeBoard(req: IncomingMessage, res: ServerResponse, url: URL, r
   }
   if (rest[0] === "tasks") {
     await routeTasks(req, res, rest.slice(1));
-    return;
-  }
-  if (rest[0] === "projects" && rest.length === 2) {
-    if (req.method !== "POST") throw new HttpError(405, "method not allowed");
-    let body: Record<string, unknown>;
-    try {
-      body = await readJsonBody(req);
-    } catch (error) {
-      throw new HttpError(400, error instanceof Error ? error.message : "bad request");
-    }
-    const result = runProjectAction(rest[1], {
-      project: typeof body.project === "number" ? body.project : undefined,
-      name: typeof body.name === "string" ? body.name : undefined,
-      parent: typeof body.parent === "number" ? body.parent : undefined,
-      task: typeof body.task === "number" ? body.task : undefined,
-    });
-    sendJson(res, result.status, result.status < 300 ? { message: result.message } : { error: result.message });
     return;
   }
   if (rest.length !== 2 || rest[0] !== "actions") {
@@ -599,7 +579,7 @@ export function runServer(): void {
 
   // Fixes task cards whose agents forget to report, as long as the server runs.
   startWatcher();
-  // Files tasks into projects and keeps each project's summary current.
+  // Groups tasks into workstreams and keeps each workstream's summary current.
   startWorkstreams();
 
   for (const signal of ["SIGINT", "SIGTERM"] as const) {

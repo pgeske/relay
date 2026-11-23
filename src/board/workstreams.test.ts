@@ -5,7 +5,7 @@ import { briefTexts, groupTasks, summarizeWorkstreams, type Ask } from "./workst
 
 const at = "2026-11-04T10:00:00Z";
 const now = new Date("2026-11-04T12:00:00Z");
-const base: NewTask = { title: "Roll out the cache", details: null, projectId: null, stage: "doing", status: null, approvePlan: false, cwd: null, at };
+const base: NewTask = { title: "Roll out the cache", details: null, stage: "doing", status: null, approvePlan: false, cwd: null, at };
 
 /** A model stand-in that answers with `reply` and keeps the prompts it was asked. */
 function fakeModel(reply: string): Ask & { prompts: string[] } {

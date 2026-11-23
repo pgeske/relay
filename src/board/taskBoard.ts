@@ -1,7 +1,7 @@
 import type { SessionStatus } from "../server/sessions.ts";
 import type { PullRequest } from "./github.ts";
 import type { Board, CiState, Lane } from "./lanes.ts";
-import { followsSession, projectPaths, taskRef, type Project, type RelatedTask, type Task, type TaskEvent, type TaskPr, type TaskRelations, type TaskSession, type TaskStage, type WorkstreamSummary } from "./taskStore.ts";
+import { followsSession, taskRef, type RelatedTask, type Task, type TaskEvent, type TaskPr, type TaskRelations, type TaskSession, type TaskStage, type WorkstreamSummary } from "./taskStore.ts";
 import { timeAgo, type Confirm, type Tone } from "./view.ts";
 
 /**
@@ -86,7 +86,6 @@ export interface TaskSessionInfo {
 export interface TaskInputs {
   tasks: Task[];
   relations: Map<number, TaskRelations>;
-  projects: Project[];
   events: Map<number, TaskEvent[]>;
   sessions: TaskSession[];
   /** Every session a task links to, and every open one, by session file. */
@@ -183,7 +182,6 @@ export interface TaskCardView {
   ref: string;
   title: string;
   details: string | null;
-  project: ProjectRefView | null;
   /** Its color, 0 to 7, so its card and its PRs on the PR board match. */
   hue: number;
   dependsOn: RelatedTaskView[];
@@ -229,28 +227,10 @@ export interface TaskColumnView {
   cards: TaskCardView[];
 }
 
-/** The project a task is in: its own name, and its path from the top ("Relay/Sidebar"). */
-export interface ProjectRefView {
-  id: number;
-  name: string;
-  path: string;
-}
-
-export interface ProjectView extends ProjectRefView {
-  /** The project it sits in; null for a top-level one. */
-  parentId: number | null;
-  /** It and every project under it, whose tasks it shows. */
-  ids: number[];
-  /** Its tasks not done yet, and how many of them need you, counting its subprojects'. */
-  open: number;
-  needsYou: number;
-}
-
 export interface TaskBoardView {
   columns: TaskColumnView[];
   /** Open sessions no task knows about, most recent first. */
   untracked: UntrackedSessionView[];
-  projects: ProjectView[];
   needsYou: number;
   overview: OverviewView;
 }
@@ -506,13 +486,12 @@ const EVENT_TEXT: Record<TaskEvent["kind"], (event: TaskEvent) => string> = {
 /** How many history lines a card's details show. */
 const HISTORY_SHOWN = 30;
 
-function taskCard(task: Task, inputs: TaskInputs, places: Map<string, PrPlace>, sessions: TaskSessionLink[], projects: Map<number, ProjectRefView>): { card: TaskCardView; column: TaskColumn; quick: boolean } {
+function taskCard(task: Task, inputs: TaskInputs, places: Map<string, PrPlace>, sessions: TaskSessionLink[]): { card: TaskCardView; column: TaskColumn; quick: boolean } {
   const { now } = inputs;
   const linked = [...inputs.prs.values()].filter((pr) => pr.taskId === task.id).map((pr) => `${pr.repo}#${pr.number}`);
   const prs = linked.map((ref) => ({ ref, place: places.get(ref) ?? null }));
   const placement = placeTask(task, sessions, prs.map(({ ref, place }) => ({ ref, lane: place?.lane ?? null, ci: place?.ci, mergeBlocker: place?.mergeBlocker })), now);
   const primary = primarySession(sessions);
-  const project = task.projectId !== null ? projects.get(task.projectId) : undefined;
   const ref = taskRef(task.id);
 
   const steps: TaskActionView[] = [];
@@ -567,7 +546,6 @@ function taskCard(task: Task, inputs: TaskInputs, places: Map<string, PrPlace>, 
     dependsOn: (inputs.relations.get(task.id)?.dependsOn ?? []).map(withHue),
     neededBy: (inputs.relations.get(task.id)?.neededBy ?? []).map(withHue),
     details: task.details,
-    project: project ?? null,
     hue: taskHue(task.id),
     stage: task.stage,
     stageLabel: STAGE_LABELS[task.stage],
@@ -728,15 +706,13 @@ function overviewOf(open: TaskCardView[], shipped: TaskCardView[], quick: Set<nu
 export function taskBoardView(inputs: TaskInputs, home: string): TaskBoardView {
   const { now } = inputs;
   const places = prPlaces(inputs.board);
-  const paths = projectPaths(inputs.projects);
-  const projects = new Map(inputs.projects.map((project) => [project.id, { id: project.id, name: project.name, path: paths.get(project.id)! }]));
   const sessionsOf = sessionsByTask(inputs.sessions, inputs.sessionInfo);
 
   const byColumn = new Map<TaskColumn, TaskCardView[]>(COLUMNS.map((column) => [column.id, []]));
   const quick = new Set<number>();
   for (const task of inputs.tasks) {
     if (task.stage === "done" && now.getTime() - new Date(task.doneAt ?? task.updatedAt).getTime() > DONE_SHOWN_MS) continue;
-    const placed = taskCard(task, inputs, places, sessionsOf.get(task.id) ?? [], projects);
+    const placed = taskCard(task, inputs, places, sessionsOf.get(task.id) ?? []);
     byColumn.get(placed.column)!.push(placed.card);
     if (placed.quick) quick.add(task.id);
   }
@@ -778,28 +754,9 @@ export function taskBoardView(inputs: TaskInputs, home: string): TaskBoardView {
   return {
     columns,
     untracked,
-    projects: inputs.projects.map((project) => {
-      const ids = projectSubtree(project.id, inputs.projects);
-      return {
-        ...projects.get(project.id)!,
-        parentId: project.parentId,
-        ids,
-        open: open.filter((card) => card.project !== null && ids.includes(card.project.id)).length,
-        needsYou: needsYou.filter((card) => card.project !== null && ids.includes(card.project.id)).length,
-      };
-    }),
     needsYou: needsYou.length,
     overview: overviewOf(open, byColumn.get("done")!, quick, inputs),
   };
-}
-
-/** A project's id and those of every project under it, at any depth. */
-function projectSubtree(id: number, projects: Project[]): number[] {
-  const ids = [id];
-  for (let i = 0; i < ids.length; i++) {
-    for (const project of projects) if (project.parentId === ids[i]) ids.push(project.id);
-  }
-  return ids;
 }
 
 /** The task each PR is part of, as PR cards name it, keyed by "owner/repo#number". */

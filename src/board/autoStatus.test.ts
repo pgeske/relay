@@ -5,7 +5,7 @@ import { openBoardStore } from "./store.ts";
 import { createTask, getTask, reportTask, taskEvents, type NewTask } from "./taskStore.ts";
 import { dueMoment, observe } from "./watcher.ts";
 
-const base: NewTask = { title: "Roll out the cache", details: null, projectId: null, stage: "doing", status: "Opening the PR", approvePlan: false, cwd: null, at: "2026-11-04T10:00:00Z" };
+const base: NewTask = { title: "Roll out the cache", details: null, stage: "doing", status: "Opening the PR", approvePlan: false, cwd: null, at: "2026-11-04T10:00:00Z" };
 
 function bash(command: string): Message {
   return { id: command, role: "assistant", timestamp: "2026-11-04T10:00:00Z", blocks: [{ type: "toolCall", id: command, name: "bash", summary: command, argsJson: JSON.stringify({ command }) }] };

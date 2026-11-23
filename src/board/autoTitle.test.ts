@@ -18,7 +18,7 @@ test("the stand-in title is the first line of the request, cut short", () => {
 
 test("relay's title replaces only the stand-in it started from", () => {
   const db = openBoardStore();
-  const task = createTask(db, { title: "can you fix the", details: "can you fix the upload test", projectId: null, stage: "idea", status: null, approvePlan: true, cwd: null, at: "2026-11-09T10:00:00Z" });
+  const task = createTask(db, { title: "can you fix the", details: "can you fix the upload test", stage: "idea", status: null, approvePlan: true, cwd: null, at: "2026-11-09T10:00:00Z" });
   expect(retitleTask(db, task.id, "something else", "Fix the upload test")).toBe(false);
   expect(retitleTask(db, task.id, "can you fix the", "Fix the upload test")).toBe(true);
   expect(getTask(db, task.id)!.title).toBe("Fix the upload test");

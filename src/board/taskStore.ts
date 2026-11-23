@@ -3,7 +3,7 @@ import type { Database } from "bun:sqlite";
 /**
  * Tasks: what you set out to get done, a level above pull requests. A task can take several
  * sessions and PRs, or none (a deploy, asking a team for something). Agents report where each
- * stands as they work; the board shows which ones need you. Projects group tasks.
+ * stands as they work; the board shows which ones need you.
  */
 
 /** Where a task is on its way to done, in order. `idea` is one nobody has started on yet. */
@@ -19,20 +19,11 @@ export const BLOCKERS = ["me", "others", "progress"] as const;
 export type BlockedOn = (typeof BLOCKERS)[number];
 const BLOCKED_ON_CHECK = `CHECK (blocked_on IN (${BLOCKERS.map((on) => `'${on}'`).join(", ")}))`;
 
-/** A named group of tasks. Projects nest: a subproject's `parentId` is the project it sits in. */
-export interface Project {
-  id: number;
-  name: string;
-  parentId: number | null;
-  createdAt: string;
-}
-
 export interface Task {
   id: number;
   title: string;
   /** What you asked for, as you wrote it; null when the title says it all. Tasks made on the board are named from it. */
   details: string | null;
-  projectId: number | null;
   stage: TaskStage;
   /** Its agent's latest one-line report of where it stands. */
   status: string | null;
@@ -124,7 +115,6 @@ interface TaskRow {
   id: number;
   title: string;
   details: string | null;
-  project_id: number | null;
   stage: TaskStage;
   status: string | null;
   status_at: string | null;
@@ -150,29 +140,12 @@ interface TaskRow {
 const STAGE_CHECK = `CHECK (stage IN (${TASK_STAGES.map((stage) => `'${stage}'`).join(", ")}))`;
 
 export function createTaskTables(db: Database): void {
-  db.run(`CREATE TABLE IF NOT EXISTS projects (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    name TEXT NOT NULL,
-    parent_id INTEGER,
-    created_at TEXT NOT NULL
-  )`);
-  // Projects were once one flat list, their names unique across it.
-  const projectColumns = db.query<{ name: string }, []>("SELECT name FROM pragma_table_info('projects')").all();
-  if (!projectColumns.some((column) => column.name === "parent_id")) {
-    db.transaction(() => {
-      db.run("ALTER TABLE projects RENAME TO flat_projects");
-      db.run("CREATE TABLE projects (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL, parent_id INTEGER, created_at TEXT NOT NULL)");
-      db.run("INSERT INTO projects (id, name, created_at) SELECT id, name, created_at FROM flat_projects");
-      db.run("DROP TABLE flat_projects");
-    })();
-  }
-  // Names are unique among a project's siblings, ignoring case.
-  db.run("CREATE UNIQUE INDEX IF NOT EXISTS projects_sibling_name ON projects (IFNULL(parent_id, 0), name COLLATE NOCASE)");
+  // Relay once grouped tasks in manual projects; workstreams replaced them.
+  db.run("DROP TABLE IF EXISTS projects");
   db.run(`CREATE TABLE IF NOT EXISTS tasks (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     title TEXT NOT NULL,
     details TEXT,
-    project_id INTEGER,
     stage TEXT NOT NULL ${STAGE_CHECK},
     status TEXT,
     status_at TEXT,
@@ -211,6 +184,7 @@ export function createTaskTables(db: Database): void {
   if (!taskColumns.some((column) => column.name === "auto_reported_at")) db.run("ALTER TABLE tasks ADD COLUMN auto_reported_at TEXT");
   // Relay 0.2.40 filed tasks into projects on its own; it now groups them into workstreams of its own instead.
   if (taskColumns.some((column) => column.name === "filed_at")) db.run("ALTER TABLE tasks DROP COLUMN filed_at");
+  if (taskColumns.some((column) => column.name === "project_id")) db.run("ALTER TABLE tasks DROP COLUMN project_id");
   // Tasks could once only wait on you or others; SQLite can't change a CHECK in place, so rebuild the table.
   const tasksSql = db.query<{ sql: string }, []>("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'tasks'").get()?.sql ?? "";
   const oldCheck = /CHECK \(blocked_on IN \([^)]*\)\)/.exec(tasksSql);
@@ -260,10 +234,6 @@ export function createTaskTables(db: Database): void {
     session_file TEXT PRIMARY KEY,
     dismissed_at TEXT NOT NULL
   )`);
-  // Relay 0.2.40 summarized projects; it now summarizes the workstreams it finds.
-  if (projectColumns.some((column) => column.name === "summary")) {
-    for (const column of ["summary", "summary_at", "summary_basis"]) db.run(`ALTER TABLE projects DROP COLUMN ${column}`);
-  }
   // The workstream relay's model put each task in: a JSON list of names from the broadest effort
   // down, or null when it looked and found none.
   db.run(`CREATE TABLE IF NOT EXISTS task_workstreams (
@@ -291,7 +261,6 @@ function toTask(row: TaskRow): Task {
     id: row.id,
     title: row.title,
     details: row.details,
-    projectId: row.project_id,
     stage: row.stage,
     status: row.status,
     statusAt: row.status_at,
@@ -322,7 +291,6 @@ function addEvent(db: Database, taskId: number, at: string, kind: TaskEventKind,
 export interface NewTask {
   title: string;
   details: string | null;
-  projectId: number | null;
   stage: TaskStage;
   status: string | null;
   approvePlan: boolean;
@@ -337,13 +305,12 @@ export function createTask(db: Database, task: NewTask): Task {
   return db.transaction(() => {
     const row = db
       .query<TaskRow, Record<string, string | number | null>>(
-        `INSERT INTO tasks (title, details, project_id, stage, status, status_at, approve_plan, cwd, model, thinking_level, created_at, updated_at, done_at)
-         VALUES ($title, $details, $projectId, $stage, $status, $statusAt, $approvePlan, $cwd, $model, $thinkingLevel, $at, $at, $doneAt) RETURNING *`,
+        `INSERT INTO tasks (title, details, stage, status, status_at, approve_plan, cwd, model, thinking_level, created_at, updated_at, done_at)
+         VALUES ($title, $details, $stage, $status, $statusAt, $approvePlan, $cwd, $model, $thinkingLevel, $at, $at, $doneAt) RETURNING *`,
       )
       .get({
         $title: task.title,
         $details: task.details,
-        $projectId: task.projectId,
         $stage: task.stage,
         $status: task.status,
         $statusAt: task.status ? task.at : null,
@@ -380,7 +347,6 @@ export interface TaskReport {
   stage?: TaskStage;
   status?: string;
   blocked: { on: BlockedOn; reason: string | null } | null;
-  projectId?: number;
   auto?: boolean;
   at: string;
 }
@@ -395,7 +361,7 @@ export function reportTask(db: Database, id: number, report: TaskReport): Task {
     const blockedAt = blocked ? (task.blockedOn === blocked.on ? task.blockedAt : report.at) : null;
     db.query(
       `UPDATE tasks SET stage = $stage, status = $status, status_at = $statusAt, blocked_on = $blockedOn, blocked_reason = $blockedReason,
-         blocked_at = $blockedAt, project_id = $projectId, updated_at = $at, finished_at = NULL, done_at = $doneAt,
+         blocked_at = $blockedAt, updated_at = $at, finished_at = NULL, done_at = $doneAt,
          paused_at = $pausedAt, auto_reported_at = $autoAt WHERE id = $id`,
     ).run({
       $id: id,
@@ -405,7 +371,6 @@ export function reportTask(db: Database, id: number, report: TaskReport): Task {
       $blockedOn: blocked?.on ?? null,
       $blockedReason: blocked?.reason ?? null,
       $blockedAt: blockedAt,
-      $projectId: report.projectId ?? task.projectId,
       $at: report.at,
       $doneAt: stage === "done" ? (task.doneAt ?? report.at) : null,
       $pausedAt: stage === "done" || task.stage === "done" ? null : task.pausedAt,
@@ -583,13 +548,6 @@ export function changeDependency(db: Database, task: number, prerequisite: numbe
   }).immediate();
 }
 
-/** Puts a task in a project, or in none when `projectId` is null; throws when either isn't there. */
-export function setTaskProject(db: Database, id: number, projectId: number | null): Task {
-  if (projectId !== null && !getProject(db, projectId)) throw new Error(`no project ${projectId}`);
-  if (db.query("UPDATE tasks SET project_id = ? WHERE id = ?").run(projectId, id).changes === 0) throw new Error(`no task ${taskRef(id)}`);
-  return getTask(db, id)!;
-}
-
 /**
  * The workstream relay's model put each task in, by task id: its names from the broadest effort down,
  * like ["Search", "Indexing"], or null when it found none. A task it hasn't looked at yet has no entry.
@@ -656,117 +614,6 @@ export function taskEvents(db: Database): Map<number, TaskEvent[]> {
     events.set(row.task_id, list);
   }
   return events;
-}
-
-interface ProjectRow {
-  id: number;
-  name: string;
-  parent_id: number | null;
-  created_at: string;
-}
-
-function toProject(row: ProjectRow): Project {
-  return { id: row.id, name: row.name, parentId: row.parent_id, createdAt: row.created_at };
-}
-
-/** Separates a project's name from its parents' in a path: "Relay/Sidebar" is Sidebar inside Relay. */
-export const PROJECT_PATH_SEPARATOR = "/";
-
-/** A project's name with its surrounding space trimmed; throws when it can't be one. */
-function projectName(name: string): string {
-  const trimmed = name.trim();
-  if (!trimmed) throw new Error("a project needs a name");
-  if (trimmed.includes(PROJECT_PATH_SEPARATOR)) throw new Error(`a project's name can't have a ${PROJECT_PATH_SEPARATOR} in it`);
-  return trimmed;
-}
-
-export function getProject(db: Database, id: number): Project | null {
-  const row = db.query<ProjectRow, [number]>("SELECT * FROM projects WHERE id = ?").get(id);
-  return row ? toProject(row) : null;
-}
-
-function findProject(db: Database, name: string, parentId: number | null): Project | null {
-  const row = db.query<ProjectRow, [string, number | null]>("SELECT * FROM projects WHERE name = ? COLLATE NOCASE AND parent_id IS ?").get(name, parentId);
-  return row ? toProject(row) : null;
-}
-
-/**
- * The project at `path` ("Relay" or "Relay/Sidebar"), creating any of it there's none of yet.
- * Names ignore case.
- */
-export function ensureProject(db: Database, path: string, at: string): Project {
-  const names = path.split(PROJECT_PATH_SEPARATOR).map((name) => name.trim()).filter(Boolean);
-  if (names.length === 0) throw new Error("a project needs a name");
-  return db.transaction(() => {
-    let parentId: number | null = null;
-    let project: Project | undefined;
-    for (const name of names) {
-      project = findProject(db, name, parentId) ?? createProject(db, name, parentId, at);
-      parentId = project.id;
-    }
-    return project!;
-  })();
-}
-
-/** Makes a new project, inside `parentId` when it's a subproject; throws when its siblings have the name. */
-export function createProject(db: Database, name: string, parentId: number | null, at: string): Project {
-  const trimmed = projectName(name);
-  if (parentId !== null && !getProject(db, parentId)) throw new Error(`no project ${parentId}`);
-  if (findProject(db, trimmed, parentId)) throw new Error(`there's a project called ${trimmed} there already`);
-  const row = db
-    .query<ProjectRow, [string, number | null, string]>("INSERT INTO projects (name, parent_id, created_at) VALUES (?, ?, ?) RETURNING *")
-    .get(trimmed, parentId, at)!;
-  return toProject(row);
-}
-
-export function renameProject(db: Database, id: number, name: string): Project {
-  const trimmed = projectName(name);
-  const project = getProject(db, id);
-  if (!project) throw new Error(`no project ${id}`);
-  const clash = findProject(db, trimmed, project.parentId);
-  if (clash && clash.id !== id) throw new Error(`there's a project called ${trimmed} there already`);
-  db.query("UPDATE projects SET name = ? WHERE id = ?").run(trimmed, id);
-  return { ...project, name: trimmed };
-}
-
-/**
- * Deletes a project, keeping everything in it: its tasks and subprojects move up into its parent
- * (or out of any project, for a top-level one). Throws when a subproject would land next to a
- * project with the same name, so nothing merges by surprise.
- */
-export function deleteProject(db: Database, id: number): void {
-  db.transaction(() => {
-    const project = getProject(db, id);
-    if (!project) throw new Error(`no project ${id}`);
-    const children = db.query<ProjectRow, [number]>("SELECT * FROM projects WHERE parent_id = ?").all(id).map(toProject);
-    for (const child of children) {
-      const clash = findProject(db, child.name, project.parentId);
-      if (clash && clash.id !== id) throw new Error(`${project.name}'s ${child.name} would land next to another ${clash.name}; rename one of them first`);
-    }
-    db.query("UPDATE projects SET parent_id = ? WHERE parent_id = ?").run(project.parentId, id);
-    db.query("UPDATE tasks SET project_id = ? WHERE project_id = ?").run(project.parentId, id);
-    db.query("DELETE FROM projects WHERE id = ?").run(id);
-  })();
-}
-
-export function listProjects(db: Database): Project[] {
-  return db.query<ProjectRow, []>("SELECT * FROM projects ORDER BY name COLLATE NOCASE").all().map(toProject);
-}
-
-/** Each project's path from the top ("Relay/Sidebar"), keyed by id. */
-export function projectPaths(projects: Project[]): Map<number, string> {
-  const byId = new Map(projects.map((project) => [project.id, project]));
-  const paths = new Map<number, string>();
-  const pathOf = (project: Project): string => {
-    const known = paths.get(project.id);
-    if (known !== undefined) return known;
-    const parent = project.parentId !== null ? byId.get(project.parentId) : undefined;
-    const path = parent ? `${pathOf(parent)}${PROJECT_PATH_SEPARATOR}${project.name}` : project.name;
-    paths.set(project.id, path);
-    return path;
-  };
-  for (const project of projects) pathOf(project);
-  return paths;
 }
 
 /** Puts a session on a task; linking it again makes the task its current one. */

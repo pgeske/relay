@@ -1,7 +1,7 @@
 import SwiftUI
 
 /// A card's unshipped links in plain words, "Waits on" and "Blocks", each task as a chip in its
-/// color. It names both sides even when the other card is folded or in another project. Clicking
+/// color. It names both sides even when the other card is folded. Clicking
 /// it focuses the card's links on the board; clicking again clears the focus.
 struct DependencyLine: View {
     let card: TaskCard
@@ -275,7 +275,7 @@ struct DependencySheet: View {
     private var candidates: [TaskCard] {
         let linked = Set((card.dependsOn ?? []).map(\.id))
         let search = query.trimmingCharacters(in: .whitespacesAndNewlines)
-        // Use all projects, not just the sidebar's selection. Shipped tasks can still be found by searching.
+        // Shipped tasks can still be found by searching.
         return model.taskColumns.flatMap(\.cards).filter { task in
             task.id != card.id && !linked.contains(task.id) && (search.isEmpty ? task.stage != "done" :
                 task.title.localizedCaseInsensitiveContains(search) || task.ref.localizedCaseInsensitiveContains(search))

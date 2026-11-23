@@ -8,7 +8,6 @@ struct TaskBoard: Decodable, Sendable {
     var columns: [TaskColumn]
     /// Open sessions no task knows about.
     var untracked: [UntrackedSession]
-    var projects: [Project]
     var needsYou: Int
     /// Absent on servers that predate the overview.
     var overview: Overview?
@@ -66,27 +65,12 @@ struct TaskColumn: Decodable, Sendable, Identifiable {
     var cards: [TaskCard]
 }
 
-struct Project: Decodable, Sendable, Identifiable, Hashable {
-    var id: Int
-    var name: String
-    /// From the top, like "Relay/Sidebar"; what the New Task sheet sends to put a task in it.
-    var path: String
-    /// The project it sits in; nil for a top-level one.
-    var parentId: Int?
-    /// It and every project under it, whose tasks it shows.
-    var ids: [Int]
-    /// Its tasks not done yet, and how many of them need you, counting its subprojects'.
-    var open: Int
-    var needsYou: Int
-}
-
 struct TaskCard: Decodable, Sendable, Identifiable {
     var id: Int
     /// "T-12".
     var ref: String
     var title: String
     var details: String?
-    var project: ProjectRef?
     /// Its color, shared with its PRs' chips.
     var hue: Int
     var stage: String
@@ -127,12 +111,6 @@ struct RelatedTask: Decodable, Sendable, Identifiable {
     var ref: String
     var title: String
     var shipped: Bool
-}
-
-struct ProjectRef: Decodable, Sendable, Hashable {
-    var id: Int
-    var name: String
-    var path: String
 }
 
 struct TaskStatus: Decodable, Sendable, Hashable {
@@ -237,7 +215,6 @@ struct NewTask: Encodable, Sendable {
     var details: String
     /// Screenshots pasted into its details; the server saves them and lists their paths in its details.
     var images: [Image]
-    var project: String
     var approvePlan: Bool
     /// Start a session on it now, rather than keeping it as an idea.
     var start: Bool

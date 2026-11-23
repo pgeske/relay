@@ -6,10 +6,8 @@ import { notifyBoardChanged, onWorkstreamsWake } from "./boardEvents.ts";
 import { loadBoardConfig } from "./config.ts";
 import { openBoardStore } from "./store.ts";
 import {
-  listProjects,
   listTasks,
   placeTasks,
-  projectPaths,
   saveTextBriefs,
   saveWorkstreamSummaries,
   taskRef,
@@ -29,7 +27,6 @@ import {
  *   ("Search rollout" › "Indexing"), keeping its grouping steady as new tasks come in;
  * - it writes each workstream a one-line summary of where it stands;
  * - it shortens long status lines and reasons, so a one-line row can show them.
- * Projects stay yours: the model reads them as a hint, and never makes or fills one.
  * This file decides what to ask and what an answer changes; `startWorkstreams` decides when.
  */
 
@@ -87,11 +84,9 @@ export interface GroupingInput {
   tasks: Task[];
   placements: Map<number, string[] | null>;
   relations: Map<number, TaskRelations>;
-  /** Each project's path, by id: the user's own filing, which the model takes as a hint. */
-  projects: Map<number, string>;
 }
 
-export function groupingPrompt({ tasks, placements, relations, projects }: GroupingInput): string {
+export function groupingPrompt({ tasks, placements, relations }: GroupingInput): string {
   const named = (task: Task) => `${taskRef(task.id)}: ${task.title}${task.stage === "done" ? " (shipped)" : ""}`;
   const outline = new Map<string, { tasks: Task[]; parts: Map<string, Task[]> }>();
   const loose: Task[] = [];
@@ -117,8 +112,6 @@ export function groupingPrompt({ tasks, placements, relations, projects }: Group
   const toPlace = fresh.map((task) => {
     const lines = [`- ${named(task)}`];
     if (task.details && task.details.trim() !== task.title) lines.push(`  Asked for: ${oneLine(task.details, 300)}`);
-    const project = task.projectId !== null ? projects.get(task.projectId) : undefined;
-    if (project) lines.push(`  In their project: ${project}`);
     const links = relations.get(task.id);
     const linked = [...(links?.dependsOn ?? []), ...(links?.neededBy ?? [])].map((other) => other.ref);
     if (linked.length) lines.push(`  Depends on or blocks: ${linked.join(", ")}`);
@@ -138,7 +131,7 @@ Place every task above, old and new: give each its workstream as a list of names
 - Keep the workstreams above, their exact names, and the tasks in them. Change them only when the new tasks make a better shape clear, like two workstreams that turn out to be parts of one broader effort.
 - A workstream is a broad effort later tasks can join, named in 1 to 4 plain words like "Search rollout" or "Task board app", never a single task. Tasks toward the same goal share one, even when nothing links them.
 - Split a workstream into parts only when its tasks fall into distinct pieces of work, each with a few tasks. Name a part for what it's for, like "Mobile support", not for a kind of work, like "Investigations".
-- Reviewing or approving someone else's work, and helping someone with a question, go together in one workstream for reviews and requests. Never put the person's own projects there.
+- Reviewing or approving someone else's work, and helping someone with a question, go together in one workstream for reviews and requests. Never put the person's own work there.
 
 Reply with only a JSON object mapping each task id to its list, like {"T-12": ["Search rollout"], "T-14": ["Search rollout", "Indexing"]}.`;
 }
@@ -185,7 +178,7 @@ export async function groupTasks(db: Database, ask: Ask, now: Date): Promise<voi
   const tasks = groupedTasks(all, now);
   const placements = taskWorkstreams(db);
   if (tasks.every((task) => placements.has(task.id))) return;
-  const input = { tasks, placements, relations: taskRelations(db, all), projects: projectPaths(listProjects(db)) };
+  const input = { tasks, placements, relations: taskRelations(db, all) };
   const grouping: Map<number, string[] | null> = parseGrouping(await ask(groupingPrompt(input)), tasks, placements);
   // A new task the model skipped would come up every cycle; it waits in no workstream for the next new task instead.
   for (const task of tasks) if (!placements.has(task.id) && !grouping.has(task.id)) grouping.set(task.id, null);
