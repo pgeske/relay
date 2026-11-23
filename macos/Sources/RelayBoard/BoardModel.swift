@@ -195,19 +195,6 @@ final class BoardModel {
 
     var isCreating: Bool { sending.contains("new-task") }
 
-    /// Makes, renames, or deletes a project from the sidebar, or moves a task into one; true once the server did it.
-    func project(_ action: String, project: Int? = nil, name: String? = nil, parent: Int? = nil, task: Int? = nil) async -> Bool {
-        do {
-            let result = try await client.project(action, project: project, name: name, parent: parent, task: task)
-            toast = Toast(message: result.message, failed: !result.ok)
-            if result.ok && !isLive { schedulePoll(after: .zero) }
-            return result.ok
-        } catch {
-            report(error)
-            return false
-        }
-    }
-
     func changeDependency(on task: Int, prerequisite: Int, adding: Bool) async -> Bool {
         do {
             let action = adding ? "add-dependency" : "remove-dependency"

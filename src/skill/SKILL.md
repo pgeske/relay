@@ -9,7 +9,7 @@ The Relay Board app has two views: **Tasks**, what the user is getting done, and
 
 ## Tasks
 
-A task is one thing the user wants done: a fix, a rollout, an investigation, getting another team to do something. It can take several sessions and PRs, or none. Tasks can belong to a project (a named group of tasks); projects can nest inside other projects.
+A task is one thing the user wants done: a fix, a rollout, an investigation, getting another team to do something. It can take several sessions and PRs, or none.
 
 You report at four moments: when you start, when you have a plan, before you stop, and when it's done. In between, relay keeps the card current on its own: when you stop, or after a few minutes of work without a report, it reads the end of this session and refreshes the task's stage and status line, marked **auto**. You don't need to report each step; commands without a task id act on this session's task.
 
@@ -22,7 +22,6 @@ relay task new "Roll out the new cache to staging" --status "Reading the rollout
 
 - The title says the outcome in a few plain words. `--details -` takes a longer description on stdin.
 - By default the user approves your plan before you carry it out (below). Add `--skip-plan` when there's nothing to plan, or the user already told you exactly what to do.
-- Relay groups every task into workstreams on its own, so leave out `--project` unless the user names one. It puts the task in the user's project of that name, creating it if needed; `Parent/Child` names a subproject inside another (`--project "Relay/Sidebar"`).
 
 **2. Plans.** Unless the task skips plan approval, record your plan and then stop until the user approves it on the board (they press **Approve Plan**, which tells you to go ahead):
 

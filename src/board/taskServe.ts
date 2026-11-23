@@ -16,25 +16,17 @@ import { readSessionInfo } from "./taskCommand.ts";
 import {
   approvePlan,
   changeDependency,
-  createProject,
   createTask,
-  deleteProject,
   deleteTask,
   dismissSession,
-  ensureProject,
   followsSession,
-  getProject,
   getTask,
   linkSession,
-  listProjects,
   markStarted,
   pauseTask,
-  projectPaths,
   reportTask,
-  renameProject,
   resumeTask,
   sendBack,
-  setTaskProject,
   taskRef,
   taskSessions,
   type Task,
@@ -347,8 +339,6 @@ export interface NewTaskRequest {
   details: string;
   /** Screenshots pasted into its details, saved for its agent to read. */
   images: UploadedImage[];
-  /** A project's name: an existing one, or a new one to create. */
-  project?: string;
   approvePlan: boolean;
   /** Start a session on it now, rather than keeping it as an idea. */
   start: boolean;
@@ -379,7 +369,6 @@ export async function createTaskFromBoard(request: NewTaskRequest): Promise<Boar
     task = createTask(db, {
       title,
       details,
-      projectId: request.project?.trim() ? ensureProject(db, request.project.trim(), at).id : null,
       stage: "idea",
       status: null,
       approvePlan: request.approvePlan,
@@ -402,58 +391,6 @@ export async function createTaskFromBoard(request: NewTaskRequest): Promise<Boar
     // The task stays as an idea, so Start can try again.
     const why = error instanceof Error ? error.message : String(error);
     return { status: error instanceof ActionError ? error.status : 500, message: `Saved ${taskRef(task.id)}, but couldn't start it: ${why}`, task: task.id };
-  }
-}
-
-/** What the board asks of projects: `POST /api/board/projects/<action>`. */
-export const PROJECT_ACTIONS = ["create", "rename", "delete", "move-task"] as const;
-
-/** The body of a project control: the project to act on, its new name, and where a new one goes. */
-export interface ProjectActionRequest {
-  /** For move-task, where the task goes; left out to take it out of every project. */
-  project?: number;
-  name?: string;
-  /** A new project's parent; left out for a top-level one. */
-  parent?: number;
-  /** For move-task: the task to move. */
-  task?: number;
-}
-
-/** Makes, renames, or deletes a project from the board's sidebar, or moves a task into one from its card. */
-export function runProjectAction(action: string, request: ProjectActionRequest): BoardActionResult {
-  const result = executeProjectAction(action, request);
-  if (result.status < 300) notifyBoardChanged({ wakeWorkstreams: action === "move-task" || action === "rename" });
-  return result;
-}
-
-function executeProjectAction(action: string, request: ProjectActionRequest): BoardActionResult {
-  if (!(PROJECT_ACTIONS as readonly string[]).includes(action)) return { status: 404, message: `no project action ${action}` };
-  const db = openBoardStore();
-  try {
-    if (action === "create") {
-      const project = createProject(db, request.name ?? "", request.parent ?? null, new Date().toISOString());
-      const parent = project.parentId !== null ? getProject(db, project.parentId) : null;
-      return { status: 200, message: parent ? `Made ${project.name} inside ${parent.name}` : `Made ${project.name}` };
-    }
-    if (action === "move-task") {
-      if (request.task === undefined) return { status: 400, message: "which task?" };
-      const task = setTaskProject(db, request.task, request.project ?? null);
-      const path = task.projectId !== null ? projectPaths(listProjects(db)).get(task.projectId) : undefined;
-      return { status: 200, message: path ? `Moved ${taskRef(task.id)} to ${path}` : `Took ${taskRef(task.id)} out of its project` };
-    }
-    if (request.project === undefined) return { status: 400, message: "which project?" };
-    const project = getProject(db, request.project);
-    if (!project) return { status: 404, message: `no project ${request.project}` };
-    if (action === "rename") {
-      const renamed = renameProject(db, project.id, request.name ?? "");
-      return { status: 200, message: `Renamed ${project.name} to ${renamed.name}` };
-    }
-    deleteProject(db, project.id);
-    return { status: 200, message: `Deleted ${project.name}; what was in it moved up` };
-  } catch (error) {
-    return { status: 400, message: error instanceof Error ? error.message : String(error) };
-  } finally {
-    db.close();
   }
 }
 
@@ -484,7 +421,6 @@ export function parseNewTask(body: Record<string, unknown>): NewTaskRequest {
   return {
     details,
     images: parseUploadedImages(body.images),
-    project: text("project"),
     approvePlan: body.approvePlan !== false,
     start: body.start === true,
     model: text("model") || undefined,

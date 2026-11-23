@@ -77,7 +77,7 @@ flowchart LR
 - **Plans wait for you,** unless you say the task can skip that step.
 - **Park what can wait.** **Mark Blocked** from a task's menu and it moves to **Blocked**, saying which stage it was in, until you press **Resume** or **Unblock**.
 - **PRs come along.** PRs a task's session opens join the task and wear its color on the PR board.
-- **Tasks group themselves.** You never file a task: relay asks omp's main model which workstream, the broad effort it's part of, each new task belongs in, and splits a workstream into parts once its tasks fall into distinct pieces of work. It keeps the grouping steady and only revisits it when a new task comes in. Projects are still there for tasks you want to file yourself; relay never makes or fills one.
+- **Tasks group themselves.** You never file a task: relay asks omp's main model which workstream, the broad effort it's part of, each new task belongs in, and splits a workstream into parts once its tasks fall into distinct pieces of work. It keeps the grouping steady and only revisits it when a new task comes in.
 
 ## 🔀 Pull requests
 

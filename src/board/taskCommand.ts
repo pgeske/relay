@@ -16,13 +16,11 @@ import {
   createTask,
   currentTask,
   dismissedSessions,
-  ensureProject,
   finishTask,
   getTask,
   linkPr,
   linkSession,
   linkSessionPrs,
-  listProjects,
   listTasks,
   parseTaskRef,
   recordPlan,
@@ -47,7 +45,7 @@ Agents keep tasks current as they work; the Relay Board app's Tasks view shows w
 Usage:
   relay task                          List your tasks
   relay task --json                   Print the task board as JSON (for agents)
-  relay task new <title> [--details <text|->] [--project <name>] [--stage <stage>]
+  relay task new <title> [--details <text|->] [--stage <stage>]
                  [--status <text>] [--skip-plan]
                                       Register a task and put this session on it; prints its id
   relay task link <task>              Put this session on a task too
@@ -55,7 +53,6 @@ Usage:
   relay task undepend [<task>] <prerequisite>  Remove that dependency
   relay task update [<task>] [--stage <stage>] [--status <text>]
                     [--blocked-on me|others] [--reason <text>] [--pr <pr>]
-                    [--project <name>]
                                       Report where it stands. --blocked-on: stopped until you
                                       (me) or someone/something else (others: reviewers, another
                                       team, CI, a rollout) moves. An update with neither clears
@@ -69,7 +66,6 @@ Usage:
   relay task show [<task>] [--json]   A task, its sessions, PRs, and history
 
 <task> is its id (T-12 or 12); left out, it's the task this session is on.
-<name> is a project, made if there's none yet; Parent/Child names one inside another.
 <stage> is one of: ${TASK_STAGES.join(", ")}.`;
 
 function pathMtime(path: string): string | null {
@@ -115,7 +111,6 @@ export function assembleTasks(board: Board | null, live: Map<string, Pane>, now:
       {
         tasks,
         relations: taskRelations(db, tasks),
-        projects: listProjects(db),
         events: taskEvents(db),
         sessions,
         sessionInfo,
@@ -203,13 +198,11 @@ async function newTask(args: string[]): Promise<void> {
   const at = new Date().toISOString();
   const details = await readSummary(flagValue(args, "--details"));
   const stage = parseStage(flagValue(args, "--stage")) ?? "research";
-  const projectName = flagValue(args, "--project");
   const db = openBoardStore();
   try {
     const task = createTask(db, {
       title,
       details,
-      projectId: projectName ? ensureProject(db, projectName, at).id : null,
       stage,
       status: flagValue(args, "--status") ?? null,
       approvePlan: !args.includes("--skip-plan"),
@@ -256,7 +249,6 @@ async function update(args: string[]): Promise<void> {
   const blocked = parseBlocker(args);
   const status = flagValue(args, "--status");
   const prRef = flagValue(args, "--pr");
-  const projectName = flagValue(args, "--project");
   const db = openBoardStore();
   try {
     const task = await resolveTask(db, leadingRef(args));
@@ -264,7 +256,7 @@ async function update(args: string[]): Promise<void> {
       const pr = parsePrRef(prRef);
       linkPr(db, pr.repo, pr.number, task.id, at);
     }
-    const updated = reportTask(db, task.id, { stage, status, blocked, projectId: projectName ? ensureProject(db, projectName, at).id : undefined, at });
+    const updated = reportTask(db, task.id, { stage, status, blocked, at });
     await joinIfFree(db, task.id, at);
     const block = updated.blockedOn ? `, ${BLOCK_TEXT[updated.blockedOn]}` : "";
     console.log(`${taskRef(task.id)} is in ${STAGE_LABELS[updated.stage]}${block}${updated.status ? `: ${updated.status}` : ""}`);
@@ -334,7 +326,7 @@ async function show(args: string[]): Promise<void> {
     console.log(JSON.stringify({ column: column.id, ...card }, null, 2));
     return;
   }
-  const lines = [`${card.ref}: ${card.title}${card.project ? `  [${card.project.path}]` : ""}`, `${column.title} · ${turnText(card.turn)}`];
+  const lines = [`${card.ref}: ${card.title}`, `${column.title} · ${turnText(card.turn)}`];
   if (card.status) lines.push(`Status: ${card.status.text} (${card.status.ago}${card.status.auto ? ", filled in by relay" : ""})`);
   for (const dependency of card.dependsOn) lines.push(`Depends on ${dependency.ref}: ${dependency.title}${dependency.shipped ? " (shipped)" : ""}`);
   for (const dependent of card.neededBy) lines.push(`Needed by ${dependent.ref}: ${dependent.title}`);

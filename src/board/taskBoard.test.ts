@@ -10,7 +10,6 @@ function task(overrides: Partial<Task> = {}): Task {
     id: 1,
     title: "Roll out the cache",
     details: null,
-    projectId: null,
     stage: "doing",
     status: null,
     statusAt: null,
@@ -50,7 +49,7 @@ function session(status: "working" | "idle" | "asking" | null, activeMinutesAgo 
 function boardOf(tasks: Task[], sessions: { taskId: number; info: TaskSessionInfo }[] = []) {
   const links = sessions.map(({ taskId, info }) => ({ taskId, sessionFile: info.sessionFile, linkedAt: minutesAgo(60) }));
   const sessionInfo = new Map(sessions.map(({ info }) => [info.sessionFile, info]));
-  return taskBoardView({ tasks, relations: new Map(), projects: [], events: new Map(), sessions: links, sessionInfo, prs: new Map(), board: null, dismissed: new Set(), workstreams: new Map(), summaries: new Map(), briefs: new Map(), now }, "/home");
+  return taskBoardView({ tasks, relations: new Map(), events: new Map(), sessions: links, sessionInfo, prs: new Map(), board: null, dismissed: new Set(), workstreams: new Map(), summaries: new Map(), briefs: new Map(), now }, "/home");
 }
 
 describe("whose move a task waits on", () => {
@@ -166,7 +165,7 @@ describe("whose move a task waits on", () => {
       { taskId: 1, sessionFile: info.sessionFile, linkedAt: minutesAgo(5) },
     ];
     const stepsOf = (handedOff: Task) => {
-      const view = taskBoardView({ tasks: [task(), handedOff], relations: new Map(), projects: [], events: new Map(), sessions: links, sessionInfo: new Map([[info.sessionFile, info]]), prs: new Map(), board: null, dismissed: new Set(), workstreams: new Map(), summaries: new Map(), briefs: new Map(), now }, "/home");
+      const view = taskBoardView({ tasks: [task(), handedOff], relations: new Map(), events: new Map(), sessions: links, sessionInfo: new Map([[info.sessionFile, info]]), prs: new Map(), board: null, dismissed: new Set(), workstreams: new Map(), summaries: new Map(), briefs: new Map(), now }, "/home");
       const card = view.columns.flatMap((column) => column.cards).find((c) => c.id === 2)!;
       return { turn: card.turn.id, steps: card.steps.map((step) => step.action) };
     };
@@ -240,7 +239,7 @@ describe("an untracked session", () => {
   function untracked(status: "working" | "idle" | "asking") {
     const info: TaskSessionInfo = { ...session(status), sessionFile: "/sessions/loose.jsonl", title: "Quick question" };
     const view = taskBoardView(
-      { tasks: [], relations: new Map(), projects: [], events: new Map(), sessions: [], sessionInfo: new Map([[info.sessionFile, info]]), prs: new Map(), board: null, dismissed: new Set(), workstreams: new Map(), summaries: new Map(), briefs: new Map(), now },
+      { tasks: [], relations: new Map(), events: new Map(), sessions: [], sessionInfo: new Map([[info.sessionFile, info]]), prs: new Map(), board: null, dismissed: new Set(), workstreams: new Map(), summaries: new Map(), briefs: new Map(), now },
       "/home",
     );
     return view.untracked[0];
@@ -253,28 +252,10 @@ describe("an untracked session", () => {
   });
 });
 
-test("a project counts and shows its subprojects' tasks, and cards name their project's path", () => {
-  const at = minutesAgo(600);
-  const projects = [
-    { id: 1, name: "Relay", parentId: null, createdAt: at },
-    { id: 2, name: "Board", parentId: 1, createdAt: at },
-    { id: 3, name: "Sidebar", parentId: 2, createdAt: at },
-    { id: 4, name: "Docs", parentId: null, createdAt: at },
-  ];
-  const tasks = [task({ id: 1, projectId: 3 }), task({ id: 2, projectId: 1, blockedOn: "me", blockedAt: minutesAgo(5) })];
-  const view = taskBoardView({ tasks, relations: new Map(), projects, events: new Map(), sessions: [], sessionInfo: new Map(), prs: new Map(), board: null, dismissed: new Set(), workstreams: new Map(), summaries: new Map(), briefs: new Map(), now }, "/home");
-  const byName = new Map(view.projects.map((project) => [project.name, project]));
-  expect(byName.get("Relay")).toMatchObject({ path: "Relay", ids: [1, 2, 3], open: 2, needsYou: 1 });
-  expect(byName.get("Board")).toMatchObject({ path: "Relay/Board", parentId: 1, ids: [2, 3], open: 1, needsYou: 0 });
-  expect(byName.get("Docs")).toMatchObject({ ids: [4], open: 0 });
-  const card = view.columns.flatMap((column) => column.cards).find((card) => card.id === 1)!;
-  expect(card.project).toEqual({ id: 3, name: "Sidebar", path: "Relay/Board/Sidebar" });
-});
-
 describe("the overview", () => {
   function boardWith(tasks: Task[], extra: Partial<TaskInputs> = {}) {
     return taskBoardView(
-      { tasks, relations: new Map(), projects: [], events: new Map(), sessions: [], sessionInfo: new Map(), prs: new Map(), board: null, dismissed: new Set(), workstreams: new Map(), summaries: new Map(), briefs: new Map(), now, ...extra },
+      { tasks, relations: new Map(), events: new Map(), sessions: [], sessionInfo: new Map(), prs: new Map(), board: null, dismissed: new Set(), workstreams: new Map(), summaries: new Map(), briefs: new Map(), now, ...extra },
       "/home",
     );
   }

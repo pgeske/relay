@@ -4,23 +4,19 @@ import SwiftUI
 /// Your tasks as a Kanban board turned on its side: a section per stage, top to bottom in the order
 /// work moves, from Ideas to Shipped, so how close each task is to done reads at a glance. Each card
 /// says whose move it is. Open sessions no task knows about sit in a strip above the stages.
-/// `project` narrows it to one project's tasks.
 struct TasksView: View {
-    let project: Project?
-
     @Environment(BoardModel.self) private var model
     @State private var focusedTaskId: Int?
     @State private var viewportHeight: CGFloat = 0
 
     var body: some View {
-        let columns = shownColumns
+        let columns = model.taskColumns
         let focusedCard = focusedTaskId.flatMap { id in columns.lazy.flatMap(\.cards).first { $0.id == id } }
         let linkFocus = focusedCard.flatMap(TaskLinkFocus.init)
-        // Sessions no task knows about belong to no project.
-        let untracked = project == nil ? model.untrackedSessions : []
+        let untracked = model.untrackedSessions
         if columns.allSatisfy(\.cards.isEmpty) && untracked.isEmpty {
             ContentUnavailableView {
-                Label(project.map { "No tasks in \($0.name)" } ?? "No tasks yet", systemImage: "checklist")
+                Label("No tasks yet", systemImage: "checklist")
             } description: {
                 Text("Start one here, or ask any agent in relay to track what it's doing. Agents keep each task's stage and status current.")
             } actions: {
@@ -65,20 +61,9 @@ struct TasksView: View {
             }
             .animation(.easeOut(duration: 0.15), value: linkFocus?.id)
             .animation(.spring(duration: 0.35, bounce: 0.2), value: model.toast != nil)
-            .onChange(of: project?.id) { focusedTaskId = nil }
             .onChange(of: linkFocus == nil) { _, cleared in
                 if cleared && focusedTaskId != nil { focusedTaskId = nil }
             }
-        }
-    }
-
-    /// The columns with only the project's tasks and its subprojects'.
-    private var shownColumns: [TaskColumn] {
-        guard let project else { return model.taskColumns }
-        return model.taskColumns.map { column in
-            var column = column
-            column.cards = column.cards.filter { card in card.project.map { project.ids.contains($0.id) } ?? false }
-            return column
         }
     }
 }
@@ -252,7 +237,6 @@ struct TaskCardView: View {
                 .fontWeight(.medium)
                 .monospacedDigit()
                 .foregroundStyle(.secondary)
-            if let project = card.project { ProjectChip(project: project) }
             Spacer(minLength: 4)
             // While another task's links are shown, the time gives way to how this card relates to it.
             if let focus, role == .prerequisite || role == .dependent {
@@ -299,23 +283,6 @@ struct TaskChipView: View {
         .padding(.vertical, 1.5)
         .background(taskColor(chip.hue).opacity(0.12), in: .rect(cornerRadius: 4))
         .help("Part of \(chip.ref): \(chip.title)")
-    }
-}
-
-/// The project a task belongs to, as a small muted chip; hovering shows its full path.
-private struct ProjectChip: View {
-    let project: ProjectRef
-
-    var body: some View {
-        Label(project.name, systemImage: "folder")
-            .labelStyle(.titleAndIcon)
-            .font(.zoomed(size: 9, weight: .semibold))
-            .lineLimit(1)
-            .foregroundStyle(.secondary)
-            .padding(.horizontal, 5)
-            .padding(.vertical, 1.5)
-            .background(Color.primary.opacity(0.07), in: .rect(cornerRadius: 4))
-            .help("Project: \(project.path)")
     }
 }
 
@@ -723,30 +690,9 @@ struct TaskMenuItems: View {
         if card.dependsOn != nil {
             Button("Dependencies…", systemImage: "link") { model.editingDependencies = card }
         }
-        if !projects.isEmpty {
-            Menu("Move to Project", systemImage: "folder") {
-                projectButton("No Project", id: nil)
-                Divider()
-                ForEach(projects) { project in projectButton(project.path, id: project.id) }
-            }
-        }
         Divider()
         ForEach(card.menu, id: \.self) { item in
             Button(item.label, systemImage: item.symbol, role: item.confirm?.destructive == true ? .destructive : nil) { model.request(item, on: .task(card.id)) }
-        }
-    }
-
-    private var projects: [Project] {
-        (model.board?.tasks?.projects ?? []).sorted { $0.path.localizedStandardCompare($1.path) == .orderedAscending }
-    }
-
-    /// Puts the task in the project `id` (none when nil), checked when it's already there.
-    private func projectButton(_ title: String, id: Int?) -> some View {
-        Button {
-            guard id != card.project?.id else { return }
-            Task { await model.project("move-task", project: id, task: card.id) }
-        } label: {
-            if id == card.project?.id { Label(title, systemImage: "checkmark") } else { Text(title) }
         }
     }
 }
@@ -767,7 +713,6 @@ struct TaskDetailsPopover: View {
         VStack(alignment: .leading, spacing: 10) {
             HStack(alignment: .firstTextBaseline, spacing: 6) {
                 Text(card.ref).foregroundStyle(.secondary).monospacedDigit()
-                if let project = card.project { ProjectChip(project: project) }
                 Spacer()
                 Text(card.stageLabel).fontWeight(.semibold).foregroundStyle(taskColor(card.hue))
             }
@@ -933,18 +878,13 @@ private struct DoneRow: View {
     }
 }
 
-/// Jots down a task: what you want done (relay titles it from that), its project, and whether you
+/// Jots down a task: what you want done (relay titles it from that) and whether you
 /// approve its plan first. Start (⌘↩) opens a session on it right away; Save as Idea keeps it for later.
 struct NewTaskSheet: View {
-    let project: Project?
-
     @Environment(BoardModel.self) private var model
     @Environment(\.dismiss) private var dismiss
     @State private var details = ""
     @State private var screenshots: [Screenshot] = []
-    @State private var projectName = ""
-    /// Typing a new project's name, in place of the project chip.
-    @State private var namingProject = false
     @State private var approvePlan = true
     /// The model and thinking level its sessions start on; nil keeps omp's default. They start on
     /// the last ones picked for a new task, kept in `lastModel`/`lastLevel` ("" for omp's default).
@@ -952,9 +892,6 @@ struct NewTaskSheet: View {
     @State private var chosenLevel: String?
     @AppStorage("newTaskModel") private var lastModel = ""
     @AppStorage("newTaskThinkingLevel") private var lastLevel = ""
-    @FocusState private var focus: Field?
-
-    private enum Field { case projectName }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -997,7 +934,6 @@ struct NewTaskSheet: View {
         .font(.zoomed(.body))
         .frame(width: 640 * Zoom.shared.scale)
         .onAppear {
-            projectName = project?.path ?? ""
             chosenModel = lastModel.isEmpty ? nil : lastModel
             chosenLevel = lastLevel.isEmpty ? nil : lastLevel
         }
@@ -1014,10 +950,9 @@ struct NewTaskSheet: View {
     }
 
     /// The task's options as chips under the details. They wrap onto another line rather than crowd
-    /// the buttons when a long model or project name (or a smaller zoom) leaves too little room.
+    /// the buttons when a long model name (or a smaller zoom) leaves too little room.
     private var options: some View {
         FlowLayout(spacing: 8) {
-            projectChip
             Toggle(isOn: $approvePlan) {
                 Label("Approve plan first", systemImage: approvePlan ? "checkmark.circle.fill" : "circle")
                     .lineLimit(1)
@@ -1062,40 +997,6 @@ struct NewTaskSheet: View {
         .controlSize(.large)
     }
 
-    /// The project it goes under: pick one, none, or name a new one in place.
-    @ViewBuilder private var projectChip: some View {
-        if namingProject {
-            TextField("Project", text: $projectName, prompt: Text("New project, or Parent/Child"))
-                .textFieldStyle(.plain)
-                .focused($focus, equals: .projectName)
-                .frame(width: 190)
-                .modifier(Chip(on: true))
-                .onSubmit { namingProject = false }
-                .onChange(of: focus) { if focus != .projectName { namingProject = false } }
-        } else {
-            Menu {
-                Button("None") { projectName = "" }
-                if !projects.isEmpty { Divider() }
-                ForEach(projects) { project in Button(project.path) { projectName = project.path } }
-                Divider()
-                Button("New Project…") {
-                    projectName = ""
-                    namingProject = true
-                    focus = .projectName
-                }
-            } label: {
-                Label(projectName.isEmpty ? "No project" : projectName, systemImage: "folder")
-                    .lineLimit(1)
-                    .modifier(Chip(on: !projectName.isEmpty))
-            }
-            .menuStyle(.button)
-            .buttonStyle(.plain)
-            .menuIndicator(.hidden)
-            .fixedSize()
-            .help("The project it goes under")
-        }
-    }
-
     /// The model and thinking level its sessions start on.
     @ViewBuilder private var modelChip: some View {
         if let choices = model.modelChoices {
@@ -1103,17 +1004,12 @@ struct NewTaskSheet: View {
         }
     }
 
-    /// Every project by its path, so subprojects sit right under their parents.
-    private var projects: [Project] {
-        (model.board?.tasks?.projects ?? []).sorted { $0.path.localizedStandardCompare($1.path) == .orderedAscending }
-    }
-
     private var ready: Bool { !details.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && !model.isCreating }
 
     private func submit(start: Bool) {
         guard ready else { return }
         let images = screenshots.map { NewTask.Image(base64: $0.data.base64EncodedString(), mimeType: $0.mimeType) }
-        let task = NewTask(details: details, images: images, project: projectName, approvePlan: approvePlan, start: start, model: chosenModel, thinkingLevel: chosenLevel)
+        let task = NewTask(details: details, images: images, approvePlan: approvePlan, start: start, model: chosenModel, thinkingLevel: chosenLevel)
         Task {
             if await model.create(task) { dismiss() }
         }
