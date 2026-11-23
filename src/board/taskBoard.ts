@@ -1,3 +1,4 @@
+import type { SessionStatus } from "../server/sessions.ts";
 import type { PullRequest } from "./github.ts";
 import type { Board, CiState, Lane } from "./lanes.ts";
 import { followsSession, projectPaths, taskRef, type Project, type RelatedTask, type Task, type TaskEvent, type TaskPr, type TaskRelations, type TaskSession, type TaskStage, type WorkstreamSummary } from "./taskStore.ts";
@@ -77,7 +78,7 @@ export interface TaskSessionInfo {
   title: string;
   cwd: string | null;
   /** Where it runs in relay; null when no tab has it open. */
-  live: { paneId: string; windowId: string; status: "working" | "idle" } | null;
+  live: { paneId: string; windowId: string; status: SessionStatus } | null;
   /** When its log last changed; for an idle session, when its agent stopped. */
   activeAt: string | null;
 }
@@ -213,7 +214,7 @@ export interface UntrackedSessionView {
   title: string;
   /** Its folder, with ~ for your home. */
   folder: string | null;
-  state: "working" | "idle";
+  state: SessionStatus;
   activeAgo: string | null;
   open: TaskActionView;
   track: TaskActionView;
@@ -349,14 +350,14 @@ export interface TaskPrPlace {
 
 /**
  * Why an approved PR can't merge yet, and whose move that is: red CI or conflicts need someone to fix
- * them (you, or the agent you ask); running CI just needs time; a merge gate or branch rule waits on others.
+ * them (you, or the agent you ask); running CI, a merge gate, or branch rules wait on something else.
  */
 function approvedButBlocked(pr: TaskPrPlace): { turn: Turn; reason: string } {
   const ref = short(pr.ref);
   if (pr.ci === "failed") return { turn: "you", reason: `${ref}: CI failed` };
   if (pr.mergeBlocker === "Merge conflicts" || pr.mergeBlocker === "Behind its base branch") return { turn: "you", reason: `${ref}: ${pr.mergeBlocker.toLowerCase()}` };
   if (pr.mergeBlocker) return { turn: "others", reason: `${ref}: ${pr.mergeBlocker.charAt(0).toLowerCase()}${pr.mergeBlocker.slice(1)}` };
-  return { turn: "progress", reason: `${ref}: CI running` };
+  return { turn: "others", reason: `${ref}: CI running` };
 }
 
 function short(ref: string): string {
@@ -399,9 +400,11 @@ export function placeTask(task: Task, sessions: TaskSessionLink[], prs: TaskPrPl
 
   // What a session that moved on to another task is doing now is that task's business.
   const onTask = sessions.filter((session) => session.onTask);
+  // A question waiting on you comes first: until you answer it, nothing on the task moves.
+  const asking = onTask.find((session) => session.live?.status === "asking");
+  if (asking) return place("you", "Agent is asking you something", asking.activeAt ?? task.updatedAt);
   const working = onTask.find((session) => session.live?.status === "working");
   if (working) return place("agent", null, working.activeAt ?? task.updatedAt);
-  // Its agent delivered: nothing else matters until you ship it or send it back.
   if (task.finishedAt) return { ...place("you", "Look it over, then ship it", task.finishedAt, task.finishedAt), delivered: true, quick: true };
 
   if (task.approvePlan && task.plan && !task.planApprovedAt) return { ...place("you", "Plan ready for your approval", task.planAt ?? task.updatedAt, task.planAt), quick: true };
@@ -414,8 +417,7 @@ export function placeTask(task: Task, sessions: TaskSessionLink[], prs: TaskPrPl
   if (fixNeeded) return place("you", fixNeeded.reason, task.updatedAt);
   const feedbackPr = open.find((pr) => pr.lane === "changes-requested");
   if (feedbackPr) return place("you", `${short(feedbackPr.ref)} has feedback to address`, task.updatedAt);
-  if (task.blockedOn === "progress") return place("progress", task.blockedReason, task.blockedAt ?? task.updatedAt, task.blockedAt);
-  if (task.blockedOn === "others") return place("others", task.blockedReason, task.blockedAt ?? task.updatedAt, task.blockedAt);
+  if (task.blockedOn === "others" || task.blockedOn === "progress") return place("others", task.blockedReason, task.blockedAt ?? task.updatedAt, task.blockedAt);
   // A PR waiting for a click from you comes before one waiting on CI or reviewers.
   const needsReview = open.find((pr) => pr.lane === "agent-review");
   if (needsReview) return place("you", `${short(needsReview.ref)} needs an agent review`, task.updatedAt);
@@ -439,9 +441,9 @@ export interface TaskSessionLink extends TaskSessionInfo {
   onTask: boolean;
 }
 
-/** The session a task's card shows and its controls act on: one on it and working, else one on it and open (the latest to stop), else one open elsewhere, else the latest to run. */
+/** The session a task's card shows and its controls act on: one on it and working or asking you, else one on it and open (the latest to stop), else one open elsewhere, else the latest to run. */
 export function primarySession(sessions: TaskSessionLink[]): TaskSessionLink | null {
-  const rank = (session: TaskSessionLink) => (session.live ? 1 : 0) + (session.onTask && session.live ? 1 : 0) + (session.onTask && session.live?.status === "working" ? 1 : 0);
+  const rank = (session: TaskSessionLink) => (session.live ? 1 : 0) + (session.onTask && session.live ? 1 : 0) + (session.onTask && session.live && session.live.status !== "idle" ? 1 : 0);
   return sessions.toSorted((a, b) => rank(b) - rank(a) || (b.activeAt ?? "").localeCompare(a.activeAt ?? ""))[0] ?? null;
 }
 
@@ -646,7 +648,7 @@ function byTurn(a: TaskCardView, b: TaskCardView): number {
 }
 
 const WEEK_MS = 7 * 24 * 60 * 60 * 1000;
-const MOVING: Turn[] = ["agent", "progress"];
+const MOVING: Turn[] = ["agent"];
 
 /**
  * The board at a glance. Up next ranks what needs you by what it frees up: first what other tasks wait
@@ -762,7 +764,9 @@ export function taskBoardView(inputs: TaskInputs, home: string): TaskBoardView {
           confirm:
             session.live!.status === "working"
               ? { title: `Close "${sessionTitle(session.title)}"?`, message: "It's working right now; closing stops what it's doing. omp keeps the conversation, so you can resume it.", button: "Close Session", destructive: true }
-              : null,
+              : session.live!.status === "asking"
+                ? { title: `Close "${sessionTitle(session.title)}"?`, message: "It's waiting on your answer to a question. omp keeps the conversation, so you can resume it.", button: "Close Session", destructive: true }
+                : null,
         }),
       }),
     );

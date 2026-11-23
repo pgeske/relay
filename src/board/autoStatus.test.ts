@@ -30,8 +30,8 @@ test("a model answer is read out of prose or a code fence, and one the board can
   // While the agent works, what it waits on isn't asked, so an answer naming it anyway doesn't count.
   expect(parseStatusDecision('{"accurate": false, "stage": "doing", "status": "Fixing tests", "waiting_on": "me", "reason": "?"}', "working")).toMatchObject({ waitingOn: null, reason: null });
   expect(parseStatusDecision("I can't tell", "stopped")).toBeNull();
-  // Something moving along on its own is an answer of its own.
-  expect(parseStatusDecision('{"accurate": false, "stage": "doing", "status": "Upgrading the staging cluster", "waiting_on": "progress", "reason": "Upgrade underway"}', "stopped")).toMatchObject({ waitingOn: "progress", reason: "Upgrade underway" });
+  // Legacy "progress" from a model answer normalizes to "others" so idle sessions never show purple.
+  expect(parseStatusDecision('{"accurate": false, "stage": "doing", "status": "Upgrading the staging cluster", "waiting_on": "progress", "reason": "Upgrade underway"}', "stopped")).toMatchObject({ waitingOn: "others", reason: "Upgrade underway" });
 });
 
 test("a stopped agent's forgotten blocker lands on the card marked as relay's, until the agent reports itself", () => {
@@ -65,11 +65,15 @@ test("while the agent works, a refresh moves the stage and status but keeps what
   expect(getTask(db, id)).toMatchObject({ stage: "doing", status: "Applying in staging", blockedOn: "others", blockedReason: "Storage team approval", blockedAt: "2026-11-04T10:05:00Z" });
 });
 
-test("a working agent isn't waiting on you, so a refresh clears that block", () => {
+test("a working agent isn't waiting on you or a legacy progress block, so a refresh clears them", () => {
   const db = openBoardStore(":memory:");
   const { id } = createTask(db, base);
   const seen = reportTask(db, id, { blocked: { on: "me", reason: "CI failed" }, at: "2026-11-04T10:05:00Z" });
   expect(applyStatusDecision(db, seen, { accurate: false, stage: "doing", status: "Pushing a CI fix", waitingOn: null, reason: null }, null, "2026-11-04T10:30:00Z")).toBe("doing: Pushing a CI fix");
+  expect(getTask(db, id)).toMatchObject({ blockedOn: null, blockedReason: null });
+
+  const prog = reportTask(db, id, { blocked: { on: "progress", reason: "Baking" }, at: "2026-11-04T10:35:00Z" });
+  expect(applyStatusDecision(db, prog, { accurate: false, stage: "doing", status: "Removing exclusion", waitingOn: null, reason: null }, null, "2026-11-04T10:40:00Z")).toBe("doing: Removing exclusion");
   expect(getTask(db, id)).toMatchObject({ blockedOn: null, blockedReason: null });
 });
 

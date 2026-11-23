@@ -868,9 +868,9 @@ private struct UntrackedRow: View {
                 Text(folder).font(.zoomed(.caption)).foregroundStyle(.tertiary).truncationMode(.head)
             }
             Spacer(minLength: 8)
-            Text(session.state == "working" ? "working" : session.activeAgo.map { "idle · \($0)" } ?? "idle")
+            Text(session.state == "idle" ? session.activeAgo.map { "idle · \($0)" } ?? "idle" : session.state == "asking" ? "asking you" : "working")
                 .font(.zoomed(.caption))
-                .foregroundStyle(session.state == "working" ? AnyShapeStyle(Color.boardAmber) : AnyShapeStyle(.tertiary))
+                .foregroundStyle(session.state == "idle" ? AnyShapeStyle(.tertiary) : AnyShapeStyle(Color.boardAmber))
                 .fixedSize()
             Button {
                 model.request(session.track, on: target)
@@ -878,8 +878,8 @@ private struct UntrackedRow: View {
                 if model.isSending(session.track, on: target) { ProgressView().controlSize(.mini) } else { Text(session.track.label) }
             }
             .controlSize(.small)
-            .disabled(session.state == "working" || model.isSending(session.track, on: target))
-            .help(session.state == "working" ? "It's working; track it once it's idle" : session.track.hint)
+            .disabled(session.state != "idle" || model.isSending(session.track, on: target))
+            .help(session.state == "asking" ? "It's asking you something; answer it, then track it" : session.state == "working" ? "It's working; track it once it's idle" : session.track.hint)
             CardMenu { menuItems(target) }
         }
         .lineLimit(1)

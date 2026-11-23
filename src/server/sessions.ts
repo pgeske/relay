@@ -5,7 +5,8 @@ import { ensureSession, listOmpPanes, listTmuxSessions, type Pane } from "../tmu
 import { resolveSessionFile, type ResolveOptions } from "./sessionFile.ts";
 import { readModelState } from "./modelState.ts";
 
-export type SessionStatus = "working" | "idle";
+/** "asking": omp is waiting on the user to answer a question or pick a choice (its title's `!`). */
+export type SessionStatus = "working" | "idle" | "asking";
 
 export type Session = {
   id: string;
@@ -25,7 +26,9 @@ export type Session = {
 };
 
 /**
- * omp's pane title is `π > <title>` while idle and `π <spinner> <title>` while working.
+ * omp's pane title is `π > <title>` while idle, `π ! <title>` while it waits on the user to
+ * answer a question, and `π <spinner> <title>` while working (braille, pulse, line, or `:` when
+ * animated spinners are off; `π: <title>` with no space is omp's status-disabled format).
  * The nerd-font glyph that omp puts in front of the title is kept as-is.
  * Until omp names the session, the title is just the directory name; that comes back
  * empty so the app shows its placeholder instead of an internal path like "tmp".
@@ -35,16 +38,34 @@ export function parsePaneTitle(raw: string, cwd: string): { title: string; statu
   return { title: title === basename(cwd) ? "" : title, status };
 }
 
+/** Non-braille spinner frames omp emits while working (pulse, line, and static-working `:`). */
+const WORKING_MARKERS: Record<string, true> = {
+  "○": true, "◔": true, "◑": true, "◕": true, "●": true,
+  "-": true, "\\": true, "|": true, "/": true, ":": true,
+};
+
+function isWorkingMarker(token: string): boolean {
+  if (!token) return false;
+  const code = token.codePointAt(0);
+  if (code !== undefined && code >= 0x2800 && code <= 0x28ff && token.length === String.fromCodePoint(code).length) return true;
+  return WORKING_MARKERS[token] === true;
+}
+
 function splitPaneTitle(raw: string): { title: string; status: SessionStatus } {
   const trimmed = raw.trim();
   if (!trimmed.startsWith("π")) return { title: trimmed, status: "idle" };
+  // `π: <title>` (no space before `:`) is omp's status-disabled title, not a working marker.
+  if (trimmed.startsWith("π:")) return { status: "idle", title: trimmed.slice(2).trim() };
   const rest = trimmed.slice(1).trimStart();
-  if (rest.startsWith(">")) return { status: "idle", title: rest.slice(1).trim() };
-  const marker = rest.codePointAt(0);
-  if (marker !== undefined && marker >= 0x2800 && marker <= 0x28ff) {
-    return { status: "working", title: rest.slice(String.fromCodePoint(marker).length).trim() };
-  }
-  return { status: "working", title: rest };
+  if (!rest) return { status: "idle", title: "" };
+  const space = rest.indexOf(" ");
+  const token = space === -1 ? rest : rest.slice(0, space);
+  const after = space === -1 ? "" : rest.slice(space + 1).trim();
+  if (token === ">") return { status: "idle", title: after };
+  if (token === "!") return { status: "asking", title: after };
+  if (isWorkingMarker(token)) return { status: "working", title: after };
+  // Anything without an explicit working marker is idle; never guess working.
+  return { status: "idle", title: rest };
 }
 
 export async function toSession(pane: Pane, options: ResolveOptions = {}): Promise<Session> {

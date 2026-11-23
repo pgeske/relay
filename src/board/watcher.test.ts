@@ -45,13 +45,19 @@ test("starting work clears a stale 'waiting on you' block, leaving other blocker
   expect(clearUserBlockerOnWork(db, "/tmp/s-me.jsonl", later)).toBe(waitingOnMe.id);
   expect(getTask(db, waitingOnMe.id)).toMatchObject({ blockedOn: null, blockedReason: null, status: "Asked which DC" });
 
+  // Legacy "progress" → also cleared when its session starts working.
+  const legacyProgress = createTask(db, { title: "Baking", details: null, projectId: null, stage: "doing", status: "Baking", approvePlan: false, cwd: null, at });
+  reportTask(db, legacyProgress.id, { blocked: { on: "progress", reason: "Baking 1h" }, at });
+  linkSession(db, legacyProgress.id, "/tmp/s-progress.jsonl", at);
+  expect(clearUserBlockerOnWork(db, "/tmp/s-progress.jsonl", later)).toBe(legacyProgress.id);
+  expect(getTask(db, legacyProgress.id)).toMatchObject({ blockedOn: null, blockedReason: null });
+
   // Blocked on others → left alone.
   const waitingOnOthers = createTask(db, { title: "Review PR", details: null, projectId: null, stage: "doing", status: "Waiting", approvePlan: false, cwd: null, at });
   reportTask(db, waitingOnOthers.id, { blocked: { on: "others", reason: "Waiting on Sara" }, at });
   linkSession(db, waitingOnOthers.id, "/tmp/s-others.jsonl", at);
   expect(clearUserBlockerOnWork(db, "/tmp/s-others.jsonl", later)).toBeNull();
   expect(getTask(db, waitingOnOthers.id)?.blockedOn).toBe("others");
-
   // Paused, delivered, or waiting on plan approval → left alone.
   const paused = createTask(db, { title: "Paused", details: null, projectId: null, stage: "doing", status: null, approvePlan: false, cwd: null, at });
   reportTask(db, paused.id, { blocked: { on: "me", reason: "Question" }, at });

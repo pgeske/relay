@@ -54,12 +54,12 @@ Usage:
   relay task depend [<task>] <prerequisite>    Record that this task depends on another
   relay task undepend [<task>] <prerequisite>  Remove that dependency
   relay task update [<task>] [--stage <stage>] [--status <text>]
-                    [--blocked-on me|others | --in-progress] [--reason <text>] [--pr <pr>]
+                    [--blocked-on me|others] [--reason <text>] [--pr <pr>]
                     [--project <name>]
                                       Report where it stands. --blocked-on: stopped until you
-                                      (me) or someone else (others) acts; --in-progress: moving
-                                      on its own (a rollout, CI) until it picks back up. An update
-                                      with neither clears them; --pr makes a PR part of it
+                                      (me) or someone/something else (others: reviewers, another
+                                      team, CI, a rollout) moves. An update with neither clears
+                                      it; --pr makes a PR part of it
   relay task plan [<task>] --summary <text|->
                                       Record the plan; unless the task skips plan approval,
                                       it waits for you to approve it on the board
@@ -162,18 +162,18 @@ function parseStage(value: string | undefined): TaskStage | undefined {
   return value as TaskStage;
 }
 
-/** What the update says the task waits on: `--blocked-on me|others`, or `--in-progress` for something moving along on its own. */
+/** What the update says the task waits on: `--blocked-on me|others` (`--in-progress` maps to `others` for compatibility). */
 function parseBlocker(args: string[]): { on: BlockedOn; reason: string | null } | null {
   const named = flagValue(args, "--blocked-on");
   const inProgress = args.includes("--in-progress");
   const reason = flagValue(args, "--reason") ?? null;
   if (named !== undefined && inProgress) throw new Error("--blocked-on and --in-progress say different things; pick one");
-  const on = inProgress ? "progress" : named;
+  const on = inProgress ? "others" : named;
   if (on === undefined) {
-    if (reason !== null) throw new Error("--reason goes with --blocked-on me|others or --in-progress");
+    if (reason !== null) throw new Error("--reason goes with --blocked-on me|others");
     return null;
   }
-  if (!inProgress && (on === "progress" || !(BLOCKERS as readonly string[]).includes(on))) throw new Error(`--blocked-on is me or others, not ${on} (something moving along on its own is --in-progress)`);
+  if (!inProgress && on !== "me" && on !== "others") throw new Error(`--blocked-on is me or others, not ${on}`);
   return { on: on as BlockedOn, reason };
 }
 
