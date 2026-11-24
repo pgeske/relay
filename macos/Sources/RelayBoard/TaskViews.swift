@@ -180,6 +180,9 @@ struct TaskCardView: View {
             }
             TurnLine(turn: card.turn)
             if linked { DependencyLine(card: card, waitsOn: waitsOn, blocks: blocks) }
+            if let plan = card.plan, plan.awaiting {
+                PlanNote(card: card, plan: plan)
+            }
             if let finish = card.finish, finish.awaiting {
                 DeliveryNote(card: card, finish: finish)
             }
@@ -328,9 +331,10 @@ private struct TaskRows: View {
     let card: TaskCard
 
     var body: some View {
-        // Delivered once and sent back, or more work reported since: still worth a look.
+        // Shown unwrapped above while waiting on you; once approved, informational, or sent back, stays a quiet row.
+        let quietPlan = card.plan.flatMap { $0.awaiting ? nil : $0 }
         let earlierDelivery = card.finish.flatMap { $0.awaiting ? nil : $0 }
-        if card.status != nil || card.plan != nil || earlierDelivery != nil || !card.prs.isEmpty {
+        if card.status != nil || quietPlan != nil || earlierDelivery != nil || !card.prs.isEmpty {
             Grid(alignment: .leading, horizontalSpacing: 10, verticalSpacing: 5) {
                 if let status = card.status {
                     GridRow(alignment: .firstTextBaseline) {
@@ -338,22 +342,22 @@ private struct TaskRows: View {
                         StatusText(status: status)
                     }
                 }
-                if let plan = card.plan {
+                if let plan = quietPlan {
                     GridRow(alignment: .firstTextBaseline) {
                         RowLabel(symbol: "list.number", text: "Plan")
                         NoteLine(
-                            note: Note(symbol: "list.number", title: "Plan", text: plan.text, at: plan.at, steps: ["approve-plan"]),
-                            state: plan.awaiting ? "Waiting for your approval" : plan.approved ? "Approved" : "Written",
-                            waiting: plan.awaiting,
+                            kind: .plan,
+                            state: plan.approved ? "Approved" : "Written",
+                            waiting: false,
                             card: card
                         )
                     }
                 }
-                if let finish = earlierDelivery {
+                if earlierDelivery != nil {
                     GridRow(alignment: .firstTextBaseline) {
                         RowLabel(symbol: "gift", text: "Delivered")
                         NoteLine(
-                            note: Note(symbol: "gift", title: "Last delivery", text: finish.text ?? "The agent didn't say what it did.", at: finish.at, steps: []),
+                            kind: .delivery,
                             state: "Sent back",
                             waiting: false,
                             card: card
@@ -400,32 +404,22 @@ private struct StatusText: View {
     }
 }
 
-/// Something the agent wrote for you to read: its plan, or why it says the task is done.
-private struct Note: Hashable {
-    var symbol: String
-    var title: String
-    var text: String
-    var at: Date
-    /// The card's steps its popover offers while they're on the card, like Approve Plan.
-    var steps: [String]
-}
-
-/// A note's row value: where it stands; clicking shows it, with its steps while they wait for you.
+/// A note's row value: where it stands; clicking opens the full reader sheet.
 private struct NoteLine: View {
-    let note: Note
+    let kind: ViewedNote.Kind
     let state: String
     let waiting: Bool
     let card: TaskCard
 
+    @Environment(BoardModel.self) private var model
     @State private var hovering = false
-    @State private var showing = false
 
     var body: some View {
-        Button { showing = true } label: {
+        Button { model.viewingNote = ViewedNote(taskId: card.id, kind: kind) } label: {
             HStack(alignment: .firstTextBaseline, spacing: 5) {
                 Text(state)
                     .foregroundStyle(waiting ? AnyShapeStyle(Color.boardOrange) : AnyShapeStyle(.secondary))
-                Image(systemName: "chevron.down").font(.zoomed(size: 7, weight: .bold)).foregroundStyle(.secondary)
+                Image(systemName: "arrow.up.right").font(.zoomed(size: 8, weight: .bold)).foregroundStyle(.secondary)
             }
             .padding(.horizontal, 4)
             .padding(.vertical, 1)
@@ -436,23 +430,73 @@ private struct NoteLine: View {
         .buttonStyle(.plain)
         .onHover { hovering = $0 }
         .pointerStyle(.link)
-        .help("Show the \(note.title.lowercased())")
-        .popover(isPresented: $showing, arrowEdge: .bottom) { NotePopover(note: note, card: card, isPresented: $showing) }
+        .help(kind == .plan ? "Read the plan" : "Read the delivery note")
+    }
+}
+
+/// The agent's plan, previewed right on the card while it waits for your approval. Clicking opens
+/// the full Markdown reader sheet where you can review and approve it.
+struct PlanNote: View {
+    let card: TaskCard
+    let plan: Plan
+
+    @Environment(BoardModel.self) private var model
+    @State private var hovering = false
+
+    var body: some View {
+        Button { model.viewingNote = ViewedNote(taskId: card.id, kind: .plan) } label: {
+            VStack(alignment: .leading, spacing: 5) {
+                HStack(alignment: .firstTextBaseline, spacing: 5) {
+                    Image(systemName: "doc.text.fill")
+                    Text("Plan")
+                    if let since = card.turn.since {
+                        Text(verbatim: "· \(since)").foregroundStyle(Color.boardBlue.opacity(0.75))
+                    }
+                    Spacer(minLength: 4)
+                    HStack(spacing: 3) {
+                        Text("Read full plan")
+                        Image(systemName: "arrow.up.right").font(.zoomed(size: 8, weight: .bold))
+                    }
+                    .font(.zoomed(.caption).weight(.medium))
+                    .opacity(hovering ? 1 : 0.72)
+                }
+                .font(.zoomed(.subheadline).weight(.semibold))
+                .foregroundStyle(Color.boardBlue)
+                Text(markdownPreview(plan.text))
+                    .font(.zoomed(.subheadline))
+                    .foregroundStyle(.primary.opacity(0.85))
+                    .lineLimit(4)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            .padding(.horizontal, 10)
+            .padding(.vertical, 8)
+            .background(Color.boardBlue.opacity(hovering ? 0.14 : 0.08), in: .rect(cornerRadius: 8))
+            .overlay {
+                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                    .strokeBorder(Color.boardBlue.opacity(hovering ? 0.32 : 0.16), lineWidth: 1)
+            }
+            .contentShape(.rect)
+        }
+        .buttonStyle(.plain)
+        .onHover { hovering = $0 }
+        .pointerStyle(.link)
+        .animation(.easeOut(duration: 0.12), value: hovering)
+        .help("Read \(card.ref)'s full plan")
     }
 }
 
 /// What the agent delivered, unwrapped right on its card: when, and the start of its note on what
-/// it did and how it checked, to look over before you ship it. Clicking it shows the whole note,
-/// with Ship It and Not Yet.
+/// it did and how it checked, to look over before you ship it. Clicking opens the full reader sheet.
 struct DeliveryNote: View {
     let card: TaskCard
     let finish: Finish
 
+    @Environment(BoardModel.self) private var model
     @State private var hovering = false
-    @State private var showing = false
 
     var body: some View {
-        Button { showing = true } label: {
+        Button { model.viewingNote = ViewedNote(taskId: card.id, kind: .delivery) } label: {
             VStack(alignment: .leading, spacing: 5) {
                 HStack(alignment: .firstTextBaseline, spacing: 5) {
                     Image(systemName: "gift.fill")
@@ -461,20 +505,29 @@ struct DeliveryNote: View {
                         Text(verbatim: "· \(since)").foregroundStyle(Color.boardGreen.opacity(0.75))
                     }
                     Spacer(minLength: 4)
-                    Text("Read it all").font(.zoomed(.caption)).opacity(hovering ? 1 : 0)
+                    HStack(spacing: 3) {
+                        Text("Read it all")
+                        Image(systemName: "arrow.up.right").font(.zoomed(size: 8, weight: .bold))
+                    }
+                    .font(.zoomed(.caption).weight(.medium))
+                    .opacity(hovering ? 1 : 0.72)
                 }
                 .font(.zoomed(.subheadline).weight(.semibold))
                 .foregroundStyle(Color.boardGreen)
-                Text(preview)
+                Text(markdownPreview(finish.text ?? "The agent didn't say what it did."))
                     .font(.zoomed(.subheadline))
                     .foregroundStyle(.primary.opacity(0.85))
                     .lineLimit(4)
                     .fixedSize(horizontal: false, vertical: true)
                     .frame(maxWidth: .infinity, alignment: .leading)
             }
-            .padding(.horizontal, 8)
-            .padding(.vertical, 6)
+            .padding(.horizontal, 10)
+            .padding(.vertical, 8)
             .background(Color.boardGreen.opacity(hovering ? 0.14 : 0.09), in: .rect(cornerRadius: 8))
+            .overlay {
+                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                    .strokeBorder(Color.boardGreen.opacity(hovering ? 0.32 : 0.16), lineWidth: 1)
+            }
             .contentShape(.rect)
         }
         .buttonStyle(.plain)
@@ -482,73 +535,19 @@ struct DeliveryNote: View {
         .pointerStyle(.link)
         .animation(.easeOut(duration: 0.12), value: hovering)
         .help("Read what the agent did and how it checked")
-        .popover(isPresented: $showing, arrowEdge: .bottom) {
-            NotePopover(note: Note(symbol: "gift", title: "Delivered", text: text, at: finish.at, steps: ["ship", "send-back"]), card: card, isPresented: $showing)
-        }
-    }
-
-    private var text: String { finish.text ?? "The agent didn't say what it did." }
-
-    /// The note's Markdown read as a few plain lines: headings and list markers dropped, inline
-    /// styling (bold, code) kept.
-    private var preview: AttributedString {
-        let lines = text.split(whereSeparator: \.isNewline).compactMap { line -> String? in
-            let trimmed = line.trimmingCharacters(in: .whitespaces)
-            guard !trimmed.isEmpty, !trimmed.hasPrefix("```") else { return nil }
-            return trimmed.replacing(/^(#+|[-*+]|\d+[.)])\s+/, with: "")
-        }
-        let plain = lines.joined(separator: "\n")
-        return (try? AttributedString(markdown: plain, options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace))) ?? AttributedString(plain)
     }
 }
 
-/// A note as the agent wrote it, with its steps (Approve Plan; Ship It, Not Yet) while they wait for you.
-private struct NotePopover: View {
-    let note: Note
-    let card: TaskCard
-    @Binding var isPresented: Bool
-
-    @Environment(BoardModel.self) private var model
-
-    var body: some View {
-        let steps = card.steps.filter { note.steps.contains($0.action) }
-        VStack(alignment: .leading, spacing: 10) {
-            HStack(alignment: .firstTextBaseline, spacing: 6) {
-                Text(note.title).font(.zoomedHeadline)
-                Text(card.ref).foregroundStyle(.secondary)
-                Spacer()
-                Text(note.at, format: .relative(presentation: .named)).foregroundStyle(.secondary)
-            }
-            Text(card.title).font(.zoomed(.callout)).foregroundStyle(.secondary)
-            Divider()
-            ScrollView { MarkdownText(text: note.text) }
-                .frame(maxHeight: 420)
-                .scrollBounceBehavior(.basedOnSize)
-            if !steps.isEmpty {
-                HStack {
-                    Spacer()
-                    // The first step is the way forward; the rest come before it, as macOS lays out buttons.
-                    ForEach(steps.dropFirst().reversed(), id: \.self) { step in
-                        Button(step.label) { run(step) }
-                    }
-                    if let primary = steps.first {
-                        Button(primary.label) { run(primary) }.keyboardShortcut(.defaultAction)
-                    }
-                }
-            }
-        }
-        .font(.zoomed(.body))
-        .padding(16)
-        .frame(width: 520 * Zoom.shared.scale)
+/// Markdown read as a few plain lines for card previews: headings and list markers dropped, inline
+/// styling (bold, code) kept.
+private func markdownPreview(_ text: String) -> AttributedString {
+    let lines = text.split(whereSeparator: \.isNewline).compactMap { line -> String? in
+        let trimmed = line.trimmingCharacters(in: .whitespaces)
+        guard !trimmed.isEmpty, !trimmed.hasPrefix("```") else { return nil }
+        return trimmed.replacing(/^(#+|[-*+]|\d+[.)])\s+/, with: "")
     }
-
-    private func run(_ step: BoardAction) {
-        isPresented = false
-        // The popover already showed the note: acting on it here needs no second ask.
-        var direct = step
-        direct.confirm = nil
-        model.request(direct, on: .task(card.id))
-    }
+    let plain = lines.joined(separator: "\n")
+    return (try? AttributedString(markdown: plain, options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace))) ?? AttributedString(plain)
 }
 
 /// The task's PRs, a line each with where it is on the PR board; clicking one opens it.
@@ -651,12 +650,21 @@ struct TaskStepSlot: View {
                 RunningLabel(text: running).transition(.blurReplace)
             } else if let primary = card.steps.first {
                 HStack(spacing: 6) {
-                    StepButton(step: primary, target: .task(card.id))
+                    StepButton(step: displayStep(primary, for: card), target: .task(card.id))
                     ForEach(card.steps.dropFirst(), id: \.self) { SecondaryStepButton(step: $0, target: .task(card.id)) }
                 }
             }
         }
         .animation(.smooth(duration: 0.3), value: card.running)
+    }
+
+    /// `approve-plan` opens the plan reader sheet first, so label the card button honestly.
+    private func displayStep(_ step: BoardAction, for card: TaskCard) -> BoardAction {
+        guard step.action == "approve-plan", card.plan != nil else { return step }
+        var copy = step
+        copy.label = "Review & Approve"
+        copy.hint = "Read \(card.ref)'s plan and approve it"
+        return copy
     }
 }
 
@@ -669,11 +677,15 @@ struct TaskMenuItems: View {
     @Environment(\.taskLinkFocusId) private var focusedTaskId
 
     var body: some View {
+        if card.plan != nil {
+            Button("View Plan", systemImage: "doc.text") { model.viewingNote = ViewedNote(taskId: card.id, kind: .plan) }
+        }
         if let session = card.session {
             Button(session.open.label, systemImage: "terminal") { model.request(session.open, on: .task(card.id)) }
         }
         ForEach(card.steps.filter { $0.action != "open" }, id: \.self) { step in
-            Button(step.confirm == nil ? step.label : "\(step.label)…", systemImage: step.symbol) { model.request(step, on: .task(card.id)) }
+            let label = step.action == "approve-plan" && card.plan != nil ? "Review & Approve Plan…" : (step.confirm == nil ? step.label : "\(step.label)…")
+            Button(label, systemImage: step.symbol) { model.request(step, on: .task(card.id)) }
         }
         Button("Copy ID", systemImage: "number") {
             NSPasteboard.general.clearContents()
@@ -738,9 +750,49 @@ struct TaskDetailsPopover: View {
                     }
                 )
             }
+            if let plan = card.plan {
+                Divider()
+                HStack(alignment: .firstTextBaseline, spacing: 6) {
+                    Text("Plan").font(.zoomed(.callout).weight(.semibold)).foregroundStyle(.secondary)
+                    Text(plan.awaiting ? "Needs approval" : plan.approved ? "Approved" : "Written")
+                        .font(.zoomed(.caption).weight(.medium))
+                        .foregroundStyle(plan.awaiting ? Color.boardOrange : plan.approved ? Color.boardGreen : .secondary)
+                    Spacer()
+                    Button("Read Plan", systemImage: "arrow.up.right") {
+                        isPresented = false
+                        model.viewingNote = ViewedNote(taskId: card.id, kind: .plan)
+                    }
+                    .buttonStyle(.borderless)
+                    .font(.zoomed(.caption).weight(.medium))
+                }
+                Button {
+                    isPresented = false
+                    model.viewingNote = ViewedNote(taskId: card.id, kind: .plan)
+                } label: {
+                    Text(markdownPreview(plan.text))
+                        .foregroundStyle(.primary.opacity(0.85))
+                        .lineLimit(4)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(8)
+                        .background(Color.primary.opacity(0.04), in: .rect(cornerRadius: 6))
+                }
+                .buttonStyle(.plain)
+                .pointerStyle(.link)
+                .help("Open the full plan reader")
+            }
             if let finish = card.finish, let text = finish.text {
                 Divider()
-                Text("What the agent delivered").font(.zoomed(.callout).weight(.semibold)).foregroundStyle(.secondary)
+                HStack(alignment: .firstTextBaseline, spacing: 6) {
+                    Text("What the agent delivered").font(.zoomed(.callout).weight(.semibold)).foregroundStyle(.secondary)
+                    Spacer()
+                    Button("Open Full", systemImage: "arrow.up.right") {
+                        isPresented = false
+                        model.viewingNote = ViewedNote(taskId: card.id, kind: .delivery)
+                    }
+                    .buttonStyle(.borderless)
+                    .font(.zoomed(.caption).weight(.medium))
+                }
                 MarkdownText(text: text)
             }
             Divider()
@@ -987,7 +1039,7 @@ struct NewTaskSheet: View {
                 }
                 .padding(.horizontal, 2)
             }
-            .buttonStyle(StartButtonStyle())
+            .buttonStyle(SolidCapsuleButtonStyle())
             .fixedSize()
             .keyboardShortcut(.return, modifiers: .command)
             .disabled(!ready)
@@ -1154,9 +1206,10 @@ private struct ChipToggleStyle: ToggleStyle {
     }
 }
 
-/// The sheet's main button: solid accent color that dims only while it can't be pressed. Glass's
+/// A sheet's main button: solid tinted capsule that dims only while it can't be pressed. Glass's
 /// prominent style fades whenever the window isn't the active one, which made Start look disabled.
-private struct StartButtonStyle: ButtonStyle {
+struct SolidCapsuleButtonStyle: ButtonStyle {
+    var tint: Color = .accentColor
     @Environment(\.isEnabled) private var isEnabled
 
     func makeBody(configuration: Configuration) -> some View {
@@ -1164,8 +1217,8 @@ private struct StartButtonStyle: ButtonStyle {
             .foregroundStyle(.white)
             .padding(.horizontal, 14)
             .padding(.vertical, 7)
-            .background(Color.accentColor.opacity(configuration.isPressed ? 0.8 : 1), in: .capsule)
-            .shadow(color: .accentColor.opacity(isEnabled ? 0.35 : 0), radius: 6, y: 2)
+            .background(tint.opacity(configuration.isPressed ? 0.8 : 1), in: .capsule)
+            .shadow(color: tint.opacity(isEnabled ? 0.35 : 0), radius: 6, y: 2)
             .opacity(isEnabled ? 1 : 0.4)
             .contentShape(.capsule)
     }

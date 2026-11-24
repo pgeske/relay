@@ -10,6 +10,7 @@ enum SidebarItem: Hashable {
 
 struct BoardWindow: View {
     @Environment(BoardModel.self) private var model
+    @State private var windowSize = CGSize(width: 1200, height: 800)
 
     var body: some View {
         @Bindable var model = model
@@ -43,6 +44,8 @@ struct BoardWindow: View {
         }
         .sheet(isPresented: $model.composing) { NewTaskSheet() }
         .sheet(item: $model.editingDependencies) { DependencySheet(card: $0) }
+        .sheet(item: $model.viewingNote) { NoteSheet(viewed: $0, windowSize: windowSize) }
+        .onGeometryChange(for: CGSize.self, of: \.size) { windowSize = $0 }
         .overlay { ShipCelebration() }
         .alert(model.confirming?.confirm.title ?? "", isPresented: confirmingBinding, presenting: model.confirming) { pending in
             if pending.confirm.destructive {

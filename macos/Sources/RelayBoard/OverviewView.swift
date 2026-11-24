@@ -164,6 +164,9 @@ private struct UpNextLead: View {
                 .font(.zoomed(.subheadline))
                 .foregroundStyle(.secondary)
                 .lineLimit(1)
+            if let plan = card.plan, plan.awaiting {
+                PlanNote(card: card, plan: plan)
+            }
             if let finish = card.finish, finish.awaiting {
                 DeliveryNote(card: card, finish: finish)
             }
@@ -332,12 +335,13 @@ private struct OverviewRow: View {
                 Text(running).font(.zoomed(.caption)).foregroundStyle(Color.boardPurple).fixedSize()
             } else if let step = card.steps.first {
                 let sending = model.isSending(step, on: .task(card.id))
+                let reviewPlan = step.action == "approve-plan" && card.plan != nil
                 Button { model.request(step, on: .task(card.id)) } label: {
-                    if sending { ProgressView().controlSize(.mini) } else { Text(step.label) }
+                    if sending { ProgressView().controlSize(.mini) } else { Text(reviewPlan ? "Review Plan" : step.label) }
                 }
                 .controlSize(.small)
                 .disabled(sending)
-                .help(step.hint)
+                .help(reviewPlan ? "Read \(card.ref)'s plan and approve it" : step.hint)
             }
             CardMenu { TaskMenuItems(card: card) }
         }
