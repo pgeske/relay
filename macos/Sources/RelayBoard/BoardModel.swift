@@ -22,6 +22,19 @@ struct PendingAction: Identifiable {
     var confirm: Confirm
 }
 
+/// A task's plan or delivery note open in the reader sheet.
+struct ViewedNote: Identifiable, Hashable, Sendable {
+    enum Kind: String, Hashable, Sendable {
+        case plan
+        case delivery
+    }
+
+    var taskId: Int
+    var kind: Kind
+
+    var id: String { "\(taskId):\(kind.rawValue)" }
+}
+
 /// The board and everything the window does with it: streaming live updates from relay's server
 /// (falling back to a timer on older servers), running a card's controls, and what the window shows
 /// until the server's board catches up.
@@ -44,6 +57,8 @@ final class BoardModel {
     /// The New Task sheet is up.
     var composing = false
     var editingDependencies: TaskCard?
+    /// A task's plan or delivery note open in the full reader sheet.
+    var viewingNote: ViewedNote?
     private(set) var modelChoices: ModelChoices?
     /// Controls on their way to the server, as "<target> <action>".
     private var sending: Set<String> = []
@@ -158,13 +173,26 @@ final class BoardModel {
         isSending(action, on: .pr(card.ref))
     }
 
-    /// Runs a control, asking first when it changes something.
+    /// Runs a control, asking first when it changes something. Approving a plan opens the plan
+    /// reader sheet instead of a bare confirmation alert so you always see what you're approving.
     func request(_ action: BoardAction, on target: ActionTarget) {
+        if action.action == "approve-plan", action.confirm != nil,
+           case .task(let id) = target, taskCards[id]?.plan != nil {
+            viewingNote = ViewedNote(taskId: id, kind: .plan)
+            return
+        }
         if let confirm = action.confirm {
             confirming = PendingAction(action: action, target: target, confirm: confirm)
         } else {
             Task { await run(action, on: target) }
         }
+    }
+
+    /// Approves the specific plan revision the user just read in the plan sheet, without a second prompt.
+    func approvePlan(_ action: BoardAction, for taskId: Int, revision: String) {
+        var direct = action
+        direct.confirm = nil
+        Task { await run(direct, on: .task(taskId), planRevision: revision) }
     }
 
     func request(_ action: BoardAction, on card: Card) {
@@ -337,15 +365,15 @@ final class BoardModel {
         NSApp.dockTile.badgeLabel = waiting > 0 ? "\(waiting)" : nil
     }
 
-    private func run(_ action: BoardAction, on target: ActionTarget) async {
+    private func run(_ action: BoardAction, on target: ActionTarget, planRevision: String? = nil) async {
         let key = "\(target.key) \(action.action)"
         guard !sending.contains(key) else { return }
         sending.insert(key)
         defer { sending.remove(key) }
         do {
             // Approving names the plan on screen; refreshes hold off while a control is confirmed or sent, so it's the one you read.
-            var plan: String?
-            if action.action == "approve-plan", case .task(let id) = target {
+            var plan = planRevision
+            if plan == nil, action.action == "approve-plan", case .task(let id) = target {
                 plan = taskColumns.lazy.flatMap(\.cards).first { $0.id == id }?.plan?.revision
             }
             let result = try await client.perform(action.action, on: target, plan: plan)
